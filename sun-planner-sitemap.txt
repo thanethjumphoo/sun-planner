@@ -1,0 +1,212 @@
+/
+├── Login
+│   ├── Username / Password
+│   └── Forgot Password
+
+├── Dashboard
+│   ├── Executive Dashboard
+│   ├── Planner Dashboard
+│   ├── Production Dashboard
+│   ├── Department Dashboard
+│   ├── KPI Today
+│   ├── Alerts Center
+│   └── My Tasks
+
+├── ERP Integration Hub
+│   ├── Orders Sync
+│   │   ├── Import Sales Orders
+│   │   ├── Incremental Sync
+│   │   ├── Cancel Orders Update
+│   │   └── Sync Logs
+│   │
+│   ├── Customer Sync
+│   ├── Item Sync
+│   ├── Manual Re-sync
+│   ├── Interface Error Logs
+│   └── Last Sync Status
+
+├── Demand Management
+│   ├── Demand Dashboard
+│   ├── Sales Orders
+│   │   ├── ERP Orders
+│   │   ├── Manual Orders
+│   │   ├── Edit Priority
+│   │   ├── Order Changes
+│   │   └── Cancel Orders
+│   │
+│   ├── Forecast
+│   │   ├── Monthly Forecast
+│   │   ├── Weekly Forecast
+│   │   ├── Customer Forecast
+│   │   ├── SKU Forecast
+│   │   ├── Promotion Demand
+│   │   └── Forecast Versions
+│   │
+│   ├── Demand Consolidation
+│   │   ├── Actual + Forecast
+│   │   ├── Net Demand
+│   │   └── Final Demand Plan
+│   │
+│   └── Demand Reports
+
+├── MPS (Master Production Schedule)
+│   ├── MPS Dashboard
+│   ├── Generate MPS
+│   ├── Daily Plan
+│   ├── Weekly Plan
+│   ├── Monthly Plan
+│   ├── Demand vs Capacity
+│   ├── Raw Material Check
+│   ├── Yield Check
+│   ├── Replan
+│   ├── Freeze Plan
+│   ├── Scenario Planning
+│   ├── Approval Workflow
+│   └── Plan History
+
+├── Chicken Receiving
+│   ├── Monthly Planning
+│   ├── Weekly Planning
+│   ├── Daily Scheduling
+│   ├── Actual Receiving
+│   └── Reports
+
+├── Yield & Allocation Planning
+│   ├── Standard Yield Matrix
+│   ├── Actual Yield
+│   ├── Whole Bird Allocation
+│   ├── Cut Part Allocation
+│   ├── Co-product Planning
+│   ├── By-product Planning
+│   └── Yield Variance Analysis
+
+├── DPS (Department Production Schedule)
+│   ├── DPS Dashboard
+│   ├── Fillet Department
+│   │   ├── Today Plan
+│   │   ├── Breast Fillet
+│   │   ├── Inner Fillet
+│   │   ├── Tenderloin
+│   │   ├── Capacity
+│   │   ├── Actual Output
+│   │   └── Yield
+│   │
+│   ├── Leg Department
+│   │   ├── Drumstick
+│   │   ├── Thigh
+│   │   ├── Debone Leg
+│   │   └── Actual Output
+│   │
+│   ├── Wing Department
+│   │   ├── Full Wing
+│   │   ├── Mid Wing
+│   │   ├── Tip Wing
+│   │   └── Actual Output
+│   │
+│   ├── Whole Bird Department
+│   ├── Marination Department
+│   ├── Packing Department
+│   ├── Frozen Department
+│   └── By-product Department
+
+├── Machine Planning
+│   ├── Machine Dashboard
+│   ├── Machine Schedule
+│   ├── Machine Capacity
+│   ├── OEE Dashboard
+│   ├── Downtime Entry
+│   ├── Maintenance Block
+│   └── Utilization Report
+
+├── Manual Operation Planning
+│   ├── Labor Planning
+│   ├── Headcount Plan
+│   ├── Shift Planning
+│   ├── OT Planning
+│   ├── Productivity Tracking
+│   └── Attendance Interface
+
+├── Shopfloor Execution
+│   ├── Work Orders
+│   ├── Production Confirmation
+│   ├── Start Job
+│   ├── End Job
+│   ├── Pause / Hold
+│   ├── Waste Entry
+│   ├── Rework Entry
+│   ├── QC Hold
+│   └── Shift Handover
+
+├── Inventory Management
+│   ├── RM Stock
+│   ├── Chicken Live Stock
+│   ├── WIP Stock
+│   ├── FG Stock
+│   ├── Packaging Stock
+│   ├── Ingredient Stock
+│   ├── FEFO / FIFO
+│   ├── Aging Stock
+│   ├── Stock Transfer
+│   └── Cycle Count
+
+├── Logistics & Dispatch
+│   ├── Shipment Plan
+│   ├── Loading Schedule
+│   ├── Delivery Route
+│   ├── Export Container Plan
+│   ├── Dispatch Confirm
+│   └── Delivery KPI
+
+├── Reports & Analytics
+│   ├── Executive KPI
+│   ├── Production Efficiency
+│   ├── Yield Report
+│   ├── Fill Rate
+│   ├── Forecast Accuracy
+│   ├── Capacity Utilization
+│   ├── Waste Analysis
+│   ├── Cost by Product
+│   ├── Profitability
+│   ├── Export Excel
+│   └── Scheduled Reports
+
+├── Master Data
+│   ├── Product Master
+│   ├── SKU Master
+│   ├── Item Mapping ERP
+│   ├── Chicken Part Master
+│   ├── Department Master
+│   ├── Machine Master
+│   ├── Line Master
+│   ├── Yield Matrix
+│   ├── BOM / Recipe
+│   ├── Customer Master
+│   ├── Supplier Master
+│   ├── Warehouse Master
+│   ├── Plant Master
+│   ├── Shift Calendar
+│   └── Holiday Calendar
+
+├── Workflow & Alerts
+│   ├── Pending Approval
+│   ├── Order Change Alert
+│   ├── RM Shortage
+│   ├── Capacity Overload
+│   ├── Low Yield Alert
+│   ├── Downtime Alert
+│   └── Escalation Rules
+
+├── Security & Admin
+│   ├── User Management
+│   ├── Role Management
+│   ├── Permission Matrix
+│   ├── Department Access
+│   ├── Screen Access
+│   ├── Audit Log
+│   ├── Backup / Restore
+│   ├── Email Settings
+│   └── System Settings
+
+└── My Profile
+    ├── User Preferences
+    └── Password
