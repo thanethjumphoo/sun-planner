@@ -36,6 +36,9 @@ export class MpsPlan {
 
   @OneToMany(() => MpsPlanOrder, order => order.mpsPlan, { cascade: true })
   orders: MpsPlanOrder[];
+
+  @OneToMany('MpsExceptionReport', 'mpsPlan', { cascade: true })
+  exceptions: any[]; // Using string type to avoid circular dependency issues if not imported directly
 }
 
 // ─── 2. MPS Plan Daily Summary (สรุปตัวเลขรายวันของแผนนั้น) ───

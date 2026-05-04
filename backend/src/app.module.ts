@@ -19,6 +19,7 @@ import { WeightDistribution } from './weight-distribution.entity';
 import { WeightDistributionController } from './weight-distribution.controller';
 import { MpsController } from './mps.controller';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
+import { MpsExceptionReport } from './mps-exception.entity';
 import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps-plan.entity';
 
 @Module({
@@ -37,7 +38,7 @@ import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps
         password: configService.get<string>('DB_PASS') || configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_NAME') || configService.get<string>('DB_DATABASE'),
         autoLoadEntities: true,
-        synchronize: true, // TODO: Set to false in production after tables are created
+        synchronize: true,
         options: {
           encrypt: true,
           trustServerCertificate: true,
@@ -50,7 +51,7 @@ import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps
     ChickenReceivingModule,
     TypeOrmModule.forFeature([
       StgErpItem, StgErpOrderHeader, StgErpOrderLine, TargetSyncItem, ProductSpec, 
-      WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder,
+      WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsExceptionReport,
       DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation
     ]),
   ],

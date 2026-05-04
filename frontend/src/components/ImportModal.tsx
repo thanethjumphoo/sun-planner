@@ -129,7 +129,7 @@ export default function ImportModal({ isOpen, onClose, activeTab, onImportDone }
         const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' });
 
         // Map Excel column labels to our keys
-        const parsed = jsonData.map((excelRow) => {
+        let parsed = jsonData.map((excelRow) => {
           const row: Record<string, string> = {};
           columns.forEach(col => {
             const val = excelRow[col.label];
@@ -141,6 +141,13 @@ export default function ImportModal({ isOpen, onClose, activeTab, onImportDone }
           // Auto-calc avg
           row.chicken_avg = computeAvg(Number(row.chicken_count), Number(row.chicken_weight));
           return row;
+        });
+
+        // Filter out rows with empty, null, or zero chicken_count
+        parsed = parsed.filter(row => {
+          const countStr = row.chicken_count ? row.chicken_count.trim() : '';
+          const countNum = Number(countStr);
+          return countStr !== '' && !isNaN(countNum) && countNum > 0;
         });
 
         setRows(parsed);

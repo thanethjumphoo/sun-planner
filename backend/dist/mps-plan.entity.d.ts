@@ -10,6 +10,7 @@ export declare class MpsPlan {
     updatedAt: Date;
     dailySummaries: MpsPlanDaily[];
     orders: MpsPlanOrder[];
+    exceptions: any[];
 }
 export declare class MpsPlanDaily {
     id: number;

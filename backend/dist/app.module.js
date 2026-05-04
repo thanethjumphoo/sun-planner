@@ -27,6 +27,7 @@ const weight_distribution_entity_1 = require("./weight-distribution.entity");
 const weight_distribution_controller_1 = require("./weight-distribution.controller");
 const mps_controller_1 = require("./mps.controller");
 const mps_plan_entity_1 = require("./mps-plan.entity");
+const mps_exception_entity_1 = require("./mps-exception.entity");
 const dps_plan_entity_1 = require("./dps-plan.entity");
 let AppModule = class AppModule {
 };
@@ -61,7 +62,7 @@ exports.AppModule = AppModule = __decorate([
             chicken_receiving_module_1.ChickenReceivingModule,
             typeorm_1.TypeOrmModule.forFeature([
                 stg_erp_item_entity_1.StgErpItem, stg_erp_order_header_entity_1.StgErpOrderHeader, stg_erp_order_line_entity_1.StgErpOrderLine, target_sync_item_entity_1.TargetSyncItem, product_spec_entity_1.ProductSpec,
-                weight_distribution_entity_1.WeightDistribution, mps_plan_entity_1.MpsPlan, mps_plan_entity_1.MpsPlanDaily, mps_plan_entity_1.MpsPlanOrder,
+                weight_distribution_entity_1.WeightDistribution, mps_plan_entity_1.MpsPlan, mps_plan_entity_1.MpsPlanDaily, mps_plan_entity_1.MpsPlanOrder, mps_exception_entity_1.MpsExceptionReport,
                 dps_plan_entity_1.DpsPlan, dps_plan_entity_1.DpsSublot, dps_plan_entity_1.DpsSublotBin, dps_plan_entity_1.DpsOrder, dps_plan_entity_1.DpsAllocation
             ]),
         ],

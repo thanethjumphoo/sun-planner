@@ -23,6 +23,7 @@ let MpsPlan = class MpsPlan {
     updatedAt;
     dailySummaries;
     orders;
+    exceptions;
 };
 exports.MpsPlan = MpsPlan;
 __decorate([
@@ -69,6 +70,10 @@ __decorate([
     (0, typeorm_1.OneToMany)(() => MpsPlanOrder, order => order.mpsPlan, { cascade: true }),
     __metadata("design:type", Array)
 ], MpsPlan.prototype, "orders", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)('MpsExceptionReport', 'mpsPlan', { cascade: true }),
+    __metadata("design:type", Array)
+], MpsPlan.prototype, "exceptions", void 0);
 exports.MpsPlan = MpsPlan = __decorate([
     (0, typeorm_1.Entity)('mps_plans')
 ], MpsPlan);
