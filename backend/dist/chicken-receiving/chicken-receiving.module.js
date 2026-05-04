@@ -30,6 +30,7 @@ exports.ChickenReceivingModule = ChickenReceivingModule = __decorate([
         ],
         controllers: [chicken_receiving_controller_1.ChickenReceivingController],
         providers: [chicken_receiving_service_1.ChickenReceivingService],
+        exports: [chicken_receiving_service_1.ChickenReceivingService],
     })
 ], ChickenReceivingModule);
 //# sourceMappingURL=chicken-receiving.module.js.map

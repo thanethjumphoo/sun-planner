@@ -18,5 +18,6 @@ import { ChickenReceivingActualDaily } from './entities/actual-daily.entity';
   ],
   controllers: [ChickenReceivingController],
   providers: [ChickenReceivingService],
+  exports: [ChickenReceivingService],
 })
 export class ChickenReceivingModule {}

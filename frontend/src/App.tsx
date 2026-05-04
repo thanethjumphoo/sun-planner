@@ -2,17 +2,29 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import ChickenReceiving from './pages/ChickenReceiving';
+import ErpIntegrationHub from './pages/ErpIntegrationHub';
+import DemandManagement from './pages/DemandManagement';
+import ProductSpec from './pages/ProductSpec';
+import WeightDistribution from './pages/WeightDistribution';
+import MPSPlan from './pages/MPSPlan';
+import DPSPlan from './pages/DPSPlan';
 import MainLayout from './components/layout/MainLayout';
 function App() {
   return (
-    <Router>
+    <Router basename={import.meta.env.BASE_URL}>
       <Routes>
         <Route path="/login" element={<Login />} />
-        
+
         {/* Protected Routes wrapped in MainLayout */}
         <Route element={<MainLayout />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/chicken-receiving" element={<ChickenReceiving />} />
+          <Route path="/erp-integration" element={<ErpIntegrationHub />} />
+          <Route path="/demand-management" element={<DemandManagement />} />
+          <Route path="/product-spec" element={<ProductSpec />} />
+          <Route path="/weight-distribution" element={<WeightDistribution />} />
+          <Route path="/mps" element={<MPSPlan />} />
+          <Route path="/dps" element={<DPSPlan />} />
         </Route>
 
         {/* Redirect empty path to login */}

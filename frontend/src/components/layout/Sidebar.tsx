@@ -1,10 +1,10 @@
-import { useState } from 'react';
+
 import { Link, useLocation } from 'react-router-dom';
 import { 
   Sun, Menu, LayoutDashboard, TrendingUp, CalendarDays, 
   Truck, PieChart, Activity, Settings2, Users, PlayCircle, 
   Package, Navigation, RefreshCw, BarChart3, Database, 
-  Bell, Shield 
+  Bell, Shield, ClipboardList, Scale 
 } from 'lucide-react';
 
 const menuGroups = [
@@ -43,6 +43,8 @@ const menuGroups = [
   {
     label: "System Data",
     items: [
+      { title: "Product Spec", icon: ClipboardList, path: "/product-spec" },
+      { title: "Weight Distribution", icon: Scale, path: "/weight-distribution" },
       { title: "Reports & Analytics", icon: BarChart3, path: "/reports" },
       { title: "Master Data", icon: Database, path: "/master-data" },
       { title: "Workflow & Alerts", icon: Bell, path: "/workflow" },

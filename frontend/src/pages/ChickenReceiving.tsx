@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Calendar as CalendarIcon, Download, Plus, Filter, CalendarDays, Activity, Truck, BarChart2, Clock, MapPin, Search, X, Edit, Upload } from 'lucide-react';
+import { Calendar as CalendarIcon, Plus, CalendarDays, Activity, Truck, BarChart2, Clock, MapPin, Search, X, Edit, Upload } from 'lucide-react';
 import ImportModal from '../components/ImportModal';
 
 const tabs = [
@@ -36,7 +36,7 @@ export default function ChickenReceiving() {
   const fetchData = async () => {
     if (activeTab === 'reports') return;
     try {
-      const response = await fetch(`http://localhost:3333/chicken-receiving/${activeTab}`);
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/chicken-receiving/${activeTab}`);
       if (response.ok) {
         const data = await response.json();
         setRecords(data);
@@ -92,7 +92,7 @@ export default function ChickenReceiving() {
     if (!window.confirm("Are you sure you want to delete this schedule?")) return;
 
     try {
-      const response = await fetch(`http://localhost:3333/chicken-receiving/${activeTab}/${formData.id}`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/chicken-receiving/${activeTab}/${formData.id}`, {
         method: 'DELETE',
       });
       if (response.ok) {
@@ -125,8 +125,8 @@ export default function ChickenReceiving() {
     const payload = { ...formData, chicken_avg: computedAvg };
     const method = formData.id ? 'PUT' : 'POST';
     const url = formData.id 
-      ? `http://localhost:3333/chicken-receiving/${activeTab}/${formData.id}`
-      : `http://localhost:3333/chicken-receiving/${activeTab}`;
+      ? `${import.meta.env.VITE_API_URL}/chicken-receiving/${activeTab}/${formData.id}`
+      : `${import.meta.env.VITE_API_URL}/chicken-receiving/${activeTab}`;
     
     // Clean up empty fields that don't belong to the active tab
     if (activeTab === 'monthly') {
