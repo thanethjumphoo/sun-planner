@@ -27,8 +27,11 @@ const weight_distribution_entity_1 = require("./weight-distribution.entity");
 const weight_distribution_controller_1 = require("./weight-distribution.controller");
 const mps_controller_1 = require("./mps.controller");
 const mps_plan_entity_1 = require("./mps-plan.entity");
+const mps_plan_supply_entity_1 = require("./mps-plan-supply.entity");
 const mps_exception_entity_1 = require("./mps-exception.entity");
 const dps_plan_entity_1 = require("./dps-plan.entity");
+const manual_operation_entity_1 = require("./manual-operation.entity");
+const manual_operation_controller_1 = require("./manual-operation.controller");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -62,11 +65,11 @@ exports.AppModule = AppModule = __decorate([
             chicken_receiving_module_1.ChickenReceivingModule,
             typeorm_1.TypeOrmModule.forFeature([
                 stg_erp_item_entity_1.StgErpItem, stg_erp_order_header_entity_1.StgErpOrderHeader, stg_erp_order_line_entity_1.StgErpOrderLine, target_sync_item_entity_1.TargetSyncItem, product_spec_entity_1.ProductSpec,
-                weight_distribution_entity_1.WeightDistribution, mps_plan_entity_1.MpsPlan, mps_plan_entity_1.MpsPlanDaily, mps_plan_entity_1.MpsPlanOrder, mps_exception_entity_1.MpsExceptionReport,
-                dps_plan_entity_1.DpsPlan, dps_plan_entity_1.DpsSublot, dps_plan_entity_1.DpsSublotBin, dps_plan_entity_1.DpsOrder, dps_plan_entity_1.DpsAllocation
+                weight_distribution_entity_1.WeightDistribution, mps_plan_entity_1.MpsPlan, mps_plan_entity_1.MpsPlanDaily, mps_plan_entity_1.MpsPlanOrder, mps_plan_supply_entity_1.MpsPlanSupply, mps_exception_entity_1.MpsExceptionReport,
+                dps_plan_entity_1.DpsPlan, dps_plan_entity_1.DpsSublot, dps_plan_entity_1.DpsSublotBin, dps_plan_entity_1.DpsOrder, dps_plan_entity_1.DpsAllocation, manual_operation_entity_1.ManualOperation
             ]),
         ],
-        controllers: [app_controller_1.AppController, erp_integration_controller_1.ErpIntegrationController, product_spec_controller_1.ProductSpecController, weight_distribution_controller_1.WeightDistributionController, mps_controller_1.MpsController],
+        controllers: [app_controller_1.AppController, erp_integration_controller_1.ErpIntegrationController, product_spec_controller_1.ProductSpecController, weight_distribution_controller_1.WeightDistributionController, mps_controller_1.MpsController, manual_operation_controller_1.ManualOperationController],
         providers: [app_service_1.AppService, oracle_integration_service_1.OracleIntegrationService],
     })
 ], AppModule);

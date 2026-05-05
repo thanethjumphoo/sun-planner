@@ -19,8 +19,11 @@ import { WeightDistribution } from './weight-distribution.entity';
 import { WeightDistributionController } from './weight-distribution.controller';
 import { MpsController } from './mps.controller';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
+import { MpsPlanSupply } from './mps-plan-supply.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps-plan.entity';
+import { ManualOperation } from './manual-operation.entity';
+import { ManualOperationController } from './manual-operation.controller';
 
 @Module({
   imports: [
@@ -51,11 +54,11 @@ import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps
     ChickenReceivingModule,
     TypeOrmModule.forFeature([
       StgErpItem, StgErpOrderHeader, StgErpOrderLine, TargetSyncItem, ProductSpec, 
-      WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsExceptionReport,
-      DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation
+      WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsExceptionReport,
+      DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation
     ]),
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController],
+  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController],
   providers: [AppService, OracleIntegrationService],
 })
 export class AppModule { }

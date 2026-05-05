@@ -1,3 +1,4 @@
+import { MpsPlanSupply } from './mps-plan-supply.entity';
 export declare class MpsPlan {
     id: number;
     planName: string;
@@ -9,6 +10,7 @@ export declare class MpsPlan {
     createdAt: Date;
     updatedAt: Date;
     dailySummaries: MpsPlanDaily[];
+    supplyBreakdown: MpsPlanSupply[];
     orders: MpsPlanOrder[];
     exceptions: any[];
 }
@@ -27,6 +29,7 @@ export declare class MpsPlanOrder {
     id: number;
     mpsPlan: MpsPlan;
     erpOrderLineId: number;
+    soNumber: string;
     itemCode: string;
     itemDesc: string;
     productType: string;

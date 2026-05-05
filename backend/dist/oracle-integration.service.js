@@ -118,46 +118,53 @@ let OracleIntegrationService = class OracleIntegrationService {
         try {
             conn = await this.connect();
             const bindNames = itemCodes.map((_, i) => `:code${i}`).join(', ');
-            const sql = `
-        SELECT ITM.INVENTORY_ITEM_ID AS ERP_ITEM_ID,
-               ITM.ORGANIZATION_ID   AS ERP_ORG_ID,
-               ITM.ITEM_TYPE         AS ERP_ITEM_TYPE,
-               ITM.SEGMENT1          AS ERP_ITEM_CODE,
-               ITM.DESCRIPTION       AS ERP_ITEM_DESC,
-               ITM.PRIMARY_UOM_CODE  AS ERP_ITEM_UOM,
-               ITM.CREATION_DATE     AS ERP_CREATION_DATE,
-               ITM.LAST_UPDATE_DATE  AS ERP_LAST_UPDATE_DATE,
-               ITM.ENABLED_FLAG      AS ERP_ENABLED_FLAG
-        FROM  MTL_SYSTEM_ITEMS_B ITM
-        WHERE ITM.SEGMENT1 IN (${bindNames})
-        AND   ITM.ORGANIZATION_ID = 82
-        AND   ITM.ENABLED_FLAG = 'Y'
-      `;
-            const binds = {};
-            itemCodes.forEach((code, i) => {
-                binds[`code${i}`] = code;
-            });
-            const result = await conn.execute(sql, binds, {
-                outFormat: oracledb.OUT_FORMAT_OBJECT,
-            });
-            const erpRows = result.rows || [];
             const savedItems = [];
-            for (const row of erpRows) {
-                let item = await this.stgErpItemRepository.findOne({ where: { erpItemCode: row.ERP_ITEM_CODE, erpOrgId: row.ERP_ORG_ID } });
-                if (!item) {
-                    item = this.stgErpItemRepository.create();
+            const chunkSize = 1000;
+            for (let i = 0; i < itemCodes.length; i += chunkSize) {
+                const chunk = itemCodes.slice(i, i + chunkSize);
+                const bindNames = chunk.map((_, idx) => `:code${idx}`).join(', ');
+                const sql = `
+          SELECT ITM.INVENTORY_ITEM_ID AS ERP_ITEM_ID,
+                 ITM.ORGANIZATION_ID   AS ERP_ORG_ID,
+                 ITM.ITEM_TYPE         AS ERP_ITEM_TYPE,
+                 ITM.SEGMENT1          AS ERP_ITEM_CODE,
+                 ITM.DESCRIPTION       AS ERP_ITEM_DESC,
+                 ITM.PRIMARY_UOM_CODE  AS ERP_ITEM_UOM,
+                 ITM.CREATION_DATE     AS ERP_CREATION_DATE,
+                 ITM.LAST_UPDATE_DATE  AS ERP_LAST_UPDATE_DATE,
+                 ITM.ENABLED_FLAG      AS ERP_ENABLED_FLAG
+          FROM  MTL_SYSTEM_ITEMS_B ITM
+          WHERE ITM.SEGMENT1 IN (${bindNames})
+          AND   ITM.ORGANIZATION_ID = 82
+          AND   ITM.ENABLED_FLAG = 'Y'
+        `;
+                const binds = {};
+                chunk.forEach((code, idx) => {
+                    binds[`code${idx}`] = code;
+                });
+                const result = await conn.execute(sql, binds, {
+                    outFormat: oracledb.OUT_FORMAT_OBJECT,
+                });
+                const erpRows = result.rows || [];
+                for (const row of erpRows) {
+                    let item = await this.stgErpItemRepository.findOne({
+                        where: { erpItemCode: row.ERP_ITEM_CODE, erpOrgId: row.ERP_ORG_ID }
+                    });
+                    if (!item) {
+                        item = this.stgErpItemRepository.create();
+                    }
+                    item.erpItemId = row.ERP_ITEM_ID;
+                    item.erpOrgId = row.ERP_ORG_ID;
+                    item.erpItemType = row.ERP_ITEM_TYPE;
+                    item.erpItemCode = row.ERP_ITEM_CODE;
+                    item.erpItemDesc = row.ERP_ITEM_DESC;
+                    item.erpItemUom = row.ERP_ITEM_UOM;
+                    item.erpCreationDate = row.ERP_CREATION_DATE;
+                    item.erpLastUpdateDate = row.ERP_LAST_UPDATE_DATE;
+                    item.erpEnabledFlag = row.ERP_ENABLED_FLAG;
+                    const saved = await this.stgErpItemRepository.save(item);
+                    savedItems.push(saved);
                 }
-                item.erpItemId = row.ERP_ITEM_ID;
-                item.erpOrgId = row.ERP_ORG_ID;
-                item.erpItemType = row.ERP_ITEM_TYPE;
-                item.erpItemCode = row.ERP_ITEM_CODE;
-                item.erpItemDesc = row.ERP_ITEM_DESC;
-                item.erpItemUom = row.ERP_ITEM_UOM;
-                item.erpCreationDate = row.ERP_CREATION_DATE;
-                item.erpLastUpdateDate = row.ERP_LAST_UPDATE_DATE;
-                item.erpEnabledFlag = row.ERP_ENABLED_FLAG;
-                const saved = await this.stgErpItemRepository.save(item);
-                savedItems.push(saved);
             }
             return savedItems;
         }
@@ -171,22 +178,24 @@ let OracleIntegrationService = class OracleIntegrationService {
         try {
             conn = await this.connect();
             const sql = `
-        SELECT ODH.HEADER_ID         AS ERP_ORDER_HEADER_ID,
-               ODH.ORG_ID            AS ERP_ORG_ID,
-               ODH.ORDERED_DATE      AS ERP_ORDER_DATE,
-               ODH.ORDER_NUMBER      AS ERP_ORDER_NUMBER,
-               ODT.NAME              AS ERP_ORDER_TYPE,
-               CUS.CUSTOMER_NUMBER   AS ERP_CUSTOMER_NUMBER,
-               CUS.CUSTOMER_NAME     AS ERP_CUSTOMER_NAME,
-               CUS.ATTRIBUTE1        AS ERP_CUSTOMER_GRADE,
-               ODH.CREATION_DATE     AS ERP_CREATION_DATE,
-               ODH.LAST_UPDATE_DATE  AS ERP_LAST_UPDATE_DATE,
-               ODH.FLOW_STATUS_CODE  AS ERP_ORDER_STATUS
+        SELECT DISTINCT
+              ODH.HEADER_ID         AS ERP_ORDER_HEADER_ID,
+              ODH.ORG_ID            AS ERP_ORG_ID,
+              ODH.ORDERED_DATE      AS ERP_ORDER_DATE,
+              ODH.ORDER_NUMBER      AS ERP_ORDER_NUMBER,
+              ODT.NAME              AS ERP_ORDER_TYPE,
+              CUS.CUSTOMER_NUMBER   AS ERP_CUSTOMER_NUMBER,
+              CUS.CUSTOMER_NAME     AS ERP_CUSTOMER_NAME,
+              CUS.ATTRIBUTE1        AS ERP_CUSTOMER_GRADE,
+              ODH.CREATION_DATE     AS ERP_CREATION_DATE,
+              ODH.LAST_UPDATE_DATE  AS ERP_LAST_UPDATE_DATE,
+              ODH.FLOW_STATUS_CODE  AS ERP_ORDER_STATUS
         FROM   OE_ORDER_HEADERS_ALL ODH
-               JOIN OE_TRANSACTION_TYPES_TL ODT ON ODT.TRANSACTION_TYPE_ID = ODH.ORDER_TYPE_ID
-               JOIN AR_CUSTOMERS CUS ON CUS.CUSTOMER_ID = ODH.SOLD_TO_ORG_ID
+              JOIN OE_ORDER_LINES_ALL ODL ON ODL.HEADER_ID = ODH.HEADER_ID
+              JOIN OE_TRANSACTION_TYPES_TL ODT ON ODT.TRANSACTION_TYPE_ID = ODH.ORDER_TYPE_ID
+              JOIN AR_CUSTOMERS CUS ON CUS.CUSTOMER_ID = ODH.SOLD_TO_ORG_ID
         WHERE  ODT.NAME LIKE 'SFO%SO'
-        AND    EXTRACT(MONTH FROM ODH.ORDERED_DATE) >= 5
+        AND    EXTRACT(MONTH FROM ODL.SCHEDULE_SHIP_DATE) >= 5
         AND    ODH.CANCELLED_FLAG = 'N'
         AND    ODH.ORG_ID = 82
         ORDER BY ODH.ORDERED_DATE DESC
@@ -237,54 +246,58 @@ let OracleIntegrationService = class OracleIntegrationService {
             if (headers.length === 0)
                 return [];
             const headerIds = headers.map(h => h.erpOrderHeaderId);
-            const bindNames = headerIds.map((_, i) => `:hid${i}`).join(', ');
-            const sql = `
-        SELECT ODL.LINE_ID             AS ERP_ORDER_LINE_ID,
-               ODL.HEADER_ID           AS ERP_ORDER_HEADER_ID,
-               ODL.ORG_ID              AS ERP_ORG_ID,
-               ODL.LINE_NUMBER         AS ERP_ORDER_LINE_NUMBER,
-               ODL.INVENTORY_ITEM_ID   AS ERP_ORDER_ITEM_ID,
-               ODL.ORDERED_ITEM        AS ERP_ORDER_ITEM_CODE,
-               ODL.ORDERED_QUANTITY    AS ERP_ORDER_ITEM_QTY,
-               ODL.ORDER_QUANTITY_UOM  AS ERP_ORDER_ITEM_UOM,
-               ODL.SCHEDULE_SHIP_DATE  AS ERP_ORDER_SHIP_DATE,
-               ODL.CREATION_DATE       AS ERP_CREATION_DATE,
-               ODL.LAST_UPDATE_DATE    AS ERP_LAST_UPDATE_DATE,
-               ODL.FLOW_STATUS_CODE    AS ERP_ORDER_STATUS
-        FROM   OE_ORDER_LINES_ALL ODL
-        WHERE  ODL.HEADER_ID IN (${bindNames})
-        ORDER BY ODL.HEADER_ID, ODL.LINE_NUMBER
-      `;
-            const binds = {};
-            headerIds.forEach((id, i) => {
-                binds[`hid${i}`] = id;
-            });
-            const result = await conn.execute(sql, binds, {
-                outFormat: oracledb.OUT_FORMAT_OBJECT,
-            });
-            const erpRows = result.rows || [];
             const savedLines = [];
-            for (const row of erpRows) {
-                let line = await this.stgErpOrderLineRepository.findOne({
-                    where: { erpOrderLineId: row.ERP_ORDER_LINE_ID, erpOrgId: row.ERP_ORG_ID },
+            const chunkSize = 1000;
+            for (let i = 0; i < headerIds.length; i += chunkSize) {
+                const chunk = headerIds.slice(i, i + chunkSize);
+                const bindNames = chunk.map((_, idx) => `:hid${idx}`).join(', ');
+                const sql = `
+          SELECT ODL.LINE_ID             AS ERP_ORDER_LINE_ID,
+                 ODL.HEADER_ID           AS ERP_ORDER_HEADER_ID,
+                 ODL.ORG_ID              AS ERP_ORG_ID,
+                 ODL.LINE_NUMBER         AS ERP_ORDER_LINE_NUMBER,
+                 ODL.INVENTORY_ITEM_ID   AS ERP_ORDER_ITEM_ID,
+                 ODL.ORDERED_ITEM        AS ERP_ORDER_ITEM_CODE,
+                 ODL.ORDERED_QUANTITY    AS ERP_ORDER_ITEM_QTY,
+                 ODL.ORDER_QUANTITY_UOM  AS ERP_ORDER_ITEM_UOM,
+                 ODL.SCHEDULE_SHIP_DATE  AS ERP_ORDER_SHIP_DATE,
+                 ODL.CREATION_DATE       AS ERP_CREATION_DATE,
+                 ODL.LAST_UPDATE_DATE    AS ERP_LAST_UPDATE_DATE,
+                 ODL.FLOW_STATUS_CODE    AS ERP_ORDER_STATUS
+          FROM   OE_ORDER_LINES_ALL ODL
+          WHERE  ODL.HEADER_ID IN (${bindNames})
+          ORDER BY ODL.HEADER_ID, ODL.LINE_NUMBER
+        `;
+                const binds = {};
+                chunk.forEach((id, idx) => {
+                    binds[`hid${idx}`] = id;
                 });
-                if (!line) {
-                    line = this.stgErpOrderLineRepository.create();
+                const result = await conn.execute(sql, binds, {
+                    outFormat: oracledb.OUT_FORMAT_OBJECT,
+                });
+                const erpRows = result.rows || [];
+                for (const row of erpRows) {
+                    let line = await this.stgErpOrderLineRepository.findOne({
+                        where: { erpOrderLineId: row.ERP_ORDER_LINE_ID, erpOrgId: row.ERP_ORG_ID },
+                    });
+                    if (!line) {
+                        line = this.stgErpOrderLineRepository.create();
+                    }
+                    line.erpOrderLineId = row.ERP_ORDER_LINE_ID;
+                    line.erpOrderHeaderId = row.ERP_ORDER_HEADER_ID;
+                    line.erpOrgId = row.ERP_ORG_ID;
+                    line.erpOrderLineNumber = String(row.ERP_ORDER_LINE_NUMBER);
+                    line.erpOrderItemId = row.ERP_ORDER_ITEM_ID;
+                    line.erpOrderItemCode = String(row.ERP_ORDER_ITEM_CODE ?? '');
+                    line.erpOrderItemQty = row.ERP_ORDER_ITEM_QTY;
+                    line.erpOrderItemUom = String(row.ERP_ORDER_ITEM_UOM ?? '');
+                    line.erpOrderShipDate = row.ERP_ORDER_SHIP_DATE;
+                    line.erpCreationDate = row.ERP_CREATION_DATE;
+                    line.erpLastUpdateDate = row.ERP_LAST_UPDATE_DATE;
+                    line.erpOrderStatus = String(row.ERP_ORDER_STATUS ?? '');
+                    const saved = await this.stgErpOrderLineRepository.save(line);
+                    savedLines.push(saved);
                 }
-                line.erpOrderLineId = row.ERP_ORDER_LINE_ID;
-                line.erpOrderHeaderId = row.ERP_ORDER_HEADER_ID;
-                line.erpOrgId = row.ERP_ORG_ID;
-                line.erpOrderLineNumber = String(row.ERP_ORDER_LINE_NUMBER);
-                line.erpOrderItemId = row.ERP_ORDER_ITEM_ID;
-                line.erpOrderItemCode = String(row.ERP_ORDER_ITEM_CODE ?? '');
-                line.erpOrderItemQty = row.ERP_ORDER_ITEM_QTY;
-                line.erpOrderItemUom = String(row.ERP_ORDER_ITEM_UOM ?? '');
-                line.erpOrderShipDate = row.ERP_ORDER_SHIP_DATE;
-                line.erpCreationDate = row.ERP_CREATION_DATE;
-                line.erpLastUpdateDate = row.ERP_LAST_UPDATE_DATE;
-                line.erpOrderStatus = String(row.ERP_ORDER_STATUS ?? '');
-                const saved = await this.stgErpOrderLineRepository.save(line);
-                savedLines.push(saved);
             }
             return savedLines;
         }

@@ -1,12 +1,8 @@
 import React, { useState } from 'react';
-import { Calendar, Package, Users, Activity, Scale, Move, ChevronLeft, ChevronRight, Filter, FileText, Trash2, CalendarDays, ShoppingCart } from 'lucide-react';
+import { Calendar, Package, Users, Activity, Scale, Move, ChevronLeft, ChevronRight, Filter, FileText, Trash2, CalendarDays, ShoppingCart, X, Info, CheckCircle2, Lock, Unlock, ShieldCheck } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const API = import.meta.env.VITE_API_URL;
-
-
-
-
 
 interface Spec {
   erpItemCode: string;
@@ -25,16 +21,48 @@ const MPSPlan: React.FC = () => {
   const [plans, setPlans] = useState<any[]>([]);
   const [currentPlan, setCurrentPlan] = useState<any>(null);
   const [demandOrders, setDemandOrders] = useState<any[]>([]);
+  const [manpowerData, setManpowerData] = useState<any[]>([]);
+  const [selectedSupply, setSelectedSupply] = useState<any>(null);
+  const [selectedManpower, setSelectedManpower] = useState<any>(null);
+  const [showSupplyModal, setShowSupplyModal] = useState(false);
+  const [highlightedSoNumber, setHighlightedSoNumber] = useState<string | null>(null);
+
+  const [splitModal, setSplitModal] = useState<{
+    isOpen: boolean;
+    orderId: string | null;
+    targetDate: string;
+    maxQty: number;
+    qtyToMove: string;
+    orderDesc?: string;
+    soNumber?: string;
+  }>({ isOpen: false, orderId: null, targetDate: '', maxQty: 0, qtyToMove: '' });
 
   React.useEffect(() => {
     initData();
   }, [currentMonth]);
 
+  const fetchManpowerData = async () => {
+    try {
+      const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
+      const lastDay = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+      const startDate = `${monthStr}-01`;
+      const endDate = `${monthStr}-${lastDay.toString().padStart(2, '0')}`;
+
+      const res = await fetch(`${API}/api/manual-operation?startDate=${startDate}&endDate=${endDate}`);
+      if (res.ok) {
+        setManpowerData(await res.json());
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const initData = async () => {
     setLoading(true);
     await Promise.all([
       fetchSpecs(),
-      fetchDemandOrders()
+      fetchDemandOrders(),
+      fetchManpowerData()
     ]);
     const allPlans = await fetchPlans();
     await loadPlanForMonth(allPlans);
@@ -112,8 +140,43 @@ const MPSPlan: React.FC = () => {
     if (!window.confirm('Are you sure you want to delete this plan?')) return;
     try {
       const res = await fetch(`${API}/api/mps/plans/${id}/delete`, { method: 'POST' });
-      if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
         initData();
+      } else {
+        alert(data.message || 'Failed to delete plan');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleApprovePlan = async (id: number) => {
+    if (!window.confirm('Approve this plan? Once approved, the plan will be locked and cannot be modified.')) return;
+    try {
+      const res = await fetch(`${API}/api/mps/plans/${id}/approve`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        alert('\u2705 Plan approved and locked successfully!');
+        initData();
+      } else {
+        alert(data.message || 'Failed to approve plan');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleRejectPlan = async (id: number) => {
+    if (!window.confirm('Reject this plan? It will be reverted back to DRAFT status.')) return;
+    try {
+      const res = await fetch(`${API}/api/mps/plans/${id}/reject`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        alert('Plan reverted to DRAFT.');
+        initData();
+      } else {
+        alert(data.message || 'Failed to reject plan');
       }
     } catch (e) {
       console.error(e);
@@ -121,12 +184,21 @@ const MPSPlan: React.FC = () => {
   };
 
   // --- Calendar Helpers ---
+  // Use local date to avoid UTC timezone shift (toISOString shifts +7 timezone back by 1 day)
+  const formatLocalDate = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  const getTodayStr = () => formatLocalDate(new Date());
+
   const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
   const firstDayOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
 
   const days = Array.from({ length: daysInMonth }, (_, i) => {
     const d = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), i + 1);
-    return d.toISOString().split('T')[0];
+    return formatLocalDate(d);
   });
 
   // --- Drag and Drop Handlers ---
@@ -143,36 +215,83 @@ const MPSPlan: React.FC = () => {
 
   const handleDrop = async (e: React.DragEvent, date: string) => {
     e.preventDefault();
-    if (draggedOrderId && currentPlan) {
-      // Optimistic update
-      setCurrentPlan((prev: any) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          orders: prev.orders.map((o: any) => String(o.id) === draggedOrderId
-            ? { ...o, plannedProductionDate: date }
-            : o)
-        };
-      });
-      setDraggedOrderId(null);
+    const todayDateStr = getTodayStr();
+    if (date < todayDateStr) {
+      alert("Cannot plan orders for past dates.");
+      return;
+    }
+    // Lock guard: prevent drag-drop on approved plans
+    if (currentPlan?.status === 'APPROVED') {
+      alert('This plan is approved and locked. Cannot modify.');
+      return;
+    }
 
-      const mpsOrderId = parseInt(draggedOrderId);
+    if (draggedOrderId && currentPlan) {
+      const orderIds = draggedOrderId.split(',');
+      const mpsOrderId = parseInt(orderIds[0]);
+
       if (mpsOrderId) {
-        try {
-          await fetch(`${API}/api/mps/update-date`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ planId: currentPlan.id, mpsOrderId, date })
+        // Find the order to get its current qty
+        const orderToMove = currentPlan.orders.find((o: any) => o.id === mpsOrderId);
+        if (orderToMove) {
+          // The backend returns quantityKg for orders, but metric mapping might have mapped it to qty
+          // Let's use the raw quantityKg if available, or qty
+          const currentQty = orderToMove.quantityKg || orderToMove.qty || 0;
+
+          setSplitModal({
+            isOpen: true,
+            orderId: draggedOrderId,
+            targetDate: date,
+            maxQty: currentQty,
+            qtyToMove: String(currentQty),
+            orderDesc: orderToMove.itemDesc,
+            soNumber: orderToMove.soNumber
           });
-        } catch (err) {
-          console.error("Failed to update date", err);
-          initData(); // rollback
         }
       }
+      setDraggedOrderId(null);
+    }
+  };
+
+  const handleConfirmSplitMove = async () => {
+    if (!splitModal.orderId) return;
+
+    const qtyNum = parseFloat(splitModal.qtyToMove);
+    if (isNaN(qtyNum) || qtyNum <= 0 || qtyNum > splitModal.maxQty) {
+      alert("Invalid quantity. Must be greater than 0 and less than or equal to the maximum available quantity.");
+      return;
+    }
+
+    const mpsOrderId = parseInt(splitModal.orderId);
+
+    setSplitModal({ ...splitModal, isOpen: false });
+    setLoading(true);
+
+    try {
+      await fetch(`${API}/api/mps/update-date`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planId: currentPlan.id,
+          mpsOrderId,
+          date: splitModal.targetDate,
+          splitQty: qtyNum
+        })
+      });
+      // reload data after saving
+      initData();
+    } catch (err) {
+      console.error("Failed to update date", err);
+      initData();
     }
   };
 
   const handleGeneratePlan = async () => {
+    // Lock guard: prevent regenerating if current plan is approved
+    if (currentPlan?.status === 'APPROVED') {
+      alert('This plan is approved and locked. Reject it first to regenerate.');
+      return;
+    }
     setLoading(true);
     try {
       const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
@@ -199,38 +318,73 @@ const MPSPlan: React.FC = () => {
       return { intake: 0, intakeKg: 0, rmFlAvailable: 0, totalOrderQty: 0, manpower: 0, dailyOrders: [] };
     }
 
-    const dailySummary = currentPlan.dailySummaries?.find((d: any) => d.productionDate.split('T')[0] === date);
-    const dailyOrdersRaw = currentPlan.orders?.filter((o: any) => o.plannedProductionDate.split('T')[0] === date) || [];
+    const formatDBDate = (dateVal: any) => {
+      if (!dateVal) return null;
+      if (typeof dateVal === 'string') return dateVal.split('T')[0];
+      if (dateVal instanceof Date) return formatLocalDate(dateVal);
+      return String(dateVal).split('T')[0];
+    };
 
-    const dailyOrders = dailyOrdersRaw.map((o: any) => ({
-      id: String(o.id), // Use the unique MpsPlanOrder primary key
-      lineId: o.erpOrderLineId,
-      itemCode: o.itemCode,
-      itemDesc: o.itemDesc,
-      type: o.productType,
-      qty: Number(o.quantityKg)
-    }));
+    const dailySummary = currentPlan.dailySummaries?.find((d: any) => formatDBDate(d.productionDate) === date);
+    const dailyOrdersRaw = currentPlan.orders?.filter((o: any) => formatDBDate(o.plannedProductionDate) === date) || [];
+
+    const grouped = new Map();
+    dailyOrdersRaw.forEach((o: any) => {
+      const key = `${o.soNumber || 'NO_SO'}_${o.itemCode}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          id: String(o.id),
+          ids: [String(o.id)],
+          lineId: o.erpOrderLineId,
+          soNumber: o.soNumber || '-',
+          itemCode: o.itemCode,
+          itemDesc: o.itemDesc,
+          type: o.productType,
+          qty: Number(o.quantityKg),
+          shipDate: o.shipDate ? formatDBDate(o.shipDate) : '-'
+        });
+      } else {
+        const existing = grouped.get(key);
+        existing.ids.push(String(o.id));
+        existing.id = existing.ids.join(',');
+        existing.qty += Number(o.quantityKg);
+      }
+    });
+
+    const dailyOrders = Array.from(grouped.values());
 
     const totalOrderQty = dailyOrders.reduce((sum: number, o: any) => sum + o.qty, 0);
 
-    // Dynamically calculate manpower
+    const dailyManpower = manpowerData.find((m: any) => formatDBDate(m.productionDate) === date) || {};
+
     let requiredCuttingWorkers = 0;
     dailyOrders.forEach((o: any) => {
       const spec = specs[o.itemCode];
-      const speed = spec?.productSpeed || 45; // default 45 if not set
+      const speed = spec?.productSpeed || 45;
       requiredCuttingWorkers += (o.qty / speed);
     });
-    requiredCuttingWorkers = requiredCuttingWorkers / 10;
-    const supportWorkers = 28 * 1.0; 
-    const totalManpower = Math.ceil(requiredCuttingWorkers + supportWorkers);
+    requiredCuttingWorkers = Math.ceil(requiredCuttingWorkers / 10);
+
+    const plannedStationWorkers = dailyManpower.plannedStationWorkers || 28;
+    const actualStationWorkers = dailyManpower.actualStationWorkers || 0;
+    const actualCuttingWorkers = dailyManpower.actualCuttingWorkers || 0;
+
+    const totalManpowerPlan = plannedStationWorkers + requiredCuttingWorkers;
 
     return {
       intake: dailySummary ? Number(dailySummary.intakeBirds) : 0,
       intakeKg: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
       rmFlAvailable: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
-      totalOrderQty, // Now dynamically calculated
-      manpower: dailyOrders.length > 0 ? totalManpower : 0, // Only show manpower if there are orders
-      dailyOrders
+      totalOrderQty,
+      manpower: dailyOrders.length > 0 ? totalManpowerPlan : 0,
+      manpowerBreakdown: {
+        plannedStationWorkers,
+        plannedCuttingWorkers: requiredCuttingWorkers,
+        actualStationWorkers,
+        actualCuttingWorkers
+      },
+      dailyOrders,
+      supplyBreakdown: currentPlan.supplyBreakdown?.find((s: any) => formatDBDate(s.productionDate) === date)
     };
   };
 
@@ -254,13 +408,13 @@ const MPSPlan: React.FC = () => {
   // --- Derived State for Demand Plan Tab ---
   const currentMonthDemand = demandOrders.reduce((acc: any[], header: any) => {
     if (!header.lines) return acc;
-    
+
     const filteredLines = header.lines.filter((line: any) => {
       if (!line.erpOrderShipDate) return false;
       if (!specs[line.erpOrderItemCode]) return false; // Filter only items in Product Spec
       const shipDate = new Date(line.erpOrderShipDate);
-      return shipDate.getFullYear() === currentMonth.getFullYear() && 
-             shipDate.getMonth() === currentMonth.getMonth();
+      return shipDate.getFullYear() === currentMonth.getFullYear() &&
+        shipDate.getMonth() === currentMonth.getMonth();
     });
 
     if (filteredLines.length > 0) {
@@ -273,17 +427,20 @@ const MPSPlan: React.FC = () => {
     <div className="p-6 max-w-full mx-auto space-y-6 bg-gray-50 min-h-screen">
       {/* Header */}
       <div className="flex justify-between items-end bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
-            <Calendar className="w-8 h-8 text-orange-500" />
-            Master Production Schedule (MPS)
+        <div className="relative">
+          <div className="absolute -top-10 -left-10 w-40 h-40 bg-orange-200/20 blur-3xl rounded-full"></div>
+          <h1 className="text-4xl font-black text-slate-900 tracking-tight flex items-center gap-4 relative z-10">
+            <div className="p-3 bg-orange-500 rounded-2xl shadow-lg shadow-orange-200">
+              <Calendar className="w-8 h-8 text-white" />
+            </div>
+            <span>Master Production Schedule <span className="text-orange-500">(MPS)</span></span>
           </h1>
-          <p className="text-gray-500 mt-2 text-sm">วางแผนการผลิตรายเดือน, ดูปริมาณไก่เข้า, คำนวณ Yield และ Manpower</p>
+          <p className="text-slate-500 mt-3 text-lg font-medium">Monthly Strategic Planning & Yield Optimization Engine</p>
         </div>
         <div className="flex gap-3">
-          <button disabled={loading} onClick={handleGeneratePlan} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 shadow-orange-200'}`}>
+          <button disabled={loading || currentPlan?.status === 'APPROVED'} onClick={handleGeneratePlan} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all ${loading || currentPlan?.status === 'APPROVED' ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 shadow-orange-200'}`}>
             <Activity className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            {loading ? 'Generating...' : 'Generate & Save Plan'}
+            {currentPlan?.status === 'APPROVED' ? '🔒 Plan Locked' : loading ? 'Generating...' : 'Generate & Save Plan'}
           </button>
           <button className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 hover:bg-gray-50 rounded-xl text-sm font-medium text-gray-700 shadow-sm transition-all">
             <Filter className="w-4 h-4" /> Filter
@@ -311,8 +468,8 @@ const MPSPlan: React.FC = () => {
         <button
           onClick={() => setActiveTab('calendar')}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'calendar'
-              ? 'bg-orange-50 text-orange-600 shadow-sm'
-              : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+            ? 'bg-orange-50 text-orange-600 shadow-sm'
+            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
             }`}
         >
           <CalendarDays size={16} />
@@ -321,8 +478,8 @@ const MPSPlan: React.FC = () => {
         <button
           onClick={() => setActiveTab('drafts')}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'drafts'
-              ? 'bg-orange-50 text-orange-600 shadow-sm'
-              : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+            ? 'bg-orange-50 text-orange-600 shadow-sm'
+            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
             }`}
         >
           <FileText size={16} />
@@ -334,8 +491,8 @@ const MPSPlan: React.FC = () => {
         <button
           onClick={() => setActiveTab('demand')}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'demand'
-              ? 'bg-orange-50 text-orange-600 shadow-sm'
-              : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+            ? 'bg-orange-50 text-orange-600 shadow-sm'
+            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
             }`}
         >
           <ShoppingCart size={16} />
@@ -357,6 +514,16 @@ const MPSPlan: React.FC = () => {
                 <StatCard label="Estimated Total Yield" value={Math.round(totalRmFlAvail).toLocaleString()} unit="kg" icon={Scale} color="green" />
                 <StatCard label="Avg. Daily Manpower" value={avgManpower.toString()} unit="People" icon={Users} color="purple" />
               </div>
+
+              {currentPlan?.status === 'APPROVED' && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-4 shadow-sm flex items-center gap-3">
+                  <Lock className="text-emerald-500 flex-shrink-0" />
+                  <div>
+                    <h4 className="font-bold">Plan Approved & Locked</h4>
+                    <p className="text-sm opacity-80">This plan has been approved. Orders cannot be moved or modified. To make changes, reject the plan first from the Plan Drafts tab.</p>
+                  </div>
+                </div>
+              )}
 
               {/* Exceptions Alert */}
               {currentPlan.exceptions && currentPlan.exceptions.length > 0 && (
@@ -400,21 +567,31 @@ const MPSPlan: React.FC = () => {
                   {days.map((date, i) => {
                     const metrics = calculateDailyMetrics(date);
                     const dayNum = i + 1;
-                    const isToday = false; // Mock
+                    const todayDateStr = getTodayStr();
+                    const isPast = date < todayDateStr;
+                    const isToday = date === todayDateStr;
 
                     return (
                       <div
                         key={date}
-                        onDragOver={handleDragOver}
-                        onDrop={(e) => handleDrop(e, date)}
+                        onDragOver={isPast ? undefined : handleDragOver}
+                        onDrop={isPast ? undefined : (e) => handleDrop(e, date)}
                         className={`min-h-[180px] border-r border-b border-gray-100 p-2 flex flex-col gap-2 transition-colors
-                      ${isToday ? 'bg-orange-50/30' : 'bg-white hover:bg-gray-50'}
+                      ${isPast ? 'bg-gray-100/60 opacity-80' : isToday ? 'bg-orange-50/30' : 'bg-white hover:bg-gray-50'}
+                      ${metrics.supplyBreakdown && !isPast ? 'cursor-pointer hover:shadow-md' : ''}
                     `}
+                        onClick={() => {
+                          if (metrics.supplyBreakdown && !isPast) {
+                            setSelectedSupply(metrics.supplyBreakdown);
+                            setSelectedManpower(metrics.manpowerBreakdown);
+                            setShowSupplyModal(true);
+                          }
+                        }}
                       >
                         {/* Day Header */}
                         <div className="flex justify-between items-start mb-1">
                           <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-bold
-                        ${isToday ? 'bg-orange-500 text-white shadow-md' : 'text-gray-700'}`}>
+                        ${isToday ? 'bg-orange-500 text-white shadow-md' : isPast ? 'text-gray-400' : 'text-gray-700'}`}>
                             {dayNum}
                           </span>
                           {metrics.intake > 0 && (
@@ -426,20 +603,48 @@ const MPSPlan: React.FC = () => {
 
                         {/* Metrics Summary (if activity exists) */}
                         {(metrics.intake > 0 || metrics.totalOrderQty > 0) && (
-                          <div className="bg-gray-50 rounded-lg p-2 text-[10px] space-y-1.5 border border-gray-100 shadow-inner">
-                            <div className="flex justify-between items-center text-gray-600">
-                              <span className="flex items-center gap-1"><Scale className="w-3 h-3" /> RM FL Total</span>
-                              <span className="font-semibold">{Math.round(metrics.rmFlAvailable).toLocaleString()} kg</span>
-                            </div>
-                            <div className="flex justify-between items-center text-gray-600">
-                              <span className="flex items-center gap-1"><Package className="w-3 h-3" /> Demand</span>
-                              <span className={`font-semibold ${metrics.totalOrderQty > metrics.rmFlAvailable ? 'text-red-500' : 'text-green-600'}`}>
-                                {Math.round(metrics.totalOrderQty).toLocaleString()} kg
+                          <div className="bg-slate-50/50 backdrop-blur-sm rounded-xl p-2.5 text-[10px] space-y-2 border border-slate-100 shadow-sm">
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500 font-bold uppercase tracking-tighter">RM Available</span>
+                              <span className="font-black text-slate-800 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                {Math.round(metrics.rmFlAvailable).toLocaleString()} <span className="opacity-50">kg</span>
                               </span>
                             </div>
-                            <div className="flex justify-between items-center text-gray-600 pt-1 border-t border-gray-200">
-                              <span className="flex items-center gap-1"><Users className="w-3 h-3" /> Staff</span>
-                              <span className="font-semibold text-indigo-600">{metrics.manpower} pax</span>
+
+                            {/* RM Size Progress Indicators */}
+                            {metrics.supplyBreakdown && (
+                              <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden flex gap-0.5">
+                                {(() => {
+                                  const s = metrics.supplyBreakdown;
+                                  const total = Number(s.size40Down || 0) + Number(s.size40_45 || 0) + Number(s.size45_50 || 0) +
+                                    Number(s.size50_55 || 0) + Number(s.size55_60 || 0) + Number(s.size60_65 || 0) +
+                                    Number(s.size65_70 || 0) + Number(s.size70_up || 0);
+                                  if (total === 0) return null;
+
+                                  const sizes = [
+                                    { val: s.size40Down, color: 'bg-slate-400' },
+                                    { val: s.size40_45, color: 'bg-blue-400' },
+                                    { val: s.size45_50, color: 'bg-cyan-400' },
+                                    { val: Number(s.size50_55) + Number(s.size55_60), color: 'bg-emerald-400' },
+                                    { val: Number(s.size60_65) + Number(s.size65_70) + Number(s.size70_up), color: 'bg-red-400' },
+                                  ];
+
+                                  return sizes.map((item, i) => (
+                                    <div key={i} style={{ width: `${(Number(item.val || 0) / total) * 100}%` }} className={`h-full ${item.color}`}></div>
+                                  ));
+                                })()}
+                              </div>
+                            )}
+
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500 font-bold uppercase tracking-tighter">Demand Plan</span>
+                              <span className={`font-black px-1.5 py-0.5 rounded shadow-sm ${metrics.totalOrderQty > metrics.rmFlAvailable ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                {Math.round(metrics.totalOrderQty).toLocaleString()} <span className="opacity-50">kg</span>
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center pt-1.5 border-t border-slate-200/50">
+                              <span className="text-indigo-500 font-bold uppercase tracking-tighter">Allocated Staff</span>
+                              <span className="font-black text-indigo-700">{metrics.manpower} <span className="opacity-50 text-[8px]">PAX</span></span>
                             </div>
                           </div>
                         )}
@@ -449,21 +654,29 @@ const MPSPlan: React.FC = () => {
                           {metrics.dailyOrders.map((order: any) => (
                             <motion.div
                               layoutId={order.id}
-                              draggable
-                              onDragStart={(e: any) => handleDragStart(e, order.id)}
+                              draggable={currentPlan?.status !== 'APPROVED'}
+                              onDragStart={currentPlan?.status !== 'APPROVED' ? (e: any) => handleDragStart(e, order.id) : undefined}
+                              onClick={() => setHighlightedSoNumber(highlightedSoNumber === order.soNumber ? null : order.soNumber)}
                               key={order.id}
-                              className={`p-2 rounded-lg text-xs cursor-grab active:cursor-grabbing border shadow-sm
-                            ${order.type === 'chilled' ? 'bg-green-50 border-green-200' : 'bg-cyan-50 border-cyan-200'}
+                              className={`p-2 rounded-lg text-xs border shadow-sm transition-all
+                            ${currentPlan?.status === 'APPROVED' ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}
+                            ${order.type === 'chilled' ? 'bg-orange-50 border-orange-200' : 'bg-cyan-50 border-cyan-200'}
+                            ${highlightedSoNumber && highlightedSoNumber !== order.soNumber ? 'opacity-40 grayscale-[50%]' : ''}
+                            ${highlightedSoNumber === order.soNumber ? 'ring-2 ring-orange-500 shadow-orange-500/50 shadow-lg scale-[1.02] z-10' : ''}
                           `}
                             >
                               <div className="flex justify-between font-bold mb-1">
                                 <span className="truncate pr-2 text-gray-800" title={order.itemDesc}>{order.itemDesc}</span>
                                 <Move className="w-3 h-3 text-gray-400 opacity-50" />
                               </div>
+                              <div className="flex justify-between items-center mb-0.5">
+                                <span className="text-[9px] font-bold text-gray-500 uppercase">SO: <span className="text-gray-800">{order.soNumber}</span></span>
+                                <span className="text-[9px] font-bold text-gray-500 uppercase">Ship: <span className="text-gray-800">{order.shipDate}</span></span>
+                              </div>
                               <div className="flex justify-between items-center">
                                 <span className="text-[10px] text-gray-500 font-medium">{order.itemCode}</span>
-                                <span className={`font-bold ${order.type === 'chilled' ? 'text-green-700' : 'text-cyan-700'}`}>
-                                  {order.qty.toLocaleString()}kg
+                                <span className={`font-bold ${order.type === 'chilled' ? 'text-orange-700' : 'text-cyan-700'}`}>
+                                  {Math.round(order.qty).toLocaleString()}kg
                                 </span>
                               </div>
                             </motion.div>
@@ -512,26 +725,63 @@ const MPSPlan: React.FC = () => {
                 </thead>
                 <tbody>
                   {plans.map(p => (
-                    <tr key={p.id} className="hover:bg-gray-50 transition-colors border-b last:border-0">
+                    <tr key={p.id} className={`hover:bg-gray-50 transition-colors border-b last:border-0 ${p.status === 'APPROVED' ? 'bg-emerald-50/30' : ''}`}>
                       <td className="px-4 py-3 font-mono text-gray-500">{p.id}</td>
                       <td className="px-4 py-3 font-semibold text-gray-800">{p.planName}</td>
                       <td className="px-4 py-3 text-gray-600">{p.targetMonth}</td>
                       <td className="px-4 py-3">
-                        <span className="px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-md text-xs font-bold">
-                          {p.status}
-                        </span>
+                        {p.status === 'APPROVED' ? (
+                          <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md text-xs font-bold inline-flex items-center gap-1">
+                            <ShieldCheck size={12} />
+                            APPROVED
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-md text-xs font-bold">
+                            {p.status}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-500">
                         {new Date(p.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => handleDeletePlan(p.id)}
-                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                          title="Delete Plan"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        <div className="flex items-center gap-1.5 justify-end">
+                          {p.status === 'DRAFT' ? (
+                            <>
+                              <button
+                                onClick={() => handleApprovePlan(p.id)}
+                                className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                title="Approve Plan"
+                              >
+                                <CheckCircle2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleDeletePlan(p.id)}
+                                className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete Plan"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </>
+                          ) : p.status === 'APPROVED' ? (
+                            <button
+                              onClick={() => handleRejectPlan(p.id)}
+                              className="px-3 py-1.5 text-xs font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors inline-flex items-center gap-1"
+                              title="Reject Plan (revert to DRAFT)"
+                            >
+                              <Unlock size={12} />
+                              Reject
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleDeletePlan(p.id)}
+                              className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Delete Plan"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -551,7 +801,7 @@ const MPSPlan: React.FC = () => {
               Showing demands for: <span className="font-bold text-gray-800">{currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}</span>
             </div>
           </div>
-          
+
           {currentMonthDemand.length === 0 ? (
             <div className="text-center py-20 text-gray-400">
               <ShoppingCart size={48} className="mx-auto mb-4 opacity-30" />
@@ -566,7 +816,7 @@ const MPSPlan: React.FC = () => {
                     <div className="flex gap-4">
                       <div>
                         <span className="text-xs text-gray-500 uppercase font-bold block">SO Number</span>
-                        <span className="font-bold text-gray-800">{header.erpOrderHeaderId}</span>
+                        <span className="font-bold text-gray-800">{header.erpOrderNumber || header.erpOrderHeaderId}</span>
                       </div>
                       <div>
                         <span className="text-xs text-gray-500 uppercase font-bold block">Customer</span>
@@ -577,7 +827,7 @@ const MPSPlan: React.FC = () => {
                       {header.lines.length} Lines
                     </div>
                   </div>
-                  
+
                   {/* SO Lines */}
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -615,6 +865,301 @@ const MPSPlan: React.FC = () => {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Supply Detail Modal */}
+      {showSupplyModal && selectedSupply && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-xl w-full max-w-2xl flex flex-col max-h-[90vh] border border-gray-200"
+          >
+            {/* Modal Header */}
+            <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl">
+              <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Info size={20} className="text-orange-500" />
+                Raw Material Breakdown
+              </h3>
+              <button
+                onClick={() => setShowSupplyModal(false)}
+                className="text-gray-400 hover:text-gray-700 bg-white p-1 rounded-full shadow-sm border border-gray-200 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="px-6 py-6 overflow-y-auto flex-1 space-y-8">
+              {/* Top Summary Chips */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {[
+                  { label: 'Intake Birds', val: selectedSupply.intakeBirds, unit: 'Birds', color: 'blue' },
+                  { label: 'Total Weight', val: selectedSupply.totalWeight, unit: 'kg', color: 'slate' },
+                  { label: 'Avg. Weight', val: selectedSupply.avgWeight, unit: 'kg/pc', color: 'emerald', precision: 3 },
+                  { label: 'Slaughtered', val: selectedSupply.slaughteredWeight, unit: 'kg', color: 'orange' },
+                ].map((stat, i) => (
+                  <div key={i} className="bg-gray-50 border border-gray-100 p-4 rounded-xl">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{stat.label}</p>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-xl font-bold text-gray-800">
+                        {stat.precision ? Number(stat.val).toFixed(stat.precision) : Math.round(Number(stat.val)).toLocaleString()}
+                      </span>
+                      <span className="text-[9px] font-medium text-gray-400 uppercase">{stat.unit}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* RM FL Calculations Section */}
+              <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
+                <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
+                  <Activity size={16} className="text-orange-500" />
+                  RM FL Summary (Yield 4%)
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {(() => {
+                    const slaughtered = Number(selectedSupply.slaughteredWeight || 0);
+                    const rmFlTotal = slaughtered * 0.04;
+                    const rmFlGradeB = rmFlTotal * 0.093;
+                    const rmFlNet = rmFlTotal - rmFlGradeB;
+
+                    return (
+                      <>
+                        <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
+                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">RM FL Total</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-orange-900">{Math.round(rmFlTotal).toLocaleString()}</span>
+                            <span className="text-xs font-bold text-orange-500">kg</span>
+                          </div>
+                          <p className="text-[9px] text-orange-400 mt-1 italic">Slaughtered * 4%</p>
+                        </div>
+                        <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
+                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">RM FL Grade B</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-orange-900">{Math.round(rmFlGradeB).toLocaleString()}</span>
+                            <span className="text-xs font-bold text-orange-500">kg</span>
+                          </div>
+                          <p className="text-[9px] text-orange-400 mt-1 italic">Total * 9.3%</p>
+                        </div>
+                        <div className="bg-orange-500 p-4 rounded-xl shadow-md">
+                          <p className="text-[10px] font-bold text-white/80 uppercase mb-1">RM FL หัก Grade B</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-white">{Math.round(rmFlNet).toLocaleString()}</span>
+                            <span className="text-xs font-bold text-white/80">kg</span>
+                          </div>
+                          <p className="text-[9px] text-white/60 mt-1 italic">Net Fillet Available</p>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Manpower Breakdown Section */}
+              {selectedManpower && (
+                <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
+                  <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
+                    <Users size={16} className="text-indigo-500" />
+                    Manpower Planning & Actual
+                  </h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
+                      <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Station Workers (Plan)</p>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedStationWorkers}</span>
+                        <span className="text-[9px] font-bold text-indigo-400">Pax</span>
+                      </div>
+                    </div>
+                    <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
+                      <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Cutting Workers (Plan)</p>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedCuttingWorkers}</span>
+                        <span className="text-[9px] font-bold text-indigo-400">Pax</span>
+                      </div>
+                    </div>
+                    <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
+                      <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Station Workers (Actual)</p>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualStationWorkers}</span>
+                        <span className="text-[9px] font-bold text-emerald-500">Pax</span>
+                      </div>
+                    </div>
+                    <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
+                      <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Cutting Workers (Actual)</p>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualCuttingWorkers}</span>
+                        <span className="text-[9px] font-bold text-emerald-500">Pax</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-indigo-400 italic font-medium">
+                    * Cutting Workers (Plan) calculated dynamically via Demand Orders: SUMPRODUCT(Order Qty / Product Speed) / 10
+                  </div>
+                </div>
+              )}
+
+              {/* Size Distribution Grid */}
+              <div className="space-y-4">
+                <h4 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                  <Package size={16} className="text-orange-500" />
+                  Fillet Size Breakdown
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {[
+                    { label: '40 Down', val: selectedSupply.size40Down, color: 'bg-slate-500' },
+                    { label: '40-45', val: selectedSupply.size40_45, color: 'bg-blue-500' },
+                    { label: '45-50', val: selectedSupply.size45_50, color: 'bg-cyan-500' },
+                    { label: '50-55', val: selectedSupply.size50_55, color: 'bg-emerald-500' },
+                    { label: '55-60', val: selectedSupply.size55_60, color: 'bg-green-500' },
+                    { label: '60-65', val: selectedSupply.size60_65, color: 'bg-amber-500' },
+                    { label: '65-70', val: selectedSupply.size65_70, color: 'bg-orange-500' },
+                    { label: '70 Up', val: selectedSupply.size70_up, color: 'bg-red-500' },
+                  ].map((size, idx) => (
+                    <div key={idx} className="bg-white border border-gray-100 p-3 rounded-xl shadow-sm hover:border-orange-200 transition-all">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">{size.label}</p>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-lg font-bold text-gray-800">{Number(size.val || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
+                        <span className="text-[9px] font-bold text-gray-400">kg</span>
+                      </div>
+                      <div className="mt-2 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
+                        <div className={`h-full ${size.color} w-2/3 opacity-80`}></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Final Summary Output */}
+              <div className="bg-gray-900 rounded-2xl p-6 text-white flex flex-col md:flex-row justify-between items-center gap-6">
+                <div>
+                  <p className="text-gray-400 font-bold uppercase text-[10px] mb-1">Estimated Net Output (Aggregate)</p>
+                  <h5 className="text-3xl font-bold flex items-baseline gap-2">
+                    {Math.round(
+                      Number(selectedSupply.size40Down || 0) +
+                      Number(selectedSupply.size40_45 || 0) +
+                      Number(selectedSupply.size45_50 || 0) +
+                      Number(selectedSupply.size50_55 || 0) +
+                      Number(selectedSupply.size55_60 || 0) +
+                      Number(selectedSupply.size60_65 || 0) +
+                      Number(selectedSupply.size65_70 || 0) +
+                      Number(selectedSupply.size70_up || 0)
+                    ).toLocaleString()}
+                    <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">KG</span>
+                  </h5>
+                </div>
+                <div className="w-full md:w-64 space-y-2">
+                  <div className="flex justify-between text-[10px] font-bold uppercase text-gray-400">
+                    <span>Distribution Matrix</span>
+                    <span className="text-orange-400">100% Match</span>
+                  </div>
+                  <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden flex">
+                    {[
+                      { val: selectedSupply.size40Down, color: 'bg-slate-500' },
+                      { val: selectedSupply.size40_45, color: 'bg-blue-500' },
+                      { val: selectedSupply.size45_50, color: 'bg-cyan-500' },
+                      { val: selectedSupply.size50_55, color: 'bg-emerald-500' },
+                      { val: selectedSupply.size55_60, color: 'bg-green-500' },
+                      { val: selectedSupply.size60_65, color: 'bg-amber-500' },
+                      { val: selectedSupply.size65_70, color: 'bg-orange-500' },
+                      { val: selectedSupply.size70_up, color: 'bg-red-500' },
+                    ].map((s, i) => {
+                      const total = Number(selectedSupply.size40Down || 0) +
+                        Number(selectedSupply.size40_45 || 0) +
+                        Number(selectedSupply.size45_50 || 0) +
+                        Number(selectedSupply.size50_55 || 0) +
+                        Number(selectedSupply.size55_60 || 0) +
+                        Number(selectedSupply.size60_65 || 0) +
+                        Number(selectedSupply.size65_70 || 0) +
+                        Number(selectedSupply.size70_up || 0);
+                      const width = total > 0 ? (Number(s.val || 0) / total) * 100 : 0;
+                      return <div key={i} style={{ width: `${width}%` }} className={`${s.color} h-full border-r border-black/20 last:border-0`} />;
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl flex justify-end">
+              <button
+                onClick={() => setShowSupplyModal(false)}
+                className="px-6 py-2 bg-white border border-gray-300 text-gray-700 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-all shadow-sm"
+              >
+                Close Breakdown
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+      {/* Split/Move Modal */}
+      {splitModal.isOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-gray-50/50">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                <Move className="text-orange-500 w-5 h-5" />
+                Move / Split Order
+              </h3>
+              <button
+                onClick={() => setSplitModal({ ...splitModal, isOpen: false })}
+                className="text-gray-400 hover:bg-gray-200 hover:text-gray-600 p-1.5 rounded-lg transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 text-sm">
+                <p className="font-bold text-orange-900 truncate" title={splitModal.orderDesc}>{splitModal.orderDesc}</p>
+                <div className="flex gap-4 mt-1 text-orange-700">
+                  <p>SO: <span className="font-bold">{splitModal.soNumber}</span></p>
+                  <p>Target Date: <span className="font-bold">{splitModal.targetDate}</span></p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">
+                  Quantity to Move (kg)
+                </label>
+                <input
+                  type="number"
+                  value={splitModal.qtyToMove}
+                  onChange={(e) => setSplitModal({ ...splitModal, qtyToMove: e.target.value })}
+                  max={splitModal.maxQty}
+                  min={1}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-lg font-bold focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none transition-all"
+                />
+                <div className="flex justify-between items-center mt-2">
+                  <p className="text-xs text-gray-500">
+                    Max Available: <span className="font-bold">{splitModal.maxQty}</span> kg
+                  </p>
+                  {parseFloat(splitModal.qtyToMove) < splitModal.maxQty && (
+                    <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">
+                      Will Split Order
+                    </span>
+                  )}
+                </div>
+              </div>
+
+            </div>
+            <div className="p-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50">
+              <button
+                onClick={() => setSplitModal({ ...splitModal, isOpen: false })}
+                className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-200 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmSplitMove}
+                className="px-6 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold rounded-xl shadow-md hover:from-orange-600 hover:to-red-600 transition-all shadow-orange-200"
+              >
+                Confirm Move
+              </button>
+            </div>
+          </motion.div>
         </div>
       )}
     </div>

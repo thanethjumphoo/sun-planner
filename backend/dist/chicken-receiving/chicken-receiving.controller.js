@@ -78,7 +78,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], ChickenReceivingController.prototype, "remove", null);
 exports.ChickenReceivingController = ChickenReceivingController = __decorate([
-    (0, common_1.Controller)('chicken-receiving'),
+    (0, common_1.Controller)('api/chicken-receiving'),
     __metadata("design:paramtypes", [chicken_receiving_service_1.ChickenReceivingService])
 ], ChickenReceivingController);
 //# sourceMappingURL=chicken-receiving.controller.js.map

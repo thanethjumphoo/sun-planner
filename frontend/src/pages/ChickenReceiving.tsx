@@ -25,6 +25,14 @@ const startOfWeek = (date: Date) => {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() - day);
 };
 
+// Local-safe date formatter (avoids toISOString UTC timezone shift)
+const formatLocalDate = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 export default function ChickenReceiving() {
   const [activeTab, setActiveTab] = useState('monthly');
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -36,7 +44,7 @@ export default function ChickenReceiving() {
   const fetchData = async () => {
     if (activeTab === 'reports') return;
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/chicken-receiving/${activeTab}`);
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/chicken-receiving/${activeTab}`);
       if (response.ok) {
         const data = await response.json();
         setRecords(data);
@@ -55,7 +63,7 @@ export default function ChickenReceiving() {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const emptyForm = {
     id: null,
-    receive_date: new Date().toISOString().split('T')[0],
+    receive_date: formatLocalDate(new Date()),
     receive_time: '06:00',
     chicken_type: 'ไก่เนื้อ',
     chicken_count: '',
@@ -81,7 +89,7 @@ export default function ChickenReceiving() {
     setFormData({
       ...emptyForm,
       ...record,
-      receive_date: record.receive_date ? new Date(record.receive_date).toISOString().split('T')[0] : emptyForm.receive_date,
+      receive_date: record.receive_date ? (typeof record.receive_date === 'string' ? record.receive_date.split('T')[0] : formatLocalDate(new Date(record.receive_date))) : emptyForm.receive_date,
       receive_time: record.receive_time ? record.receive_time.substring(0,5) : emptyForm.receive_time
     });
     setIsModalOpen(true);
@@ -92,7 +100,7 @@ export default function ChickenReceiving() {
     if (!window.confirm("Are you sure you want to delete this schedule?")) return;
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/chicken-receiving/${activeTab}/${formData.id}`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/chicken-receiving/${activeTab}/${formData.id}`, {
         method: 'DELETE',
       });
       if (response.ok) {
@@ -125,8 +133,8 @@ export default function ChickenReceiving() {
     const payload = { ...formData, chicken_avg: computedAvg };
     const method = formData.id ? 'PUT' : 'POST';
     const url = formData.id 
-      ? `${import.meta.env.VITE_API_URL}/chicken-receiving/${activeTab}/${formData.id}`
-      : `${import.meta.env.VITE_API_URL}/chicken-receiving/${activeTab}`;
+      ? `${import.meta.env.VITE_API_URL}/api/chicken-receiving/${activeTab}/${formData.id}`
+      : `${import.meta.env.VITE_API_URL}/api/chicken-receiving/${activeTab}`;
     
     // Clean up empty fields that don't belong to the active tab
     if (activeTab === 'monthly') {

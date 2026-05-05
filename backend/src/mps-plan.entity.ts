@@ -1,5 +1,7 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, OneToMany, ManyToOne, JoinColumn } from 'typeorm';
 
+import { MpsPlanSupply } from './mps-plan-supply.entity';
+
 // ─── 1. MPS Plan Header (หัวตารางแผนการผลิต) ───
 @Entity('mps_plans')
 export class MpsPlan {
@@ -33,6 +35,9 @@ export class MpsPlan {
 
   @OneToMany(() => MpsPlanDaily, daily => daily.mpsPlan, { cascade: true })
   dailySummaries: MpsPlanDaily[];
+
+  @OneToMany(() => MpsPlanSupply, supply => supply.mpsPlan, { cascade: true })
+  supplyBreakdown: MpsPlanSupply[];
 
   @OneToMany(() => MpsPlanOrder, order => order.mpsPlan, { cascade: true })
   orders: MpsPlanOrder[];
@@ -86,6 +91,9 @@ export class MpsPlanOrder {
 
   @Column({ name: 'erp_order_line_id', type: 'int' })
   erpOrderLineId: number;
+
+  @Column({ name: 'so_number', type: 'varchar', length: 100, nullable: true })
+  soNumber: string;
 
   @Column({ name: 'item_code', type: 'varchar', length: 100 })
   itemCode: string;

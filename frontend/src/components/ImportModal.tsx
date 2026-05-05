@@ -169,7 +169,7 @@ export default function ImportModal({ isOpen, onClose, activeTab, onImportDone }
     setErrorMsg('');
 
     try {
-      const response = await fetch(`http://localhost:3333/chicken-receiving/${activeTab}/batch`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/chicken-receiving/${activeTab}/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rows }),

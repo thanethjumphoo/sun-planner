@@ -6,7 +6,7 @@ services:
     container_name: sun-planner-db
     environment:
       - ACCEPT_EULA=Y
-      - MSSQL_SA_PASSWORD=Mps_Strong!Passw0rd
+      - MSSQL_SA_PASSWORD=Your_password123
       - MSSQL_PID=Developer
     ports:
       - "1433:1433"

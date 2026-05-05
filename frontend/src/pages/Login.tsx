@@ -31,7 +31,7 @@ export default function Login() {
     setError('');
     try {
       // TODO: Point to actual backend URL when running
-      const response = await axios.post('http://localhost:3333/auth/login', data);
+      const response = await axios.post(`${import.meta.env.VITE_API_URL}/auth/login`, data);
       if (response.data.token) {
         localStorage.setItem('token', response.data.token);
         navigate('/dashboard');

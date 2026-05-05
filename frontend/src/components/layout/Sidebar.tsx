@@ -1,10 +1,9 @@
 
 import { Link, useLocation } from 'react-router-dom';
-import { 
-  Sun, Menu, LayoutDashboard, TrendingUp, CalendarDays, 
-  Truck, PieChart, Activity, Settings2, Users, PlayCircle, 
-  Package, Navigation, RefreshCw, BarChart3, Database, 
-  Bell, Shield, ClipboardList, Scale 
+import {
+  Sun, Menu, LayoutDashboard, TrendingUp, CalendarDays,
+  Truck, Activity, Users,
+  ClipboardList, Scale, RefreshCw
 } from 'lucide-react';
 
 const menuGroups = [
@@ -17,38 +16,38 @@ const menuGroups = [
   {
     label: "Planning",
     items: [
-      { title: "Demand Management", icon: TrendingUp, path: "/demand-management" },
       { title: "MPS (Master Plan)", icon: CalendarDays, path: "/mps" },
-      { title: "Chicken Receiving", icon: Truck, path: "/chicken-receiving" },
-      { title: "Yield & Allocation", icon: PieChart, path: "/yield-allocation" },
-      { title: "DPS (Daily Plan)", icon: Activity, path: "/dps" }
+      /*{ title: "Yield & Allocation", icon: PieChart, path: "/yield-allocation" },*/
+      { title: "DPS (Daily Plan)", icon: Activity, path: "/dps" },
+      { title: "Demand Management", icon: TrendingUp, path: "/demand-management" },
+      { title: "Chicken Receiving", icon: Truck, path: "/chicken-receiving" }
     ]
   },
   {
     label: "Execution",
     items: [
-      { title: "Machine Planning", icon: Settings2, path: "/machine-planning" },
+      /*{ title: "Machine Planning", icon: Settings2, path: "/machine-planning" },*/
       { title: "Manual Operation", icon: Users, path: "/manual-operation" },
-      { title: "Shopfloor Execution", icon: PlayCircle, path: "/shopfloor" }
+      /*{ title: "Shopfloor Execution", icon: PlayCircle, path: "/shopfloor" }*/
     ]
   },
   {
     label: "Supply Chain",
     items: [
-      { title: "Inventory", icon: Package, path: "/inventory" },
-      { title: "Logistics", icon: Navigation, path: "/logistics" },
-      { title: "ERP Integration Hub", icon: RefreshCw, path: "/erp-integration" }
+      { title: "Product Spec", icon: ClipboardList, path: "/product-spec" },
+      { title: "Weight Distribution", icon: Scale, path: "/weight-distribution" },
+      /*{ title: "Inventory", icon: Package, path: "/inventory" },*/
+      /*{ title: "Logistics", icon: Navigation, path: "/logistics" },*/
     ]
   },
   {
     label: "System Data",
     items: [
-      { title: "Product Spec", icon: ClipboardList, path: "/product-spec" },
-      { title: "Weight Distribution", icon: Scale, path: "/weight-distribution" },
-      { title: "Reports & Analytics", icon: BarChart3, path: "/reports" },
+      { title: "ERP Integration Hub", icon: RefreshCw, path: "/erp-integration" }
+      /*{ title: "Reports & Analytics", icon: BarChart3, path: "/reports" },
       { title: "Master Data", icon: Database, path: "/master-data" },
       { title: "Workflow & Alerts", icon: Bell, path: "/workflow" },
-      { title: "Security & Admin", icon: Shield, path: "/security" }
+      { title: "Security & Admin", icon: Shield, path: "/security" }*/
     ]
   }
 ];
@@ -79,7 +78,7 @@ export default function Sidebar({ isOpen, toggleSidebar }: { isOpen: boolean, to
             {group.items.map((item, idx) => {
               const Icon = item.icon;
               const isActive = location.pathname.startsWith(item.path);
-              
+
               return (
                 <Link to={item.path} key={idx} title={!isOpen ? item.title : ''} className={`flex items-center px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-200 group
                   ${isActive

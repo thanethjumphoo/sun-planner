@@ -11,6 +11,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MpsPlanOrder = exports.MpsPlanDaily = exports.MpsPlan = void 0;
 const typeorm_1 = require("typeorm");
+const mps_plan_supply_entity_1 = require("./mps-plan-supply.entity");
 let MpsPlan = class MpsPlan {
     id;
     planName;
@@ -22,6 +23,7 @@ let MpsPlan = class MpsPlan {
     createdAt;
     updatedAt;
     dailySummaries;
+    supplyBreakdown;
     orders;
     exceptions;
 };
@@ -66,6 +68,10 @@ __decorate([
     (0, typeorm_1.OneToMany)(() => MpsPlanDaily, daily => daily.mpsPlan, { cascade: true }),
     __metadata("design:type", Array)
 ], MpsPlan.prototype, "dailySummaries", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => mps_plan_supply_entity_1.MpsPlanSupply, supply => supply.mpsPlan, { cascade: true }),
+    __metadata("design:type", Array)
+], MpsPlan.prototype, "supplyBreakdown", void 0);
 __decorate([
     (0, typeorm_1.OneToMany)(() => MpsPlanOrder, order => order.mpsPlan, { cascade: true }),
     __metadata("design:type", Array)
@@ -133,6 +139,7 @@ let MpsPlanOrder = class MpsPlanOrder {
     id;
     mpsPlan;
     erpOrderLineId;
+    soNumber;
     itemCode;
     itemDesc;
     productType;
@@ -155,6 +162,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'erp_order_line_id', type: 'int' }),
     __metadata("design:type", Number)
 ], MpsPlanOrder.prototype, "erpOrderLineId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'so_number', type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", String)
+], MpsPlanOrder.prototype, "soNumber", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'item_code', type: 'varchar', length: 100 }),
     __metadata("design:type", String)
