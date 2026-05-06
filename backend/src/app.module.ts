@@ -24,6 +24,7 @@ import { MpsExceptionReport } from './mps-exception.entity';
 import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps-plan.entity';
 import { ManualOperation } from './manual-operation.entity';
 import { ManualOperationController } from './manual-operation.controller';
+import { DpsController } from './dps.controller';
 
 @Module({
   imports: [
@@ -58,7 +59,7 @@ import { ManualOperationController } from './manual-operation.controller';
       DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation
     ]),
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController],
+  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController, DpsController],
   providers: [AppService, OracleIntegrationService],
 })
 export class AppModule { }

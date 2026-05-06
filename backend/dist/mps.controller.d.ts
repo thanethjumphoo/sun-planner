@@ -38,6 +38,8 @@ export declare class MpsController {
     }>;
     generatePlan(body: {
         targetMonth: string;
+        orderStartDate?: string;
+        orderEndDate?: string;
     }): Promise<{
         success: boolean;
         message: string;

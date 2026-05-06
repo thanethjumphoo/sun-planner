@@ -11,16 +11,16 @@ export class ChickenReceivingService {
   constructor(
     @InjectRepository(ChickenReceivingPlanMonthly)
     private monthlyRepo: Repository<ChickenReceivingPlanMonthly>,
-    
+
     @InjectRepository(ChickenReceivingPlanWeekly)
     private weeklyRepo: Repository<ChickenReceivingPlanWeekly>,
-    
+
     @InjectRepository(ChickenReceivingPlanDaily)
     private dailyRepo: Repository<ChickenReceivingPlanDaily>,
-    
+
     @InjectRepository(ChickenReceivingActualDaily)
     private actualRepo: Repository<ChickenReceivingActualDaily>,
-  ) {}
+  ) { }
 
   private getRepo(type: string): Repository<any> {
     switch (type) {

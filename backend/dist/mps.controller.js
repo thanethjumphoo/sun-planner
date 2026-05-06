@@ -156,11 +156,22 @@ let MpsController = class MpsController {
             });
             plan = await this.mpsPlanRepo.save(plan);
         }
+        let startOfRange;
+        let endOfRange;
+        if (body.orderStartDate && body.orderEndDate) {
+            startOfRange = new Date(`${body.orderStartDate}T00:00:00`);
+            endOfRange = new Date(`${body.orderEndDate}T23:59:59`);
+        }
+        else {
+            const targetDate = new Date(`${targetMonth}-01T00:00:00Z`);
+            startOfRange = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1, 0, 0, 0);
+            endOfRange = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59);
+        }
         const targetDate = new Date(`${targetMonth}-01T00:00:00Z`);
         const startOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1, 0, 0, 0);
         const endOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59);
         const orders = await this.orderLineRepo.find({
-            where: { erpOrderShipDate: (0, typeorm_2.Between)(startOfMonth, endOfMonth) }
+            where: { erpOrderShipDate: (0, typeorm_2.Between)(startOfRange, endOfRange) }
         });
         const orderHeaders = await this.orderHeaderRepo.find();
         const headerMap = new Map();

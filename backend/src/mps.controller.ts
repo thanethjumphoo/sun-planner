@@ -152,7 +152,7 @@ export class MpsController {
 
   // 3. Generate & Snapshot MPS Plan
   @Post('generate')
-  async generatePlan(@Body() body: { targetMonth: string }) { // targetMonth format: '2026-05'
+  async generatePlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string }) { // targetMonth format: '2026-05'
     const targetMonth = body.targetMonth;
     
     // Step 1: Check for existing plans for this month
@@ -178,13 +178,27 @@ export class MpsController {
       plan = await this.mpsPlanRepo.save(plan);
     }
 
+    // Use custom date range if provided, otherwise fall back to targetMonth
+    let startOfRange: Date;
+    let endOfRange: Date;
+
+    if (body.orderStartDate && body.orderEndDate) {
+      startOfRange = new Date(`${body.orderStartDate}T00:00:00`);
+      endOfRange = new Date(`${body.orderEndDate}T23:59:59`);
+    } else {
+      const targetDate = new Date(`${targetMonth}-01T00:00:00Z`);
+      startOfRange = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1, 0, 0, 0);
+      endOfRange = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59);
+    }
+
+    // Supply still uses targetMonth for chicken intake
     const targetDate = new Date(`${targetMonth}-01T00:00:00Z`);
     const startOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1, 0, 0, 0);
     const endOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59);
 
-    // Step 2: Fetch Orders & Specs for the month
+    // Step 2: Fetch Orders & Specs using the custom date range
     const orders = await this.orderLineRepo.find({
-      where: { erpOrderShipDate: Between(startOfMonth, endOfMonth) }
+      where: { erpOrderShipDate: Between(startOfRange, endOfRange) }
     });
     
     // Fetch order headers to get the actual SO numbers

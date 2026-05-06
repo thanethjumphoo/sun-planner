@@ -42,14 +42,14 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 // Sample data for template per type
 const SAMPLE_DATA: Record<string, Record<string, string>> = {
   monthly: {
-    'Receive Date': '2026-05-03',
+    'Receive Date': '3/5/2026',
     'Chicken Type': 'ไก่เนื้อ',
     'Count (Birds)': '27355',
     'Weight (Kg)': '31390',
   },
   weekly: {
-    'Receive Date': '2026-05-03',
-    'Receive Time': '03:50',
+    'Receive Date': '3/5/2026',
+    'Receive Time': '3:50:00',
     'Chicken Type': 'ไก่เนื้อ',
     'Count (Birds)': '2970',
     'Weight (Kg)': '8019',
@@ -62,8 +62,8 @@ const SAMPLE_DATA: Record<string, Record<string, string>> = {
     'Batch': '01',
   },
   daily: {
-    'Receive Date': '2026-05-03',
-    'Receive Time': '03:50',
+    'Receive Date': '3/5/2026',
+    'Receive Time': '3:50:00',
     'Chicken Type': 'ไก่เนื้อ',
     'Count (Birds)': '2970',
     'Weight (Kg)': '8019',
@@ -126,7 +126,7 @@ export default function ImportModal({ isOpen, onClose, activeTab, onImportDone }
         const workbook = XLSX.read(data, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' });
+        const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '', raw: false });
 
         // Map Excel column labels to our keys
         let parsed = jsonData.map((excelRow) => {
@@ -135,6 +135,29 @@ export default function ImportModal({ isOpen, onClose, activeTab, onImportDone }
             const val = excelRow[col.label];
             row[col.key] = val !== undefined && val !== null ? String(val).trim() : '';
           });
+          
+          // Format date and time if present
+          if (row.receive_date && row.receive_date.includes('/')) {
+              const parts = row.receive_date.split('/');
+              if (parts.length === 3) {
+                 // Format: M/D/YYYY (month/day/year)
+                 const m = parts[0].padStart(2, '0');
+                 const d = parts[1].padStart(2, '0');
+                 let y = parts[2];
+                 if (y.length === 2) y = '20' + y;
+                 row.receive_date = `${y}-${m}-${d}`;
+              }
+          }
+          if (row.receive_time) {
+              const timeParts = row.receive_time.split(':');
+              if (timeParts.length >= 2) {
+                  const h = timeParts[0].padStart(2, '0');
+                  const m = timeParts[1].padStart(2, '0');
+                  const s = timeParts[2] ? timeParts[2].padStart(2, '0') : '00';
+                  row.receive_time = `${h}:${m}:${s}`;
+              }
+          }
+
           // Clean numbers
           if (row.chicken_count) row.chicken_count = row.chicken_count.replace(/,/g, '');
           if (row.chicken_weight) row.chicken_weight = row.chicken_weight.replace(/,/g, '');

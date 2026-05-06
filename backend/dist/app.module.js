@@ -32,6 +32,7 @@ const mps_exception_entity_1 = require("./mps-exception.entity");
 const dps_plan_entity_1 = require("./dps-plan.entity");
 const manual_operation_entity_1 = require("./manual-operation.entity");
 const manual_operation_controller_1 = require("./manual-operation.controller");
+const dps_controller_1 = require("./dps.controller");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -69,7 +70,7 @@ exports.AppModule = AppModule = __decorate([
                 dps_plan_entity_1.DpsPlan, dps_plan_entity_1.DpsSublot, dps_plan_entity_1.DpsSublotBin, dps_plan_entity_1.DpsOrder, dps_plan_entity_1.DpsAllocation, manual_operation_entity_1.ManualOperation
             ]),
         ],
-        controllers: [app_controller_1.AppController, erp_integration_controller_1.ErpIntegrationController, product_spec_controller_1.ProductSpecController, weight_distribution_controller_1.WeightDistributionController, mps_controller_1.MpsController, manual_operation_controller_1.ManualOperationController],
+        controllers: [app_controller_1.AppController, erp_integration_controller_1.ErpIntegrationController, product_spec_controller_1.ProductSpecController, weight_distribution_controller_1.WeightDistributionController, mps_controller_1.MpsController, manual_operation_controller_1.ManualOperationController, dps_controller_1.DpsController],
         providers: [app_service_1.AppService, oracle_integration_service_1.OracleIntegrationService],
     })
 ], AppModule);

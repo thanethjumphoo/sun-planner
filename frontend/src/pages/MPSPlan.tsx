@@ -27,6 +27,20 @@ const MPSPlan: React.FC = () => {
   const [showSupplyModal, setShowSupplyModal] = useState(false);
   const [highlightedSoNumber, setHighlightedSoNumber] = useState<string | null>(null);
 
+  const [showGenerateModal, setShowGenerateModal] = useState(false);
+  const getDefaultStartDate = () => {
+    const y = currentMonth.getFullYear();
+    const m = (currentMonth.getMonth() + 1).toString().padStart(2, '0');
+    return `${y}-${m}-01`;
+  };
+  const getDefaultEndDate = () => {
+    const lastDay = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+    const y = currentMonth.getFullYear();
+    const m = (currentMonth.getMonth() + 1).toString().padStart(2, '0');
+    return `${y}-${m}-${lastDay.toString().padStart(2, '0')}`;
+  };
+  const [generateRange, setGenerateRange] = useState({ startDate: getDefaultStartDate(), endDate: getDefaultEndDate() });
+
   const [splitModal, setSplitModal] = useState<{
     isOpen: boolean;
     orderId: string | null;
@@ -286,23 +300,35 @@ const MPSPlan: React.FC = () => {
     }
   };
 
-  const handleGeneratePlan = async () => {
+  const handleGeneratePlan = () => {
     // Lock guard: prevent regenerating if current plan is approved
     if (currentPlan?.status === 'APPROVED') {
       alert('This plan is approved and locked. Reject it first to regenerate.');
       return;
     }
+    setGenerateRange({ startDate: getDefaultStartDate(), endDate: getDefaultEndDate() });
+    setShowGenerateModal(true);
+  };
+
+  const executeGeneratePlan = async () => {
+    setShowGenerateModal(false);
     setLoading(true);
     try {
       const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
       const res = await fetch(`${API}/api/mps/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetMonth: monthStr })
+        body: JSON.stringify({ 
+          targetMonth: monthStr,
+          orderStartDate: generateRange.startDate,
+          orderEndDate: generateRange.endDate
+        })
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Plan generated successfully! Plan ID: ${data.planId}`);
+        alert(`Plan generated successfully! Plan ID: ${data.planId}\nOrders from ${generateRange.startDate} to ${generateRange.endDate}`);
+      } else {
+        alert(data.message || 'Failed to generate plan');
       }
       await initData();
     } catch (e) {
@@ -1157,6 +1183,77 @@ const MPSPlan: React.FC = () => {
                 className="px-6 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold rounded-xl shadow-md hover:from-orange-600 hover:to-red-600 transition-all shadow-orange-200"
               >
                 Confirm Move
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* GENERATE PLAN MODAL */}
+      {showGenerateModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-lg overflow-hidden flex flex-col p-8"
+          >
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-xl font-black text-gray-900 flex items-center gap-2">
+                  <div className="p-2 bg-orange-100 text-orange-600 rounded-xl">
+                    <Activity className="w-5 h-5" />
+                  </div>
+                  Generate & Save Plan
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Planning for <span className="font-bold text-gray-800">{currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}</span>
+                </p>
+              </div>
+              <button onClick={() => setShowGenerateModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="bg-orange-50/50 border border-orange-100 rounded-2xl p-5 mb-6">
+              <p className="text-xs font-bold text-orange-600 uppercase tracking-wider mb-4">Sales Order Date Range (Ship Date)</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 mb-1.5">Start Date</label>
+                  <input
+                    type="date"
+                    value={generateRange.startDate}
+                    onChange={e => setGenerateRange({ ...generateRange, startDate: e.target.value })}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold text-gray-800 focus:outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 mb-1.5">End Date</label>
+                  <input
+                    type="date"
+                    value={generateRange.endDate}
+                    onChange={e => setGenerateRange({ ...generateRange, endDate: e.target.value })}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold text-gray-800 focus:outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 bg-white"
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
+                ระบบจะดึง Sales Orders ที่มี Ship Date ตั้งแต่วันที่ <span className="font-bold text-gray-600">{generateRange.startDate}</span> ถึง <span className="font-bold text-gray-600">{generateRange.endDate}</span> เข้ามาจัดทำแผนผลิตเดือน {currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowGenerateModal(false)}
+                className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeGeneratePlan}
+                disabled={!generateRange.startDate || !generateRange.endDate || generateRange.startDate > generateRange.endDate}
+                className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-orange-200 transition-all flex justify-center items-center gap-2"
+              >
+                <Activity className="w-4 h-4" /> Generate Plan
               </button>
             </div>
           </motion.div>

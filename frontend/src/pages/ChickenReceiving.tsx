@@ -36,7 +36,7 @@ const formatLocalDate = (d: Date) => {
 export default function ChickenReceiving() {
   const [activeTab, setActiveTab] = useState('monthly');
   const [currentDate, setCurrentDate] = useState(new Date());
-  
+
   // Data State
   const [records, setRecords] = useState<any[]>([]);
 
@@ -90,7 +90,7 @@ export default function ChickenReceiving() {
       ...emptyForm,
       ...record,
       receive_date: record.receive_date ? (typeof record.receive_date === 'string' ? record.receive_date.split('T')[0] : formatLocalDate(new Date(record.receive_date))) : emptyForm.receive_date,
-      receive_time: record.receive_time ? record.receive_time.substring(0,5) : emptyForm.receive_time
+      receive_time: record.receive_time ? record.receive_time.substring(0, 5) : emptyForm.receive_time
     });
     setIsModalOpen(true);
   };
@@ -132,10 +132,10 @@ export default function ChickenReceiving() {
   const handleSave = async () => {
     const payload = { ...formData, chicken_avg: computedAvg };
     const method = formData.id ? 'PUT' : 'POST';
-    const url = formData.id 
+    const url = formData.id
       ? `${import.meta.env.VITE_API_URL}/api/chicken-receiving/${activeTab}/${formData.id}`
       : `${import.meta.env.VITE_API_URL}/api/chicken-receiving/${activeTab}`;
-    
+
     // Clean up empty fields that don't belong to the active tab
     if (activeTab === 'monthly') {
       delete payload.receive_time;
@@ -148,7 +148,7 @@ export default function ChickenReceiving() {
       delete payload.batch;
       delete payload.sublot;
     }
-    
+
     // Remove id from payload if POST
     if (!formData.id) {
       delete payload.id;
@@ -165,7 +165,7 @@ export default function ChickenReceiving() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      
+
       if (response.ok) {
         setIsModalOpen(false);
         fetchData(); // Reload data immediately
@@ -232,12 +232,12 @@ export default function ChickenReceiving() {
                 <span className={`text-sm font-semibold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-orange-500 text-white shadow-md' : 'text-gray-700'}`}>
                   {d.dayNum}
                 </span>
-                
+
                 {dayRecords.length > 0 && d.isCurrentMonth && (
                   <div className="mt-2 space-y-1.5 h-full max-h-[80px] overflow-y-auto custom-scrollbar">
                     {dayRecords.map((record, rIdx) => (
-                      <div 
-                        key={rIdx} 
+                      <div
+                        key={rIdx}
                         onClick={(e) => handleEdit(e, record)}
                         className="space-y-1 cursor-pointer group/card hover:scale-105 transition-transform"
                       >
@@ -284,7 +284,7 @@ export default function ChickenReceiving() {
           {weekDays.map((dayObj, i) => {
             const isToday = isSameDay(dayObj, today);
             const dayRecords = records.filter(r => r.receive_date && isSameDay(new Date(r.receive_date), dayObj));
-            
+
             return (
               <div key={i} className="flex flex-col bg-gray-50 rounded-xl border border-gray-200 overflow-hidden">
                 <div className={`p-3 text-center border-b border-gray-200 font-bold ${isToday ? 'bg-orange-100 text-orange-800' : 'bg-white text-gray-700'}`}>
@@ -292,8 +292,8 @@ export default function ChickenReceiving() {
                 </div>
                 <div className="p-2 space-y-3 min-h-[400px]">
                   {dayRecords.map((record, rIdx) => (
-                    <div 
-                      key={rIdx} 
+                    <div
+                      key={rIdx}
                       onClick={(e) => handleEdit(e, record)}
                       className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 cursor-pointer hover:border-orange-400 transition-colors group relative"
                     >
@@ -301,8 +301,8 @@ export default function ChickenReceiving() {
                         <Edit size={14} className="text-orange-500" />
                       </div>
                       <div className="text-xs font-bold text-gray-800 mb-1">Shift {record.shift || '-'}</div>
-                      {record.receive_time && <div className="text-xs text-gray-500 mb-2 flex items-center gap-1"><Clock size={12}/>{record.receive_time.substring(0,5)}</div>}
-                      <div className="text-xs font-medium mb-1 truncate text-gray-600 flex items-center gap-1"><MapPin size={12}/>{record.farm_name || record.farm_name_standard || 'N/A'}</div>
+                      {record.receive_time && <div className="text-xs text-gray-500 mb-2 flex items-center gap-1"><Clock size={12} />{record.receive_time.substring(0, 5)}</div>}
+                      <div className="text-xs font-medium mb-1 truncate text-gray-600 flex items-center gap-1"><MapPin size={12} />{record.farm_name || record.farm_name_standard || 'N/A'}</div>
                       <div className="flex justify-between items-center text-xs font-medium mt-2">
                         <span className="text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">{Number(record.chicken_count).toLocaleString()}</span>
                         <span className="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{record.chicken_avg}kg</span>
@@ -397,52 +397,52 @@ export default function ChickenReceiving() {
             ))}
           </div>
           <div className="flex-1 relative bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjY0Ij48ZGVmcz48cGF0dGVybiBpZD0iZ3JpZCIgd2lkdGg9IjEwMCUiIGhlaWdodD0iNjQiIHBhdHRlcm5Vbml0cz0idXNlclNwYWNlT25Vc2UiPjxwYXRoIGQ9Ik0wIDY0TDEwMCUgNjQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U1ZTdlYiIgc3Ryb2tlLXdpZHRoPSIxIi8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+')] min-h-[1536px]">
-             
-             {finalRecords.length === 0 && (
-               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 text-gray-400 font-medium flex flex-col items-center">
-                 <CalendarIcon size={32} className="mb-2 opacity-50" />
-                 No schedules for this day
-               </div>
-             )}
 
-             {finalRecords.map((record, idx) => {
-               const colors = ['bg-blue-50 border-blue-200', 'bg-emerald-50 border-emerald-200', 'bg-amber-50 border-amber-200', 'bg-purple-50 border-purple-200'];
-               const textColors = ['text-blue-900', 'text-emerald-900', 'text-amber-900', 'text-purple-900'];
-               const subTextColors = ['text-blue-700', 'text-emerald-700', 'text-amber-700', 'text-purple-700'];
-               const themeIdx = idx % colors.length;
+            {finalRecords.length === 0 && (
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 text-gray-400 font-medium flex flex-col items-center">
+                <CalendarIcon size={32} className="mb-2 opacity-50" />
+                No schedules for this day
+              </div>
+            )}
 
-               return (
-                <div 
-                  key={idx} 
+            {finalRecords.map((record, idx) => {
+              const colors = ['bg-blue-50 border-blue-200', 'bg-emerald-50 border-emerald-200', 'bg-amber-50 border-amber-200', 'bg-purple-50 border-purple-200'];
+              const textColors = ['text-blue-900', 'text-emerald-900', 'text-amber-900', 'text-purple-900'];
+              const subTextColors = ['text-blue-700', 'text-emerald-700', 'text-amber-700', 'text-purple-700'];
+              const themeIdx = idx % colors.length;
+
+              return (
+                <div
+                  key={idx}
                   onClick={(e) => handleEdit(e, record)}
                   className={`absolute h-[60px] ${colors[themeIdx]} border rounded-lg p-3 shadow-sm hover:shadow-md hover:border-orange-400 transition-all cursor-pointer flex justify-between items-center group overflow-hidden`}
-                  style={{ 
-                    top: `${record.topPx}px`, 
+                  style={{
+                    top: `${record.topPx}px`,
                     left: `calc(16px + (100% - 32px) / ${record.totalCols} * ${record.colIndex})`,
                     width: `calc((100% - 32px) / ${record.totalCols} - 4px)`
                   }}
                 >
-                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-white/80 p-0.5 rounded-md">
-                      <Edit size={14} className="text-orange-500" />
+                  <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-white/80 p-0.5 rounded-md">
+                    <Edit size={14} className="text-orange-500" />
+                  </div>
+                  <div className="truncate flex-1">
+                    <div className={`font-bold ${textColors[themeIdx]} text-sm flex items-center gap-1.5 truncate`}>
+                      <Truck size={14} className="shrink-0" /> <span className="truncate">{record.farm_name || 'Farm Not Set'} {record.shift && `(S.${record.shift})`}</span>
                     </div>
-                    <div className="truncate flex-1">
-                      <div className={`font-bold ${textColors[themeIdx]} text-sm flex items-center gap-1.5 truncate`}>
-                        <Truck size={14} className="shrink-0" /> <span className="truncate">{record.farm_name || 'Farm Not Set'} {record.shift && `(S.${record.shift})`}</span>
-                      </div>
-                      <div className={`text-xs ${subTextColors[themeIdx]} mt-1 flex items-center gap-2 truncate`}>
-                        <span className="flex items-center gap-1 shrink-0"><Clock size={10} /> {record.receive_time?.substring(0,5) || '--:--'}</span>
-                        {record.sublot && <span className="flex items-center gap-1 shrink-0 truncate"><MapPin size={10} /> {record.sublot}</span>}
-                      </div>
+                    <div className={`text-xs ${subTextColors[themeIdx]} mt-1 flex items-center gap-2 truncate`}>
+                      <span className="flex items-center gap-1 shrink-0"><Clock size={10} /> {record.receive_time?.substring(0, 5) || '--:--'}</span>
+                      {record.sublot && <span className="flex items-center gap-1 shrink-0 truncate"><MapPin size={10} /> {record.sublot}</span>}
                     </div>
-                    {record.totalCols <= 2 && (
-                      <div className="text-right shrink-0 ml-2">
-                        <div className={`font-bold ${textColors[themeIdx]} text-sm`}>{Number(record.chicken_count).toLocaleString()} 🐔</div>
-                        <div className={`text-[10px] ${subTextColors[themeIdx]}`}>{record.chicken_avg} kg/b</div>
-                      </div>
-                    )}
+                  </div>
+                  {record.totalCols <= 2 && (
+                    <div className="text-right shrink-0 ml-2">
+                      <div className={`font-bold ${textColors[themeIdx]} text-sm`}>{Number(record.chicken_count).toLocaleString()} 🐔</div>
+                      <div className={`text-[10px] ${subTextColors[themeIdx]}`}>{record.chicken_avg} kg/b</div>
+                    </div>
+                  )}
                 </div>
-               );
-             })}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -536,7 +536,7 @@ export default function ChickenReceiving() {
                   <option value="รวม">รวม</option>
                 </select>
               </div>
-              
+
               {activeTab === 'weekly' && (
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1">Health Status</label>
@@ -579,14 +579,14 @@ export default function ChickenReceiving() {
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" placeholder="Search farm or truck..." className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-orange-500" />
           </div>
-          <button 
+          <button
             onClick={() => setIsImportOpen(true)}
             className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-all flex items-center gap-2"
           >
             <Upload size={16} />
             Import
           </button>
-          <button 
+          <button
             onClick={openNewModal}
             className="px-4 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-lg text-sm font-medium hover:from-orange-600 hover:to-red-600 transition-all shadow-md flex items-center gap-2"
           >
@@ -604,11 +604,10 @@ export default function ChickenReceiving() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
-                isActive 
-                  ? 'bg-orange-50 text-orange-600 shadow-sm' 
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${isActive
+                  ? 'bg-orange-50 text-orange-600 shadow-sm'
                   : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
-              }`}
+                }`}
             >
               <Icon size={16} className={isActive ? 'text-orange-600' : 'text-gray-400'} />
               {tab.label}
@@ -621,7 +620,7 @@ export default function ChickenReceiving() {
         {activeTab === 'monthly' && renderMonthlyCalendar()}
         {activeTab === 'weekly' && renderWeeklyCalendar()}
         {activeTab === 'daily' && renderDailyTimeline()}
-        
+
         {['actual', 'reports'].includes(activeTab) && (
           <div className="h-full flex flex-col items-center justify-center text-center py-32">
             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
@@ -646,7 +645,7 @@ export default function ChickenReceiving() {
                 <X size={18} />
               </button>
             </div>
-            
+
             <div className="px-6 py-5 overflow-y-auto flex-1">
               {renderModalForm()}
             </div>

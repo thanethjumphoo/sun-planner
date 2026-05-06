@@ -3,7 +3,7 @@ import { ChickenReceivingService } from './chicken-receiving.service';
 
 @Controller('api/chicken-receiving')
 export class ChickenReceivingController {
-  constructor(private readonly chickenReceivingService: ChickenReceivingService) {}
+  constructor(private readonly chickenReceivingService: ChickenReceivingService) { }
 
   @Post(':type/batch')
   createBatch(@Param('type') type: string, @Body() data: { rows: any[] }) {
