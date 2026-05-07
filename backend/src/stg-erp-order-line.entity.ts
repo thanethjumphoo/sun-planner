@@ -44,4 +44,8 @@ export class StgErpOrderLine {
   // Added for MPS Scheduling
   @Column({ name: 'planned_production_date', type: 'datetime', nullable: true })
   plannedProductionDate: Date;
+
+  // Priority: lower number = higher priority (1 = highest)
+  @Column({ name: 'priority', type: 'int', nullable: true, default: null })
+  priority: number;
 }

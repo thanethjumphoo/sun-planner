@@ -26,6 +26,9 @@ const MPSPlan: React.FC = () => {
   const [selectedManpower, setSelectedManpower] = useState<any>(null);
   const [showSupplyModal, setShowSupplyModal] = useState(false);
   const [highlightedSoNumber, setHighlightedSoNumber] = useState<string | null>(null);
+  const [priorityMap, setPriorityMap] = useState<Record<number, number | null>>({});
+  const [priorityDirty, setPriorityDirty] = useState(false);
+  const [savingPriority, setSavingPriority] = useState(false);
 
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const getDefaultStartDate = () => {
@@ -87,11 +90,59 @@ const MPSPlan: React.FC = () => {
     try {
       const res = await fetch(`${API}/api/erp/demand-orders`);
       if (res.ok) {
-        setDemandOrders(await res.json());
+        const data = await res.json();
+        setDemandOrders(data);
+        // Build initial priority map from fetched data
+        const pMap: Record<number, number | null> = {};
+        data.forEach((header: any) => {
+          header.lines?.forEach((line: any) => {
+            if (line.priority !== null && line.priority !== undefined) {
+              pMap[line.erpOrderLineId] = line.priority;
+            }
+          });
+        });
+        setPriorityMap(pMap);
+        setPriorityDirty(false);
       }
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handlePriorityChange = (lineId: number, value: string) => {
+    const num = value === '' ? null : parseInt(value);
+    setPriorityMap(prev => ({ ...prev, [lineId]: num }));
+    setPriorityDirty(true);
+  };
+
+  const savePriorities = async () => {
+    setSavingPriority(true);
+    try {
+      const priorities = Object.entries(priorityMap).map(([lineId, priority]) => ({
+        lineId: parseInt(lineId),
+        priority
+      }));
+      const res = await fetch(`${API}/api/mps/update-priorities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priorities })
+      });
+      if (res.ok) {
+        setPriorityDirty(false);
+        // Automatically trigger re-generation to apply priorities
+        await executeGeneratePlan();
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Failed to save priorities');
+    } finally {
+      setSavingPriority(false);
+    }
+  };
+
+  const cancelPriorities = async () => {
+    // Re-fetch to reset
+    await fetchDemandOrders();
   };
 
   const fetchPlans = async () => {
@@ -229,11 +280,6 @@ const MPSPlan: React.FC = () => {
 
   const handleDrop = async (e: React.DragEvent, date: string) => {
     e.preventDefault();
-    const todayDateStr = getTodayStr();
-    if (date < todayDateStr) {
-      alert("Cannot plan orders for past dates.");
-      return;
-    }
     // Lock guard: prevent drag-drop on approved plans
     if (currentPlan?.status === 'APPROVED') {
       alert('This plan is approved and locked. Cannot modify.');
@@ -318,7 +364,7 @@ const MPSPlan: React.FC = () => {
       const res = await fetch(`${API}/api/mps/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           targetMonth: monthStr,
           orderStartDate: generateRange.startDate,
           orderEndDate: generateRange.endDate
@@ -432,22 +478,50 @@ const MPSPlan: React.FC = () => {
   const avgManpower = activeDaysCount > 0 ? Math.round(totalManpowerSum / activeDaysCount) : 0;
 
   // --- Derived State for Demand Plan Tab ---
-  const currentMonthDemand = demandOrders.reduce((acc: any[], header: any) => {
+  const processedDemand = demandOrders.reduce((acc: any[], header: any) => {
     if (!header.lines) return acc;
 
     const filteredLines = header.lines.filter((line: any) => {
       if (!line.erpOrderShipDate) return false;
-      if (!specs[line.erpOrderItemCode]) return false; // Filter only items in Product Spec
+      if (!specs[line.erpOrderItemCode]) return false;
       const shipDate = new Date(line.erpOrderShipDate);
       return shipDate.getFullYear() === currentMonth.getFullYear() &&
         shipDate.getMonth() === currentMonth.getMonth();
     });
 
     if (filteredLines.length > 0) {
-      acc.push({ ...header, lines: filteredLines });
+      const plannedOrders = currentPlan?.orders || [];
+      const linesWithStatus = filteredLines.map((line: any) => {
+        const planned = plannedOrders.filter((o: any) => o.erpOrderLineId === line.erpOrderLineId);
+        const totalPlanned = planned.reduce((s: number, o: any) => s + Number(o.quantityKg || 0), 0);
+        const qty = Number(line.erpOrderItemQty || 0);
+        const isFull = totalPlanned >= qty * 0.99;
+        const isNotPlanned = totalPlanned === 0;
+        return { ...line, totalPlanned, isFull, isNotPlanned, planned };
+      });
+
+      const plannedLines = linesWithStatus.filter((l: any) => !l.isNotPlanned);
+      const unfulfilledLines = linesWithStatus.filter((l: any) => l.isNotPlanned);
+
+      acc.push({ ...header, plannedLines, unfulfilledLines });
     }
     return acc;
   }, []);
+
+  const section1Planned = processedDemand
+    .filter((h: any) => h.plannedLines.length > 0)
+    .sort((a: any, b: any) => {
+      const aCompleteCount = a.plannedLines.filter((l: any) => l.isFull).length;
+      const bCompleteCount = b.plannedLines.filter((l: any) => l.isFull).length;
+      const aTotal = a.plannedLines.length;
+      const bTotal = b.plannedLines.length;
+      
+      // Sort by completion ratio
+      return (bCompleteCount / bTotal) - (aCompleteCount / aTotal);
+    });
+
+  const section2Unfulfilled = processedDemand
+    .filter((h: any) => h.unfulfilledLines.length > 0);
 
   return (
     <div className="p-6 max-w-full mx-auto space-y-6 bg-gray-50 min-h-screen">
@@ -523,8 +597,8 @@ const MPSPlan: React.FC = () => {
         >
           <ShoppingCart size={16} />
           Demand Plan
-          {currentMonthDemand.length > 0 && (
-            <span className="bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full text-xs font-bold">{currentMonthDemand.reduce((sum: number, h: any) => sum + h.lines.length, 0)}</span>
+          {processedDemand.length > 0 && (
+            <span className="bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full text-xs font-bold">{processedDemand.reduce((sum: number, h: any) => sum + (h.plannedLines.length + h.unfulfilledLines.length), 0)}</span>
           )}
         </button>
       </div>
@@ -594,20 +668,19 @@ const MPSPlan: React.FC = () => {
                     const metrics = calculateDailyMetrics(date);
                     const dayNum = i + 1;
                     const todayDateStr = getTodayStr();
-                    const isPast = date < todayDateStr;
                     const isToday = date === todayDateStr;
 
                     return (
                       <div
                         key={date}
-                        onDragOver={isPast ? undefined : handleDragOver}
-                        onDrop={isPast ? undefined : (e) => handleDrop(e, date)}
+                        onDragOver={handleDragOver}
+                        onDrop={(e) => handleDrop(e, date)}
                         className={`min-h-[180px] border-r border-b border-gray-100 p-2 flex flex-col gap-2 transition-colors
-                      ${isPast ? 'bg-gray-100/60 opacity-80' : isToday ? 'bg-orange-50/30' : 'bg-white hover:bg-gray-50'}
-                      ${metrics.supplyBreakdown && !isPast ? 'cursor-pointer hover:shadow-md' : ''}
+                      ${isToday ? 'bg-orange-50/30' : 'bg-white hover:bg-gray-50'}
+                      ${metrics.supplyBreakdown ? 'cursor-pointer hover:shadow-md' : ''}
                     `}
                         onClick={() => {
-                          if (metrics.supplyBreakdown && !isPast) {
+                          if (metrics.supplyBreakdown) {
                             setSelectedSupply(metrics.supplyBreakdown);
                             setSelectedManpower(metrics.manpowerBreakdown);
                             setShowSupplyModal(true);
@@ -616,8 +689,7 @@ const MPSPlan: React.FC = () => {
                       >
                         {/* Day Header */}
                         <div className="flex justify-between items-start mb-1">
-                          <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-bold
-                        ${isToday ? 'bg-orange-500 text-white shadow-md' : isPast ? 'text-gray-400' : 'text-gray-700'}`}>
+                          <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-bold ${isToday ? 'bg-orange-500 text-white shadow-md' : 'text-gray-700'}`}>
                             {dayNum}
                           </span>
                           {metrics.intake > 0 && (
@@ -817,80 +889,286 @@ const MPSPlan: React.FC = () => {
           )}
         </div>
       ) : (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 min-h-[500px]">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              <ShoppingCart className="text-orange-500" />
-              Demand Plan (Sales Orders)
-            </h2>
-            <div className="text-sm text-gray-500">
-              Showing demands for: <span className="font-bold text-gray-800">{currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}</span>
-            </div>
-          </div>
-
-          {currentMonthDemand.length === 0 ? (
-            <div className="text-center py-20 text-gray-400">
-              <ShoppingCart size={48} className="mx-auto mb-4 opacity-30" />
-              <p>No demand orders found for this month.</p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {currentMonthDemand.map((header: any) => (
-                <div key={header.erpOrderHeaderId} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-                  {/* SO Header */}
-                  <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex flex-wrap gap-4 items-center justify-between">
-                    <div className="flex gap-4">
-                      <div>
-                        <span className="text-xs text-gray-500 uppercase font-bold block">SO Number</span>
-                        <span className="font-bold text-gray-800">{header.erpOrderNumber || header.erpOrderHeaderId}</span>
-                      </div>
-                      <div>
-                        <span className="text-xs text-gray-500 uppercase font-bold block">Customer</span>
-                        <span className="font-medium text-gray-700">{header.customerName || '-'}</span>
-                      </div>
-                    </div>
-                    <div className="bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs font-bold">
-                      {header.lines.length} Lines
-                    </div>
-                  </div>
-
-                  {/* SO Lines */}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-white">
-                        <tr>
-                          <th className="px-4 py-2 text-left font-semibold text-gray-600 border-b w-24">Line ID</th>
-                          <th className="px-4 py-2 text-left font-semibold text-gray-600 border-b">Item Code</th>
-                          <th className="px-4 py-2 text-left font-semibold text-gray-600 border-b">Description</th>
-                          <th className="px-4 py-2 text-right font-semibold text-gray-600 border-b w-32">Qty (kg)</th>
-                          <th className="px-4 py-2 text-center font-semibold text-gray-600 border-b w-32">Ship Date</th>
-                          <th className="px-4 py-2 text-center font-semibold text-gray-600 border-b w-24">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {header.lines.map((line: any) => (
-                          <tr key={line.erpOrderLineId} className="hover:bg-gray-50 transition-colors border-b last:border-0 border-gray-100">
-                            <td className="px-4 py-2 font-mono text-xs text-gray-500">{line.erpOrderLineId}</td>
-                            <td className="px-4 py-2 font-medium text-gray-800">{line.erpOrderItemCode}</td>
-                            <td className="px-4 py-2 text-gray-600 truncate max-w-[200px]" title={line.erpItemDesc}>{line.erpItemDesc || '-'}</td>
-                            <td className="px-4 py-2 text-right font-bold text-blue-700">{Number(line.erpOrderItemQty).toLocaleString()}</td>
-                            <td className="px-4 py-2 text-center text-gray-600">
-                              {new Date(line.erpOrderShipDate).toLocaleDateString()}
-                            </td>
-                            <td className="px-4 py-2 text-center">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${line.erpOrderStatus === 'OPEN' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                                {line.erpOrderStatus}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+        <div className="space-y-6">
+          {/* Priority Changed Banner */}
+          {priorityDirty && (
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 shadow-sm flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 rounded-full">
+                  <Activity className="w-5 h-5 text-amber-600" />
                 </div>
-              ))}
+                <div>
+                  <h4 className="font-bold text-amber-900">Priority Modified</h4>
+                  <p className="text-sm text-amber-700">Order priorities have been changed. Save and Re-Generate the plan to apply.</p>
+                </div>
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
+                <button
+                  onClick={cancelPriorities}
+                  className="px-4 py-2 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 transition-all shadow-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={savePriorities}
+                  disabled={savingPriority}
+                  className="px-4 py-2 text-sm font-bold text-white bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl hover:from-amber-600 hover:to-orange-600 transition-all shadow-md disabled:opacity-50"
+                >
+                  {savingPriority ? 'Saving...' : 'Save & Re-Generate'}
+                </button>
+              </div>
             </div>
           )}
+
+          {/* Section 1: Planned Demand Orders */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <ShoppingCart className="text-orange-500" />
+                Planned Demand (Sales Orders)
+              </h2>
+              <div className="flex items-center gap-4">
+                <div className="text-sm text-gray-500">
+                  Showing planned demands for: <span className="font-bold text-gray-800">{currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}</span>
+                </div>
+                <div className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold border border-emerald-200">
+                  {section1Planned.reduce((sum: number, h: any) => sum + h.plannedLines.length, 0)} Lines
+                </div>
+              </div>
+            </div>
+
+            {section1Planned.length === 0 ? (
+              <div className="text-center py-20 text-gray-400">
+                <ShoppingCart size={48} className="mx-auto mb-4 opacity-30" />
+                <p>No planned demand orders found for this month.</p>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {section1Planned.map((header: any) => (
+                  <div key={header.erpOrderHeaderId} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                    {/* SO Header */}
+                    <div className="bg-gradient-to-r from-gray-50 to-slate-50 px-4 py-3 border-b border-gray-200 flex flex-wrap gap-4 items-center justify-between">
+                      <div className="flex gap-6 items-center">
+                        <div className="w-44">
+                          <span className="text-[10px] text-gray-400 uppercase font-bold block tracking-wider">SO Number</span>
+                          <span className="font-black text-gray-900 text-lg">{header.erpOrderNumber || header.erpOrderHeaderId}</span>
+                        </div>
+                        <div className="h-8 w-px bg-gray-200" />
+                        <div className="w-80">
+                          <span className="text-[10px] text-gray-400 uppercase font-bold block tracking-wider">Customer</span>
+                          <span className="font-semibold text-gray-700 truncate block" title={header.erpCustomerName}>{header.erpCustomerName || '-'}</span>
+                        </div>
+                        {header.erpCustomerGrade && (
+                          <>
+                            <div className="h-8 w-px bg-gray-200" />
+                            <div>
+                              <span className="text-[10px] text-gray-400 uppercase font-bold block tracking-wider">Grade</span>
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${header.erpCustomerGrade === 'A' ? 'bg-emerald-100 text-emerald-700' : header.erpCustomerGrade === 'B' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                                {header.erpCustomerGrade}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <div className="bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs font-bold">
+                        {header.plannedLines.length} Lines
+                      </div>
+                    </div>
+
+                    {/* SO Lines */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-white">
+                          <tr>
+                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-16">Priority</th>
+                            <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Item Code</th>
+                            <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Description</th>
+                            <th className="px-3 py-2 text-right font-semibold text-gray-600 border-b w-28">Qty (kg)</th>
+                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Ship Date</th>
+                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Planned Date</th>
+                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Production</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {header.plannedLines.map((line: any) => {
+                            const totalPlanned = line.totalPlanned;
+                            const isFull = line.isFull;
+                            const isPartial = totalPlanned > 0 && !isFull;
+                            const plannedDate = line.planned.length > 0 ? line.planned[0].plannedProductionDate : null;
+                            const currentPri = priorityMap[line.erpOrderLineId] ?? null;
+
+                            return (
+                              <tr key={line.erpOrderLineId} className="hover:bg-gray-50/80 transition-colors border-b last:border-0 border-gray-100">
+                                <td className="px-3 py-2 text-center">
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={99}
+                                    value={currentPri ?? ''}
+                                    onChange={(e) => handlePriorityChange(line.erpOrderLineId, e.target.value)}
+                                    placeholder="-"
+                                    className="w-12 text-center text-sm font-bold border border-gray-200 rounded-lg py-1 focus:ring-2 focus:ring-orange-300 focus:border-orange-400 outline-none transition-all"
+                                  />
+                                </td>
+                                <td className="px-3 py-2 font-medium text-gray-800">{line.erpOrderItemCode}</td>
+                                <td className="px-3 py-2 text-gray-600 truncate max-w-[200px]" title={line.erpItemDesc}>{line.erpItemDesc || '-'}</td>
+                                <td className="px-3 py-2 text-right font-bold text-blue-700">{Number(line.erpOrderItemQty).toLocaleString()}</td>
+                                <td className="px-3 py-2 text-center text-gray-600 text-xs">
+                                  {new Date(line.erpOrderShipDate).toLocaleDateString()}
+                                </td>
+                                <td className="px-3 py-2 text-center text-xs">
+                                  {plannedDate ? (
+                                    <span className="text-emerald-700 font-bold">{new Date(plannedDate).toLocaleDateString()}</span>
+                                  ) : (
+                                    <span className="text-gray-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {isFull ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-bold">
+                                      <CheckCircle2 size={10} /> Complete
+                                    </span>
+                                  ) : isPartial ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-bold">
+                                      ⚠ Partial ({Math.round(totalPlanned).toLocaleString()}kg)
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-300 text-[10px]">-</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Section 2: Unfulfilled Demand Orders */}
+          <div className="bg-white rounded-2xl shadow-sm border border-red-200 p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-red-800 flex items-center gap-2">
+                <Activity className="text-red-500" />
+                Unfulfilled Orders (Sales Orders)
+              </h2>
+              <div className="flex items-center gap-4">
+                <div className="text-sm text-red-500/70">
+                  Orders requiring attention for: <span className="font-bold text-red-700">{currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}</span>
+                </div>
+                <div className="bg-red-50 text-red-700 px-3 py-1 rounded-full text-xs font-bold border border-red-200">
+                  {section2Unfulfilled.reduce((sum: number, h: any) => sum + h.unfulfilledLines.length, 0)} Lines
+                </div>
+              </div>
+            </div>
+
+            {section2Unfulfilled.length === 0 ? (
+              <div className="text-center py-20 text-gray-400">
+                <CheckCircle2 size={48} className="mx-auto mb-4 opacity-30 text-emerald-500" />
+                <p>All orders are scheduled! No unfulfilled orders found.</p>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {section2Unfulfilled.map((header: any) => {
+                  const exceptions = currentPlan?.exceptions || [];
+                  
+                  return (
+                    <div key={header.erpOrderHeaderId} className="border border-red-100 rounded-xl overflow-hidden shadow-sm">
+                      {/* SO Header */}
+                      <div className="bg-gradient-to-r from-red-50/50 to-orange-50/50 px-4 py-3 border-b border-red-100 flex flex-wrap gap-4 items-center justify-between">
+                        <div className="flex gap-6 items-center">
+                          <div className="w-44">
+                            <span className="text-[10px] text-red-400 uppercase font-bold block tracking-wider">SO Number</span>
+                            <span className="font-black text-gray-900 text-lg">{header.erpOrderNumber || header.erpOrderHeaderId}</span>
+                          </div>
+                          <div className="h-8 w-px bg-red-100" />
+                          <div className="w-80">
+                            <span className="text-[10px] text-red-400 uppercase font-bold block tracking-wider">Customer</span>
+                            <span className="font-semibold text-gray-700 truncate block" title={header.erpCustomerName}>{header.erpCustomerName || '-'}</span>
+                          </div>
+                          {header.erpCustomerGrade && (
+                            <>
+                              <div className="h-8 w-px bg-red-100" />
+                              <div>
+                                <span className="text-[10px] text-red-400 uppercase font-bold block tracking-wider">Grade</span>
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${header.erpCustomerGrade === 'A' ? 'bg-emerald-100 text-emerald-700' : header.erpCustomerGrade === 'B' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                                  {header.erpCustomerGrade}
+                                </span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                        <div className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-bold">
+                          {header.unfulfilledLines.length} Lines
+                        </div>
+                      </div>
+
+                      {/* SO Lines */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-white">
+                            <tr>
+                              <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-16">Priority</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Item Code</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Description</th>
+                              <th className="px-3 py-2 text-right font-semibold text-gray-600 border-b w-28">Qty (kg)</th>
+                              <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Ship Date</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Reason / Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {header.unfulfilledLines.map((line: any) => {
+                              const exception = exceptions.find((e: any) => e.erpOrderLineId === line.erpOrderLineId);
+                              const currentPri = priorityMap[line.erpOrderLineId] ?? null;
+
+                              return (
+                                <tr key={line.erpOrderLineId} className="hover:bg-red-50/30 transition-colors border-b last:border-0 border-red-50">
+                                  <td className="px-3 py-2 text-center">
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={99}
+                                      value={currentPri ?? ''}
+                                      onChange={(e) => handlePriorityChange(line.erpOrderLineId, e.target.value)}
+                                      placeholder="-"
+                                      className="w-12 text-center text-sm font-bold border border-gray-200 rounded-lg py-1 focus:ring-2 focus:ring-red-300 focus:border-red-400 outline-none transition-all"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2 font-medium text-gray-800">{line.erpOrderItemCode}</td>
+                                  <td className="px-3 py-2 text-gray-600 truncate max-w-[200px]" title={line.erpItemDesc}>{line.erpItemDesc || '-'}</td>
+                                  <td className="px-3 py-2 text-right font-bold text-red-700">{Number(line.erpOrderItemQty).toLocaleString()}</td>
+                                  <td className="px-3 py-2 text-center text-gray-600 text-xs">
+                                    {new Date(line.erpOrderShipDate).toLocaleDateString()}
+                                  </td>
+                                  <td className="px-3 py-2 text-left">
+                                    {exception ? (
+                                      <div className="flex flex-col">
+                                        <span className="text-red-600 font-bold text-[10px]">✕ Shortage: {Math.round(exception.shortageKg).toLocaleString()}kg</span>
+                                        <span className="text-gray-400 text-[9px] truncate max-w-[200px]">{exception.reason}</span>
+                                      </div>
+                                    ) : (
+                                      <span className="text-amber-600 font-medium text-[10px]">⚠ Not processed yet</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="mt-4 bg-red-50 border border-red-100 rounded-xl p-3 text-xs text-red-600 font-medium flex items-center gap-2">
+                  <Info size={14} />
+                  <span>💡 <strong>Tip:</strong> Set higher Priority (lower numbers) on critical orders above and click <strong>Save & Re-Generate</strong> to prioritize their fulfillment.</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

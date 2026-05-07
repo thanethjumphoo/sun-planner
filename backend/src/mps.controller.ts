@@ -7,6 +7,7 @@ import { ProductSpec } from './product-spec.entity';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 import { WeightDistribution } from './weight-distribution.entity';
+import { FilletSizeCalc } from './fillet-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
 
@@ -31,8 +32,10 @@ export class MpsController {
     private weightDistRepo: Repository<WeightDistribution>,
     @InjectRepository(MpsExceptionReport)
     private exceptionRepo: Repository<MpsExceptionReport>,
+    @InjectRepository(FilletSizeCalc)
+    private filletSizeRepo: Repository<FilletSizeCalc>,
     private chickenReceivingService: ChickenReceivingService,
-  ) {}
+  ) { }
 
   // 1. Manually update planned production date in MpsPlanOrder (Drag & Drop)
   @Post('update-date')
@@ -52,13 +55,13 @@ export class MpsController {
         if (planOrder.mpsPlan && planOrder.mpsPlan.status === 'APPROVED') {
           return { success: false, message: 'Cannot modify an approved plan' };
         }
-        
+
         if (body.splitQty && body.splitQty > 0 && body.splitQty < planOrder.quantityKg) {
           // Splitting the order
           const remainQty = planOrder.quantityKg - body.splitQty;
           planOrder.quantityKg = remainQty;
           await this.mpsOrderRepo.save(planOrder);
-          
+
           // Create new split order
           const splitOrder = this.mpsOrderRepo.create({
             mpsPlan: planOrder.mpsPlan,
@@ -83,25 +86,25 @@ export class MpsController {
       }
     } else if (body.planId && body.lineId) {
       // Find the specific order in the plan
-      const planOrder = await this.mpsOrderRepo.findOne({ 
-        where: { mpsPlan: { id: body.planId }, erpOrderLineId: body.lineId } 
+      const planOrder = await this.mpsOrderRepo.findOne({
+        where: { mpsPlan: { id: body.planId }, erpOrderLineId: body.lineId }
       });
       if (planOrder) {
         planOrder.plannedProductionDate = new Date(body.date);
         planOrder.isManualOverride = true;
         await this.mpsOrderRepo.save(planOrder);
-        
+
         // Optionally update the source order line as well
         const line = await this.orderLineRepo.findOne({ where: { erpOrderLineId: body.lineId } });
         if (line) {
           line.plannedProductionDate = new Date(body.date);
           await this.orderLineRepo.save(line);
         }
-        
+
         return { success: true };
       }
     }
-    
+
     // Fallback to original logic if planId is not provided
     const line = await this.orderLineRepo.findOne({ where: { erpOrderLineId: body.lineId } });
     if (line) {
@@ -131,9 +134,9 @@ export class MpsController {
     for (const line of unallocated) {
       const type = specMap.get(line.erpOrderItemCode) || 'chilled';
       const shipDate = new Date(line.erpOrderShipDate);
-      
+
       const plannedDate = new Date(shipDate);
-      
+
       // Logic: Chill = -1 day, Freeze = -5 days
       if (type === 'chilled') {
         plannedDate.setDate(plannedDate.getDate() - 1);
@@ -154,7 +157,7 @@ export class MpsController {
   @Post('generate')
   async generatePlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string }) { // targetMonth format: '2026-05'
     const targetMonth = body.targetMonth;
-    
+
     // Step 1: Check for existing plans for this month
     // Block if an APPROVED plan already exists
     const existingApproved = await this.mpsPlanRepo.findOne({ where: { targetMonth, status: 'APPROVED' } });
@@ -200,12 +203,16 @@ export class MpsController {
     const orders = await this.orderLineRepo.find({
       where: { erpOrderShipDate: Between(startOfRange, endOfRange) }
     });
-    
-    // Fetch order headers to get the actual SO numbers
+
+    // Fetch order headers to get the actual SO numbers and Customer Grade
     const orderHeaders = await this.orderHeaderRepo.find();
     const headerMap = new Map();
-    orderHeaders.forEach(h => headerMap.set(h.erpOrderHeaderId, h.erpOrderNumber));
-    
+    const gradeMap = new Map();
+    orderHeaders.forEach(h => {
+      headerMap.set(h.erpOrderHeaderId, h.erpOrderNumber);
+      gradeMap.set(h.erpOrderHeaderId, h.erpCustomerGrade);
+    });
+
     const specs = await this.specRepo.find();
     const specMap = new Map();
     specs.forEach(s => specMap.set(s.erpItemCode, s));
@@ -225,9 +232,9 @@ export class MpsController {
       return null;
     };
     const subtractDays = (date: Date, days: number) => {
-        const d = new Date(date);
-        d.setDate(d.getDate() - days);
-        return d;
+      const d = new Date(date);
+      d.setDate(d.getDate() - days);
+      return d;
     };
 
     // Step 3: Fetch Supply (Chicken Receiving Month)
@@ -238,14 +245,15 @@ export class MpsController {
       const d = parseLocalDate(intake.receive_date);
       return d && d.startsWith(targetMonth);
     });
-    
+
     const supplyMap = new Map<string, number>();
     allIntakes.forEach((intake: any) => {
       const d = parseLocalDate(intake.receive_date);
       if (d) {
         const intakeKg = Number(intake.chicken_weight || 0);
         // Formula matching the previous system mapping logic
-        const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * (1 - 0.093);
+        // Formula: Slaughtered Weight * 4% (Fillet Yield) * 90%
+        const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * 0.9;
         supplyMap.set(d, (supplyMap.get(d) || 0) + rmFlAvailKg);
       }
     });
@@ -258,22 +266,59 @@ export class MpsController {
       if (!spec) continue;
 
       const orderObj = {
-          ...order,
-          productType: spec.productType,
-          qty: Number(order.erpOrderItemQty || 0),
-          shipDate: new Date(order.erpOrderShipDate)
+        ...order,
+        productType: spec.productType,
+        qty: Number(order.erpOrderItemQty || 0),
+        shipDate: new Date(order.erpOrderShipDate)
       };
 
       if (orderObj.productType === 'chilled') {
-          chillOrders.push(orderObj);
+        chillOrders.push(orderObj);
       } else {
-          freezeOrders.push(orderObj);
+        freezeOrders.push(orderObj);
       }
     }
 
-    // Sort by ship date ascending
-    chillOrders.sort((a, b) => a.shipDate.getTime() - b.shipDate.getTime());
-    freezeOrders.sort((a, b) => a.shipDate.getTime() - b.shipDate.getTime());
+    // Define Grade Weights: lower number = higher priority
+    const gradeWeight: Record<string, number> = {
+      'A+': 1,
+      'A': 2,
+      'B': 3,
+      'C': 4,
+      'D': 5,
+      'DEFAULT': 6,
+      '-': 7
+    };
+
+    const getGradeWeight = (line: any) => {
+      const grade = gradeMap.get(line.erpOrderHeaderId) || '';
+      return gradeWeight[grade] || 8; // Default weight for unknown/empty
+    };
+
+    // Sort by: 1. Ship Date, 2. Grade, 3. SO Number, 4. Manual Priority
+    const prioritySort = (a: any, b: any) => {
+      // 1. Ship Date
+      const dateDiff = a.shipDate.getTime() - b.shipDate.getTime();
+      if (dateDiff !== 0) return dateDiff;
+
+      // 2. Customer Grade
+      const aGrade = getGradeWeight(a);
+      const bGrade = getGradeWeight(b);
+      if (aGrade !== bGrade) return aGrade - bGrade;
+
+      // 3. SO Number
+      const soA = headerMap.get(a.erpOrderHeaderId) || a.erpOrderHeaderId?.toString() || '';
+      const soB = headerMap.get(b.erpOrderHeaderId) || b.erpOrderHeaderId?.toString() || '';
+      const soDiff = soA.localeCompare(soB);
+      if (soDiff !== 0) return soDiff;
+
+      // 4. Manual Priority (as tie-breaker for lines within same SO)
+      const aPri = a.priority ?? 9999;
+      const bPri = b.priority ?? 9999;
+      return aPri - bPri;
+    };
+    chillOrders.sort(prioritySort);
+    freezeOrders.sort(prioritySort);
 
     const mpsOrdersToSave: MpsPlanOrder[] = [];
     const exceptionsToSave: any[] = [];
@@ -284,57 +329,62 @@ export class MpsController {
 
     // Step 4: Map CHILL Orders First (Flexible Lead Time: Ship Date -1 to -3 Days)
     for (const order of chillOrders) {
-       totalDemandKg += order.qty;
-       let remainingQty = order.qty;
-       
-       // Try to find supply starting from Ship Date - 1 backwards to Ship Date - 3
-       for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
-           if (d < today) continue; // Skip past days
-           if (remainingQty <= 0) break;
-           
-           const dateStr = formatDate(d);
-           const supply = supplyMap.get(dateStr) || 0;
-           
-           if (supply > 0) {
-               const allocQty = Math.round(Math.min(supply, remainingQty));
-               if (allocQty > 0) {
-                   mpsOrdersToSave.push(this.mpsOrderRepo.create({
-                       mpsPlan: plan,
-                       erpOrderLineId: order.erpOrderLineId,
-                       soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-                       itemCode: order.erpOrderItemCode,
-                       itemDesc: order.erpOrderItemCode,
-                       productType: order.productType,
-                       quantityKg: allocQty,
-                       shipDate: order.shipDate,
-                       plannedProductionDate: d,
-                       isManualOverride: false
-                   }));
-                   supplyMap.set(dateStr, supply - allocQty);
-                   remainingQty -= allocQty;
-               }
-           }
-       }
-       
-       if (remainingQty > 0) {
-           // Discard unmet demand from calendar, log as exception
-           exceptionsToSave.push(this.exceptionRepo.create({
-               mpsPlan: plan,
-               erpOrderLineId: order.erpOrderLineId,
-               soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
-               itemCode: order.erpOrderItemCode,
-               shipDate: order.shipDate,
-               requiredKg: order.qty,
-               shortageKg: remainingQty,
-               reason: `No supply available for Chill order on or before ${formatDate(order.shipDate)}`
-           }));
-       }
+      totalDemandKg += order.qty;
+      let remainingQty = order.qty;
+
+      // Try to find supply starting from Ship Date - 1 backwards to Ship Date - 3
+      for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
+        if (remainingQty <= 0) break;
+
+        const dateStr = formatDate(d);
+        const supply = supplyMap.get(dateStr) || 0;
+
+        if (supply > 0) {
+          const allocQty = Math.round(Math.min(supply, remainingQty));
+          if (allocQty > 0) {
+            mpsOrdersToSave.push(this.mpsOrderRepo.create({
+              mpsPlan: plan,
+              erpOrderLineId: order.erpOrderLineId,
+              soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+              itemCode: order.erpOrderItemCode,
+              itemDesc: order.erpOrderItemCode,
+              productType: order.productType,
+              quantityKg: allocQty,
+              shipDate: order.shipDate,
+              plannedProductionDate: d,
+              isManualOverride: false
+            }));
+            supplyMap.set(dateStr, supply - allocQty);
+            remainingQty -= allocQty;
+          }
+        }
+      }
+
+      if (remainingQty > 0) {
+        // Discard unmet demand from calendar, log as exception
+        exceptionsToSave.push(this.exceptionRepo.create({
+          mpsPlan: plan,
+          erpOrderLineId: order.erpOrderLineId,
+          soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
+          itemCode: order.erpOrderItemCode,
+          shipDate: order.shipDate,
+          requiredKg: order.qty,
+          shortageKg: remainingQty,
+          reason: `No supply available for Chill order on or before ${formatDate(order.shipDate)}`
+        }));
+      }
     }
 
     // Step 5: Map FREEZE Orders — Waterfall FIFO with Size Matching
     // ─────────────────────────────────────────────────────────────
-    // 5a. Build per-date SIZE supply map from weight distribution matrix
+    // 5a. Build per-date SIZE supply map using Fillet Size Calc (Manual Groups)
     const weightMatrix = await this.weightDistRepo.find();
+    const filletCalcs = await this.filletSizeRepo.find();
+    const filletMap = new Map<string, string>(); // colLabel -> groupName
+    filletCalcs.forEach(c => {
+      if (c.groupName) filletMap.set(c.colLabel, c.groupName);
+    });
+
     const sizeSupplyMap = new Map<string, { total: number, bins: Record<string, number> }>();
 
     allIntakes.forEach((intake: any) => {
@@ -345,7 +395,7 @@ export class MpsController {
       const intakeBirds = Number(intake.chicken_count || 0);
       if (intakeBirds <= 0 || intakeKg <= 0) return;
 
-      const avgWeight = intakeKg / intakeBirds;
+      const avgWeight = parseFloat((intakeKg / intakeBirds).toFixed(2)); // ปรับทศนิยม 2 ตำแหน่งเพื่อแก้บัค Range
       const slaughteredWeight = intakeKg * 0.9575 * 0.95;
 
       // Find matching weight distribution rows
@@ -358,25 +408,42 @@ export class MpsController {
         return Math.abs(Number(label) - avgWeight) < 0.05;
       });
 
-      // Calculate size bins for this date
-      const existing = sizeSupplyMap.get(d) || { total: 0, bins: { '40Down': 0, '40-45': 0, '45-50': 0, '50-55': 0, '55-60': 0, '60-65': 0, '65-70': 0, '70Up': 0 } };
-      
+      // Calculate size bins for this date using MANUAL GROUPS
+      const existing = sizeSupplyMap.get(d) || {
+        total: 0,
+        bins: { '40Down': 0, '40_45': 0, '45_50': 0, '50_55': 0, '55_60': 0, '60_65': 0, '65_70': 0, '70Up': 0 }
+      };
+
       matchingRows.forEach(row => {
         const pct = Number(row.distValue || 0);
         if (pct <= 0) return;
-        const carcassWt = parseFloat(row.colLabel.replace(/[^\d.]/g, ''));
-        if (isNaN(carcassWt)) return;
-        const pieceGrams = (0.04 * carcassWt * 1000) / 2;
-        const kg = slaughteredWeight * 0.04 * (pct / 100);
 
-        if (pieceGrams < 40) existing.bins['40Down'] += kg;
-        else if (pieceGrams < 45) existing.bins['40-45'] += kg;
-        else if (pieceGrams < 50) existing.bins['45-50'] += kg;
-        else if (pieceGrams < 55) existing.bins['50-55'] += kg;
-        else if (pieceGrams < 60) existing.bins['55-60'] += kg;
-        else if (pieceGrams < 65) existing.bins['60-65'] += kg;
-        else if (pieceGrams < 70) existing.bins['65-70'] += kg;
-        else existing.bins['70Up'] += kg;
+        // KG for this cell = Slaughtered * 4% * cell * 90%
+        const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.9);
+
+        // Get group from manual assignment map
+        const groupName = filletMap.get(row.colLabel);
+        if (groupName) {
+          // Map group name to bin key
+          const binKey = groupName.replace(/\s+/g, '').replace(/-/g, '_'); // "40 Down" -> "40Down", "40-45" -> "40_45"
+          // Special cases for entity fields
+          let key = binKey;
+          if (key === '40Down') key = '40Down';
+          else if (key === '70Up') key = '70Up';
+          else if (key.includes('_')) { /* already 40_45 style */ }
+          else { /* fallback or exact match */ }
+
+          if (existing.bins[key] !== undefined) {
+            existing.bins[key] += kg;
+          } else if (key === '40Down') existing.bins['40Down'] += kg;
+          else if (key === '40_45') existing.bins['40_45'] += kg;
+          else if (key === '45_50') existing.bins['45_50'] += kg;
+          else if (key === '50_55') existing.bins['50_55'] += kg;
+          else if (key === '55_60') existing.bins['55_60'] += kg;
+          else if (key === '60_65') existing.bins['60_65'] += kg;
+          else if (key === '65_70') existing.bins['65_70'] += kg;
+          else if (key === '70Up') existing.bins['70Up'] += kg;
+        }
 
         existing.total += kg;
       });
@@ -390,7 +457,7 @@ export class MpsController {
       const s = productSize.toLowerCase().trim();
       if (s === 'unsize' || s === '') return []; // unsize matches all — handled separately
       if (s.includes('40 down') || s === '40down') return ['40Down'];
-      if (s.includes('70 up') || s === '70up' || s.includes('60 up') || s === '60up') return ['60-65', '65-70', '70Up'];
+      if (s.includes('70 up') || s === '70up' || s.includes('60 up') || s === '60up') return ['60_65', '65_70', '70Up'];
       // Parse range like "50-55", "50-65", etc.
       const rangeMatch = s.match(/(\d+)\s*[-–]\s*(\d+)/);
       if (rangeMatch) {
@@ -398,12 +465,12 @@ export class MpsController {
         const hi = parseInt(rangeMatch[2]);
         const allBins = [
           { key: '40Down', lo: 0, hi: 40 },
-          { key: '40-45', lo: 40, hi: 45 },
-          { key: '45-50', lo: 45, hi: 50 },
-          { key: '50-55', lo: 50, hi: 55 },
-          { key: '55-60', lo: 55, hi: 60 },
-          { key: '60-65', lo: 60, hi: 65 },
-          { key: '65-70', lo: 65, hi: 70 },
+          { key: '40_45', lo: 40, hi: 45 },
+          { key: '45_50', lo: 45, hi: 50 },
+          { key: '50_55', lo: 50, hi: 55 },
+          { key: '55_60', lo: 55, hi: 60 },
+          { key: '60_65', lo: 60, hi: 65 },
+          { key: '65_70', lo: 65, hi: 70 },
           { key: '70Up', lo: 70, hi: 999 },
         ];
         return allBins.filter(b => b.hi > lo && b.lo < hi).map(b => b.key);
@@ -411,35 +478,40 @@ export class MpsController {
       return []; // Unrecognized → treat as unsize
     };
 
-    // 5c. Sort freeze orders: Ship Date ASC → SO Number ASC
+    // 5c. Sort freeze orders: Ship Date ASC → Grade ASC → SO Number ASC → Priority ASC
     freezeOrders.sort((a, b) => {
+      // 1. Ship Date
       const dateDiff = a.shipDate.getTime() - b.shipDate.getTime();
       if (dateDiff !== 0) return dateDiff;
+
+      // 2. Grade
+      const aGrade = getGradeWeight(a);
+      const bGrade = getGradeWeight(b);
+      if (aGrade !== bGrade) return aGrade - bGrade;
+
+      // 3. SO Number
       const soA = headerMap.get(a.erpOrderHeaderId) || a.erpOrderHeaderId?.toString() || '';
       const soB = headerMap.get(b.erpOrderHeaderId) || b.erpOrderHeaderId?.toString() || '';
-      return soA.localeCompare(soB);
+      const soDiff = soA.localeCompare(soB);
+      if (soDiff !== 0) return soDiff;
+
+      // 4. Manual Priority
+      const aPri = a.priority ?? 9999;
+      const bPri = b.priority ?? 9999;
+      return aPri - bPri;
     });
 
-    // 5d. Separate: Sized items first, then unsize items
-    const sizedFreezeOrders = freezeOrders.filter(o => {
-      const spec = specMap.get(o.erpOrderItemCode);
-      const sz = spec?.productSize?.toLowerCase()?.trim();
-      return sz && sz !== 'unsize' && sz !== '';
-    });
-    const unsizeFreezeOrders = freezeOrders.filter(o => {
-      const spec = specMap.get(o.erpOrderItemCode);
-      const sz = spec?.productSize?.toLowerCase()?.trim();
-      return !sz || sz === 'unsize' || sz === '';
-    });
+    // 5d. Prepare for allocation (Priority already handled in 5c sort)
+
 
     // 5e. Collect all available dates (today → end of month range) sorted ascending
     const addDays = (date: Date, days: number) => {
-        const d = new Date(date);
-        d.setDate(d.getDate() + days);
-        return d;
+      const d = new Date(date);
+      d.setDate(d.getDate() + days);
+      return d;
     };
     const allDateStrs: string[] = [];
-    for (let d = new Date(today); d <= endOfMonth; d = addDays(d, 1)) {
+    for (let d = new Date(startOfMonth); d <= endOfMonth; d = addDays(d, 1)) {
       allDateStrs.push(formatDate(d));
     }
 
@@ -448,22 +520,22 @@ export class MpsController {
       for (const order of orderList) {
         totalDemandKg += order.qty;
         let remainingQty = order.qty;
-        
+
         const spec = specMap.get(order.erpOrderItemCode);
         const productSize = spec?.productSize || '';
         const sizeBinKeys = getSizeBinKeys(productSize);
         const isUnsize = sizeBinKeys.length === 0;
-        
-        // Valid production window: today → shipDate - 5 (but not beyond shipDate - 30)
+
+        // Valid production window: earliest date first → shipDate - 5 (max 30 days window)
         const latestProdDate = subtractDays(order.shipDate, 5);
-        const earliestProdDate = subtractDays(order.shipDate, 30) < today ? today : subtractDays(order.shipDate, 30);
+        const earliestProdDate = subtractDays(order.shipDate, 30);
 
         // Waterfall forward: earliest date first
         for (const dateStr of allDateStrs) {
           if (remainingQty <= 0) break;
           const dateObj = new Date(dateStr + 'T00:00:00');
           if (dateObj < earliestProdDate || dateObj > latestProdDate) continue;
-          
+
           // Check total RM supply first (hard gate)
           const totalRmForDate = supplyMap.get(dateStr) || 0;
           if (totalRmForDate <= 0) continue;
@@ -478,9 +550,9 @@ export class MpsController {
             // Unsize or no size data available: use whatever RM is left
             availableQty = totalRmForDate;
           }
-          
+
           if (availableQty <= 0) continue;
-          
+
           const allocQty = Math.round(Math.min(availableQty, remainingQty, totalRmForDate));
           if (allocQty <= 0) continue;
 
@@ -530,20 +602,19 @@ export class MpsController {
       }
     };
 
-    // 5g. Run allocation: Sized items first → then Unsize items
-    allocateFreeze(sizedFreezeOrders, true);
-    allocateFreeze(unsizeFreezeOrders, false);
+    // 5g. Run allocation: Follow Priority Sort (Absolute)
+    allocateFreeze(freezeOrders, true);
 
     await this.mpsOrderRepo.save(mpsOrdersToSave, { chunk: 500 });
     if (exceptionsToSave.length > 0) {
-       await this.exceptionRepo.save(exceptionsToSave, { chunk: 500 });
+      await this.exceptionRepo.save(exceptionsToSave, { chunk: 500 });
     }
 
     // Step 6: Generate Daily Summaries for the Month
     const mpsDailiesToSave: MpsPlanDaily[] = [];
     let totalIntakeBirds = 0;
     let totalRmFlKg = 0;
-    
+
     const dailyDemand = new Map<string, number>();
     const dailyStaff = new Map<string, number>();
 
@@ -559,20 +630,20 @@ export class MpsController {
     const daysInMonth = new Date(startOfMonth.getFullYear(), startOfMonth.getMonth() + 1, 0).getDate();
     for (let i = 1; i <= daysInMonth; i++) {
       const dayStr = `${targetMonth}-${i.toString().padStart(2, '0')}`;
-      
+
       let intakeBirds = 0;
       let originalSupplyKg = 0;
       allIntakes.forEach((intake: any) => {
         const d = parseLocalDate(intake.receive_date);
         if (d === dayStr) {
-           intakeBirds += Number(intake.chicken_count || 0);
-           const intakeKg = Number(intake.chicken_weight || 0);
-           originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * (1 - 0.093);
+          intakeBirds += Number(intake.chicken_count || 0);
+          const intakeKg = Number(intake.chicken_weight || 0);
+          originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * 0.9;
         }
       });
 
       const demand = dailyDemand.get(dayStr) || 0;
-      
+
       totalIntakeBirds += intakeBirds;
       totalRmFlKg += originalSupplyKg;
 
@@ -598,89 +669,82 @@ export class MpsController {
     // Reuse weightMatrix from Step 5
 
     for (let i = 1; i <= daysInMonth; i++) {
-        const dayStr = `${targetMonth}-${i.toString().padStart(2, '0')}`;
-        
-        let dailyIntakeBirds = 0;
-        let dailyTotalWeight = 0;
-        
-        allIntakes.forEach((intake: any) => {
-            const d = parseLocalDate(intake.receive_date);
-            if (d === dayStr) {
-                dailyIntakeBirds += Number(intake.chicken_count || 0);
-                dailyTotalWeight += Number(intake.chicken_weight || 0);
-            }
+      const dayStr = `${targetMonth}-${i.toString().padStart(2, '0')}`;
+
+      let dailyIntakeBirds = 0;
+      let dailyTotalWeight = 0;
+
+      allIntakes.forEach((intake: any) => {
+        const d = parseLocalDate(intake.receive_date);
+        if (d === dayStr) {
+          dailyIntakeBirds += Number(intake.chicken_count || 0);
+          dailyTotalWeight += Number(intake.chicken_weight || 0);
+        }
+      });
+
+      if (dailyIntakeBirds > 0) {
+        const avgWeight = parseFloat((dailyTotalWeight / dailyIntakeBirds).toFixed(2)); // ปรับทศนิยม 2 ตำแหน่งเพื่อแก้บัค Range
+        // Slaughtered Weight = Weight * 0.9575 * 0.95 (Based on user loss factors: 4.25% loss + 5% loss)
+        const slaughteredWeight = dailyTotalWeight * 0.9575 * 0.95;
+
+        // Find matching row in matrix
+        // Logic: Matrix labels might be "2.40-2.50" or "2.4"
+        const matchingRows = weightMatrix.filter(row => {
+          const label = row.rowLabel;
+          if (label.includes('-')) {
+            const parts = label.split('-').map(s => parseFloat(s.trim()));
+            const min = parts[0];
+            const max = parts[1];
+            return avgWeight >= min && avgWeight <= max;
+          }
+          return Math.abs(Number(label) - avgWeight) < 0.05; // Fallback for single values
         });
 
-        if (dailyIntakeBirds > 0) {
-            const avgWeight = dailyTotalWeight / dailyIntakeBirds;
-            // Slaughtered Weight = Weight * 0.9575 * 0.95 (Based on user loss factors: 4.25% loss + 5% loss)
-            const slaughteredWeight = dailyTotalWeight * 0.9575 * 0.95;
-            
-            // Find matching row in matrix
-            // Logic: Matrix labels might be "2.40-2.50" or "2.4"
-            const matchingRows = weightMatrix.filter(row => {
-                const label = row.rowLabel;
-                if (label.includes('-')) {
-                    const parts = label.split('-').map(s => parseFloat(s.trim()));
-                    const min = parts[0];
-                    const max = parts[1];
-                    return avgWeight >= min && avgWeight <= max;
-                }
-                return Math.abs(Number(label) - avgWeight) < 0.05; // Fallback for single values
-            });
+        const supplyEntry = this.mpsSupplyRepo.create({
+          mpsPlan: plan,
+          productionDate: new Date(dayStr),
+          intakeBirds: dailyIntakeBirds,
+          totalWeight: dailyTotalWeight,
+          avgWeight: parseFloat(avgWeight.toFixed(2)), // ทศนิยม 2 ตำแหน่งตามที่ขอ
+          slaughteredWeight: slaughteredWeight,
+          size40Down: 0,
+          size40_45: 0,
+          size45_50: 0,
+          size50_55: 0,
+          size55_60: 0,
+          size60_65: 0,
+          size65_70: 0,
+          size70_up: 0
+        });
 
-            const supplyEntry = this.mpsSupplyRepo.create({
-                mpsPlan: plan,
-                productionDate: new Date(dayStr),
-                intakeBirds: dailyIntakeBirds,
-                totalWeight: dailyTotalWeight,
-                avgWeight: avgWeight,
-                slaughteredWeight: slaughteredWeight,
-                size40Down: 0,
-                size40_45: 0,
-                size45_50: 0,
-                size50_55: 0,
-                size55_60: 0,
-                size60_65: 0,
-                size65_70: 0,
-                size70_up: 0
-            });
+        matchingRows.forEach(row => {
+          const pct = Number(row.distValue || 0);
+          if (pct <= 0) return;
 
-            // Calculate per size: Slaughtered Weight * 0.04 (Yield) * Matrix %
-            // Note: We don't multiply by 0.8 Yield Factor here because the user's formula 
-            // for Total Kg per Size is: Slaughtered * 4% * %ใน range ทั้งหมด
+          // สูตร: Slaughtered Weight * 4% (Fillet Yield) * % ใน Cell * 90%
+          const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.9);
 
-            matchingRows.forEach(row => {
-                const pct = Number(row.distValue || 0);
-                if (pct <= 0) return;
+          // หา Group จากการชน colLabel กับตาราง fillet_size_calc
+          const groupName = filletMap.get(row.colLabel);
+          if (groupName) {
+            const key = groupName.replace(/\s+/g, '').replace(/-/g, '_');
+            if (key === '40Down') supplyEntry.size40Down += kg;
+            else if (key === '40_45') supplyEntry.size40_45 += kg;
+            else if (key === '45_50') supplyEntry.size45_50 += kg;
+            else if (key === '50_55') supplyEntry.size50_55 += kg;
+            else if (key === '55_60') supplyEntry.size55_60 += kg;
+            else if (key === '60_65') supplyEntry.size60_65 += kg;
+            else if (key === '65_70') supplyEntry.size65_70 += kg;
+            else if (key === '70Up') supplyEntry.size70_up += kg;
+          }
+        });
 
-                const carcassWt = parseFloat(row.colLabel.replace(/[^\d.]/g, ''));
-                if (isNaN(carcassWt)) return;
-
-                // 1. Calculate Piece Size (grams)
-                const pieceGrams = (0.04 * carcassWt * 1000) / 2;
-
-                // 2. Calculate KG for this cell: Slaughtered * 4% * (% in matrix)
-                // If pct is 0.6, it means 0.6%, so we divide by 100.
-                const kg = slaughteredWeight * 0.04 * (pct / 100);
-
-                // 3. Assign to Bin
-                if (pieceGrams < 40) supplyEntry.size40Down += kg;
-                else if (pieceGrams >= 40 && pieceGrams < 45) supplyEntry.size40_45 += kg;
-                else if (pieceGrams >= 45 && pieceGrams < 50) supplyEntry.size45_50 += kg;
-                else if (pieceGrams >= 50 && pieceGrams < 55) supplyEntry.size50_55 += kg;
-                else if (pieceGrams >= 55 && pieceGrams < 60) supplyEntry.size55_60 += kg;
-                else if (pieceGrams >= 60 && pieceGrams < 65) supplyEntry.size60_65 += kg;
-                else if (pieceGrams >= 65 && pieceGrams < 70) supplyEntry.size65_70 += kg;
-                else if (pieceGrams >= 70) supplyEntry.size70_up += kg;
-            });
-
-            mpsSuppliesToSave.push(supplyEntry);
-        }
+        mpsSuppliesToSave.push(supplyEntry);
+      }
     }
 
     if (mpsSuppliesToSave.length > 0) {
-        await this.mpsSupplyRepo.save(mpsSuppliesToSave, { chunk: 500 });
+      await this.mpsSupplyRepo.save(mpsSuppliesToSave, { chunk: 500 });
     }
 
     plan.totalIntakeBirds = totalIntakeBirds;
@@ -730,7 +794,7 @@ export class MpsController {
     const orders = await this.mpsOrderRepo.find({
       where: { mpsPlan: { id: plan.id } }
     });
-    
+
     plan.orders = orders;
 
     // Safety: Ensure no leftover circular refs in other relations
@@ -747,7 +811,7 @@ export class MpsController {
     const plan = await this.mpsPlanRepo.findOne({ where: { id } });
     if (!plan) return { success: false, message: 'Plan not found' };
     if (plan.status === 'APPROVED') return { success: false, message: 'Plan is already approved' };
-    
+
     plan.status = 'APPROVED';
     await this.mpsPlanRepo.save(plan);
     return { success: true, message: 'Plan approved and locked' };
@@ -758,7 +822,7 @@ export class MpsController {
   async rejectPlan(@Param('id') id: number) {
     const plan = await this.mpsPlanRepo.findOne({ where: { id } });
     if (!plan) return { success: false, message: 'Plan not found' };
-    
+
     plan.status = 'DRAFT';
     await this.mpsPlanRepo.save(plan);
     return { success: true, message: 'Plan reverted to draft' };
@@ -773,6 +837,23 @@ export class MpsController {
       .andWhere('order.planned_production_date = :date', { date })
       .getMany();
     return orders;
+  }
+
+  // 10. Update Order Priorities (Batch)
+  @Post('update-priorities')
+  async updatePriorities(@Body() body: { priorities: { lineId: number; priority: number | null }[] }) {
+    if (!body.priorities || !Array.isArray(body.priorities)) {
+      return { success: false, message: 'Invalid input' };
+    }
+
+    for (const item of body.priorities) {
+      await this.orderLineRepo.update(
+        { erpOrderLineId: item.lineId },
+        { priority: item.priority === null ? undefined : item.priority } as any
+      );
+    }
+
+    return { success: true, updated: body.priorities.length };
   }
 }
 

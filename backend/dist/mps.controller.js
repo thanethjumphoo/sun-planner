@@ -22,6 +22,7 @@ const product_spec_entity_1 = require("./product-spec.entity");
 const mps_plan_entity_1 = require("./mps-plan.entity");
 const mps_plan_supply_entity_1 = require("./mps-plan-supply.entity");
 const weight_distribution_entity_1 = require("./weight-distribution.entity");
+const fillet_size_entity_1 = require("./fillet-size.entity");
 const mps_exception_entity_1 = require("./mps-exception.entity");
 const chicken_receiving_service_1 = require("./chicken-receiving/chicken-receiving.service");
 let MpsController = class MpsController {
@@ -34,8 +35,9 @@ let MpsController = class MpsController {
     mpsSupplyRepo;
     weightDistRepo;
     exceptionRepo;
+    filletSizeRepo;
     chickenReceivingService;
-    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, chickenReceivingService) {
+    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, filletSizeRepo, chickenReceivingService) {
         this.orderLineRepo = orderLineRepo;
         this.orderHeaderRepo = orderHeaderRepo;
         this.specRepo = specRepo;
@@ -45,6 +47,7 @@ let MpsController = class MpsController {
         this.mpsSupplyRepo = mpsSupplyRepo;
         this.weightDistRepo = weightDistRepo;
         this.exceptionRepo = exceptionRepo;
+        this.filletSizeRepo = filletSizeRepo;
         this.chickenReceivingService = chickenReceivingService;
     }
     async updateDate(body) {
@@ -175,7 +178,11 @@ let MpsController = class MpsController {
         });
         const orderHeaders = await this.orderHeaderRepo.find();
         const headerMap = new Map();
-        orderHeaders.forEach(h => headerMap.set(h.erpOrderHeaderId, h.erpOrderNumber));
+        const gradeMap = new Map();
+        orderHeaders.forEach(h => {
+            headerMap.set(h.erpOrderHeaderId, h.erpOrderNumber);
+            gradeMap.set(h.erpOrderHeaderId, h.erpCustomerGrade);
+        });
         const specs = await this.specRepo.find();
         const specMap = new Map();
         specs.forEach(s => specMap.set(s.erpItemCode, s));
@@ -209,7 +216,7 @@ let MpsController = class MpsController {
             const d = parseLocalDate(intake.receive_date);
             if (d) {
                 const intakeKg = Number(intake.chicken_weight || 0);
-                const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * (1 - 0.093);
+                const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * 0.9;
                 supplyMap.set(d, (supplyMap.get(d) || 0) + rmFlAvailKg);
             }
         });
@@ -232,8 +239,38 @@ let MpsController = class MpsController {
                 freezeOrders.push(orderObj);
             }
         }
-        chillOrders.sort((a, b) => a.shipDate.getTime() - b.shipDate.getTime());
-        freezeOrders.sort((a, b) => a.shipDate.getTime() - b.shipDate.getTime());
+        const gradeWeight = {
+            'A+': 1,
+            'A': 2,
+            'B': 3,
+            'C': 4,
+            'D': 5,
+            'DEFAULT': 6,
+            '-': 7
+        };
+        const getGradeWeight = (line) => {
+            const grade = gradeMap.get(line.erpOrderHeaderId) || '';
+            return gradeWeight[grade] || 8;
+        };
+        const prioritySort = (a, b) => {
+            const dateDiff = a.shipDate.getTime() - b.shipDate.getTime();
+            if (dateDiff !== 0)
+                return dateDiff;
+            const aGrade = getGradeWeight(a);
+            const bGrade = getGradeWeight(b);
+            if (aGrade !== bGrade)
+                return aGrade - bGrade;
+            const soA = headerMap.get(a.erpOrderHeaderId) || a.erpOrderHeaderId?.toString() || '';
+            const soB = headerMap.get(b.erpOrderHeaderId) || b.erpOrderHeaderId?.toString() || '';
+            const soDiff = soA.localeCompare(soB);
+            if (soDiff !== 0)
+                return soDiff;
+            const aPri = a.priority ?? 9999;
+            const bPri = b.priority ?? 9999;
+            return aPri - bPri;
+        };
+        chillOrders.sort(prioritySort);
+        freezeOrders.sort(prioritySort);
         const mpsOrdersToSave = [];
         const exceptionsToSave = [];
         let totalDemandKg = 0;
@@ -243,8 +280,6 @@ let MpsController = class MpsController {
             totalDemandKg += order.qty;
             let remainingQty = order.qty;
             for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
-                if (d < today)
-                    continue;
                 if (remainingQty <= 0)
                     break;
                 const dateStr = formatDate(d);
@@ -283,6 +318,12 @@ let MpsController = class MpsController {
             }
         }
         const weightMatrix = await this.weightDistRepo.find();
+        const filletCalcs = await this.filletSizeRepo.find();
+        const filletMap = new Map();
+        filletCalcs.forEach(c => {
+            if (c.groupName)
+                filletMap.set(c.colLabel, c.groupName);
+        });
         const sizeSupplyMap = new Map();
         allIntakes.forEach((intake) => {
             const d = parseLocalDate(intake.receive_date);
@@ -292,7 +333,7 @@ let MpsController = class MpsController {
             const intakeBirds = Number(intake.chicken_count || 0);
             if (intakeBirds <= 0 || intakeKg <= 0)
                 return;
-            const avgWeight = intakeKg / intakeBirds;
+            const avgWeight = parseFloat((intakeKg / intakeBirds).toFixed(2));
             const slaughteredWeight = intakeKg * 0.9575 * 0.95;
             const matchingRows = weightMatrix.filter(row => {
                 const label = row.rowLabel;
@@ -302,32 +343,45 @@ let MpsController = class MpsController {
                 }
                 return Math.abs(Number(label) - avgWeight) < 0.05;
             });
-            const existing = sizeSupplyMap.get(d) || { total: 0, bins: { '40Down': 0, '40-45': 0, '45-50': 0, '50-55': 0, '55-60': 0, '60-65': 0, '65-70': 0, '70Up': 0 } };
+            const existing = sizeSupplyMap.get(d) || {
+                total: 0,
+                bins: { '40Down': 0, '40_45': 0, '45_50': 0, '50_55': 0, '55_60': 0, '60_65': 0, '65_70': 0, '70Up': 0 }
+            };
             matchingRows.forEach(row => {
                 const pct = Number(row.distValue || 0);
                 if (pct <= 0)
                     return;
-                const carcassWt = parseFloat(row.colLabel.replace(/[^\d.]/g, ''));
-                if (isNaN(carcassWt))
-                    return;
-                const pieceGrams = (0.04 * carcassWt * 1000) / 2;
-                const kg = slaughteredWeight * 0.04 * (pct / 100);
-                if (pieceGrams < 40)
-                    existing.bins['40Down'] += kg;
-                else if (pieceGrams < 45)
-                    existing.bins['40-45'] += kg;
-                else if (pieceGrams < 50)
-                    existing.bins['45-50'] += kg;
-                else if (pieceGrams < 55)
-                    existing.bins['50-55'] += kg;
-                else if (pieceGrams < 60)
-                    existing.bins['55-60'] += kg;
-                else if (pieceGrams < 65)
-                    existing.bins['60-65'] += kg;
-                else if (pieceGrams < 70)
-                    existing.bins['65-70'] += kg;
-                else
-                    existing.bins['70Up'] += kg;
+                const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.9);
+                const groupName = filletMap.get(row.colLabel);
+                if (groupName) {
+                    const binKey = groupName.replace(/\s+/g, '').replace(/-/g, '_');
+                    let key = binKey;
+                    if (key === '40Down')
+                        key = '40Down';
+                    else if (key === '70Up')
+                        key = '70Up';
+                    else if (key.includes('_')) { }
+                    else { }
+                    if (existing.bins[key] !== undefined) {
+                        existing.bins[key] += kg;
+                    }
+                    else if (key === '40Down')
+                        existing.bins['40Down'] += kg;
+                    else if (key === '40_45')
+                        existing.bins['40_45'] += kg;
+                    else if (key === '45_50')
+                        existing.bins['45_50'] += kg;
+                    else if (key === '50_55')
+                        existing.bins['50_55'] += kg;
+                    else if (key === '55_60')
+                        existing.bins['55_60'] += kg;
+                    else if (key === '60_65')
+                        existing.bins['60_65'] += kg;
+                    else if (key === '65_70')
+                        existing.bins['65_70'] += kg;
+                    else if (key === '70Up')
+                        existing.bins['70Up'] += kg;
+                }
                 existing.total += kg;
             });
             sizeSupplyMap.set(d, existing);
@@ -341,19 +395,19 @@ let MpsController = class MpsController {
             if (s.includes('40 down') || s === '40down')
                 return ['40Down'];
             if (s.includes('70 up') || s === '70up' || s.includes('60 up') || s === '60up')
-                return ['60-65', '65-70', '70Up'];
+                return ['60_65', '65_70', '70Up'];
             const rangeMatch = s.match(/(\d+)\s*[-–]\s*(\d+)/);
             if (rangeMatch) {
                 const lo = parseInt(rangeMatch[1]);
                 const hi = parseInt(rangeMatch[2]);
                 const allBins = [
                     { key: '40Down', lo: 0, hi: 40 },
-                    { key: '40-45', lo: 40, hi: 45 },
-                    { key: '45-50', lo: 45, hi: 50 },
-                    { key: '50-55', lo: 50, hi: 55 },
-                    { key: '55-60', lo: 55, hi: 60 },
-                    { key: '60-65', lo: 60, hi: 65 },
-                    { key: '65-70', lo: 65, hi: 70 },
+                    { key: '40_45', lo: 40, hi: 45 },
+                    { key: '45_50', lo: 45, hi: 50 },
+                    { key: '50_55', lo: 50, hi: 55 },
+                    { key: '55_60', lo: 55, hi: 60 },
+                    { key: '60_65', lo: 60, hi: 65 },
+                    { key: '65_70', lo: 65, hi: 70 },
                     { key: '70Up', lo: 70, hi: 999 },
                 ];
                 return allBins.filter(b => b.hi > lo && b.lo < hi).map(b => b.key);
@@ -364,19 +418,18 @@ let MpsController = class MpsController {
             const dateDiff = a.shipDate.getTime() - b.shipDate.getTime();
             if (dateDiff !== 0)
                 return dateDiff;
+            const aGrade = getGradeWeight(a);
+            const bGrade = getGradeWeight(b);
+            if (aGrade !== bGrade)
+                return aGrade - bGrade;
             const soA = headerMap.get(a.erpOrderHeaderId) || a.erpOrderHeaderId?.toString() || '';
             const soB = headerMap.get(b.erpOrderHeaderId) || b.erpOrderHeaderId?.toString() || '';
-            return soA.localeCompare(soB);
-        });
-        const sizedFreezeOrders = freezeOrders.filter(o => {
-            const spec = specMap.get(o.erpOrderItemCode);
-            const sz = spec?.productSize?.toLowerCase()?.trim();
-            return sz && sz !== 'unsize' && sz !== '';
-        });
-        const unsizeFreezeOrders = freezeOrders.filter(o => {
-            const spec = specMap.get(o.erpOrderItemCode);
-            const sz = spec?.productSize?.toLowerCase()?.trim();
-            return !sz || sz === 'unsize' || sz === '';
+            const soDiff = soA.localeCompare(soB);
+            if (soDiff !== 0)
+                return soDiff;
+            const aPri = a.priority ?? 9999;
+            const bPri = b.priority ?? 9999;
+            return aPri - bPri;
         });
         const addDays = (date, days) => {
             const d = new Date(date);
@@ -384,7 +437,7 @@ let MpsController = class MpsController {
             return d;
         };
         const allDateStrs = [];
-        for (let d = new Date(today); d <= endOfMonth; d = addDays(d, 1)) {
+        for (let d = new Date(startOfMonth); d <= endOfMonth; d = addDays(d, 1)) {
             allDateStrs.push(formatDate(d));
         }
         const allocateFreeze = (orderList, useSizeMatch) => {
@@ -396,7 +449,7 @@ let MpsController = class MpsController {
                 const sizeBinKeys = getSizeBinKeys(productSize);
                 const isUnsize = sizeBinKeys.length === 0;
                 const latestProdDate = subtractDays(order.shipDate, 5);
-                const earliestProdDate = subtractDays(order.shipDate, 30) < today ? today : subtractDays(order.shipDate, 30);
+                const earliestProdDate = subtractDays(order.shipDate, 30);
                 for (const dateStr of allDateStrs) {
                     if (remainingQty <= 0)
                         break;
@@ -462,8 +515,7 @@ let MpsController = class MpsController {
                 }
             }
         };
-        allocateFreeze(sizedFreezeOrders, true);
-        allocateFreeze(unsizeFreezeOrders, false);
+        allocateFreeze(freezeOrders, true);
         await this.mpsOrderRepo.save(mpsOrdersToSave, { chunk: 500 });
         if (exceptionsToSave.length > 0) {
             await this.exceptionRepo.save(exceptionsToSave, { chunk: 500 });
@@ -490,7 +542,7 @@ let MpsController = class MpsController {
                 if (d === dayStr) {
                     intakeBirds += Number(intake.chicken_count || 0);
                     const intakeKg = Number(intake.chicken_weight || 0);
-                    originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * (1 - 0.093);
+                    originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * 0.9;
                 }
             });
             const demand = dailyDemand.get(dayStr) || 0;
@@ -523,7 +575,7 @@ let MpsController = class MpsController {
                 }
             });
             if (dailyIntakeBirds > 0) {
-                const avgWeight = dailyTotalWeight / dailyIntakeBirds;
+                const avgWeight = parseFloat((dailyTotalWeight / dailyIntakeBirds).toFixed(2));
                 const slaughteredWeight = dailyTotalWeight * 0.9575 * 0.95;
                 const matchingRows = weightMatrix.filter(row => {
                     const label = row.rowLabel;
@@ -540,7 +592,7 @@ let MpsController = class MpsController {
                     productionDate: new Date(dayStr),
                     intakeBirds: dailyIntakeBirds,
                     totalWeight: dailyTotalWeight,
-                    avgWeight: avgWeight,
+                    avgWeight: parseFloat(avgWeight.toFixed(2)),
                     slaughteredWeight: slaughteredWeight,
                     size40Down: 0,
                     size40_45: 0,
@@ -555,27 +607,27 @@ let MpsController = class MpsController {
                     const pct = Number(row.distValue || 0);
                     if (pct <= 0)
                         return;
-                    const carcassWt = parseFloat(row.colLabel.replace(/[^\d.]/g, ''));
-                    if (isNaN(carcassWt))
-                        return;
-                    const pieceGrams = (0.04 * carcassWt * 1000) / 2;
-                    const kg = slaughteredWeight * 0.04 * (pct / 100);
-                    if (pieceGrams < 40)
-                        supplyEntry.size40Down += kg;
-                    else if (pieceGrams >= 40 && pieceGrams < 45)
-                        supplyEntry.size40_45 += kg;
-                    else if (pieceGrams >= 45 && pieceGrams < 50)
-                        supplyEntry.size45_50 += kg;
-                    else if (pieceGrams >= 50 && pieceGrams < 55)
-                        supplyEntry.size50_55 += kg;
-                    else if (pieceGrams >= 55 && pieceGrams < 60)
-                        supplyEntry.size55_60 += kg;
-                    else if (pieceGrams >= 60 && pieceGrams < 65)
-                        supplyEntry.size60_65 += kg;
-                    else if (pieceGrams >= 65 && pieceGrams < 70)
-                        supplyEntry.size65_70 += kg;
-                    else if (pieceGrams >= 70)
-                        supplyEntry.size70_up += kg;
+                    const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.9);
+                    const groupName = filletMap.get(row.colLabel);
+                    if (groupName) {
+                        const key = groupName.replace(/\s+/g, '').replace(/-/g, '_');
+                        if (key === '40Down')
+                            supplyEntry.size40Down += kg;
+                        else if (key === '40_45')
+                            supplyEntry.size40_45 += kg;
+                        else if (key === '45_50')
+                            supplyEntry.size45_50 += kg;
+                        else if (key === '50_55')
+                            supplyEntry.size50_55 += kg;
+                        else if (key === '55_60')
+                            supplyEntry.size55_60 += kg;
+                        else if (key === '60_65')
+                            supplyEntry.size60_65 += kg;
+                        else if (key === '65_70')
+                            supplyEntry.size65_70 += kg;
+                        else if (key === '70Up')
+                            supplyEntry.size70_up += kg;
+                    }
                 });
                 mpsSuppliesToSave.push(supplyEntry);
             }
@@ -652,6 +704,15 @@ let MpsController = class MpsController {
             .getMany();
         return orders;
     }
+    async updatePriorities(body) {
+        if (!body.priorities || !Array.isArray(body.priorities)) {
+            return { success: false, message: 'Invalid input' };
+        }
+        for (const item of body.priorities) {
+            await this.orderLineRepo.update({ erpOrderLineId: item.lineId }, { priority: item.priority === null ? undefined : item.priority });
+        }
+        return { success: true, updated: body.priorities.length };
+    }
 };
 exports.MpsController = MpsController;
 __decorate([
@@ -716,6 +777,13 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], MpsController.prototype, "getApprovedOrdersForDate", null);
+__decorate([
+    (0, common_1.Post)('update-priorities'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], MpsController.prototype, "updatePriorities", null);
 exports.MpsController = MpsController = __decorate([
     (0, common_1.Controller)('api/mps'),
     __param(0, (0, typeorm_1.InjectRepository)(stg_erp_order_line_entity_1.StgErpOrderLine)),
@@ -727,7 +795,9 @@ exports.MpsController = MpsController = __decorate([
     __param(6, (0, typeorm_1.InjectRepository)(mps_plan_supply_entity_1.MpsPlanSupply)),
     __param(7, (0, typeorm_1.InjectRepository)(weight_distribution_entity_1.WeightDistribution)),
     __param(8, (0, typeorm_1.InjectRepository)(mps_exception_entity_1.MpsExceptionReport)),
+    __param(9, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletSizeCalc)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

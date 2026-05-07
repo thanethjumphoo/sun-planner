@@ -13,4 +13,5 @@ export declare class StgErpOrderLine {
     erpLastUpdateDate: Date;
     erpOrderStatus: string;
     plannedProductionDate: Date;
+    priority: number;
 }

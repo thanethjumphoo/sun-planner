@@ -25,6 +25,8 @@ import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps
 import { ManualOperation } from './manual-operation.entity';
 import { ManualOperationController } from './manual-operation.controller';
 import { DpsController } from './dps.controller';
+import { FilletConfig, FilletGroup, FilletSizeCalc } from './fillet-size.entity';
+import { FilletSizeController } from './fillet-size.controller';
 
 @Module({
   imports: [
@@ -56,10 +58,11 @@ import { DpsController } from './dps.controller';
     TypeOrmModule.forFeature([
       StgErpItem, StgErpOrderHeader, StgErpOrderLine, TargetSyncItem, ProductSpec, 
       WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsExceptionReport,
-      DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation
+      DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation,
+      FilletConfig, FilletGroup, FilletSizeCalc
     ]),
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController, DpsController],
+  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController],
   providers: [AppService, OracleIntegrationService],
 })
 export class AppModule { }

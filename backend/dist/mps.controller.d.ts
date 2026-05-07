@@ -5,6 +5,7 @@ import { ProductSpec } from './product-spec.entity';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 import { WeightDistribution } from './weight-distribution.entity';
+import { FilletSizeCalc } from './fillet-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
 export declare class MpsController {
@@ -17,8 +18,9 @@ export declare class MpsController {
     private mpsSupplyRepo;
     private weightDistRepo;
     private exceptionRepo;
+    private filletSizeRepo;
     private chickenReceivingService;
-    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, chickenReceivingService: ChickenReceivingService);
+    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, chickenReceivingService: ChickenReceivingService);
     updateDate(body: {
         planId?: number;
         mpsOrderId?: number;
@@ -77,4 +79,18 @@ export declare class MpsController {
         message: string;
     }>;
     getApprovedOrdersForDate(date: string): Promise<MpsPlanOrder[]>;
+    updatePriorities(body: {
+        priorities: {
+            lineId: number;
+            priority: number | null;
+        }[];
+    }): Promise<{
+        success: boolean;
+        message: string;
+        updated?: undefined;
+    } | {
+        success: boolean;
+        updated: number;
+        message?: undefined;
+    }>;
 }
