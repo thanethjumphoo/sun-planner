@@ -1,3 +1,4 @@
+import * as express from 'express';
 import { Repository } from 'typeorm';
 import { StgErpOrderLine } from './stg-erp-order-line.entity';
 import { StgErpOrderHeader } from './stg-erp-order-header.entity';
@@ -8,6 +9,8 @@ import { WeightDistribution } from './weight-distribution.entity';
 import { FilletSizeCalc } from './fillet-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
+import { ManualOperation } from './manual-operation.entity';
+import { StgErpItem } from './stg-erp-item.entity';
 export declare class MpsController {
     private orderLineRepo;
     private orderHeaderRepo;
@@ -19,8 +22,10 @@ export declare class MpsController {
     private weightDistRepo;
     private exceptionRepo;
     private filletSizeRepo;
+    private manualOpRepo;
+    private itemRepo;
     private chickenReceivingService;
-    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, chickenReceivingService: ChickenReceivingService);
+    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, manualOpRepo: Repository<ManualOperation>, itemRepo: Repository<StgErpItem>, chickenReceivingService: ChickenReceivingService);
     updateDate(body: {
         planId?: number;
         mpsOrderId?: number;
@@ -93,4 +98,5 @@ export declare class MpsController {
         updated: number;
         message?: undefined;
     }>;
+    exportPlan(id: number, res: express.Response): Promise<express.Response<any, Record<string, any>> | undefined>;
 }

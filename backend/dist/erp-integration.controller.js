@@ -25,6 +25,9 @@ let ErpIntegrationController = class ErpIntegrationController {
         this.targetItemRepo = targetItemRepo;
         this.oracleService = oracleService;
     }
+    async getItems() {
+        return this.oracleService.getLocalItems();
+    }
     async getTargetItems() {
         const items = await this.targetItemRepo.find({ order: { createdAt: 'DESC' } });
         return items.map(item => item.itemCode);
@@ -72,8 +75,23 @@ let ErpIntegrationController = class ErpIntegrationController {
     async getDemandOrders() {
         return this.oracleService.getDemandOrders();
     }
+    async createManualOrder(body) {
+        return this.oracleService.saveManualOrder(body);
+    }
+    async updateManualOrder(id, body) {
+        return this.oracleService.updateManualOrder(id, body);
+    }
+    async deleteManualOrder(id) {
+        return this.oracleService.deleteManualOrder(id);
+    }
 };
 exports.ErpIntegrationController = ErpIntegrationController;
+__decorate([
+    (0, common_1.Get)('items'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], ErpIntegrationController.prototype, "getItems", null);
 __decorate([
     (0, common_1.Get)('target-items'),
     __metadata("design:type", Function),
@@ -130,6 +148,28 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], ErpIntegrationController.prototype, "getDemandOrders", null);
+__decorate([
+    (0, common_1.Post)('manual-order'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], ErpIntegrationController.prototype, "createManualOrder", null);
+__decorate([
+    (0, common_1.Post)('manual-order/:id'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", Promise)
+], ErpIntegrationController.prototype, "updateManualOrder", null);
+__decorate([
+    (0, common_1.Delete)('manual-order/:id'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", Promise)
+], ErpIntegrationController.prototype, "deleteManualOrder", null);
 exports.ErpIntegrationController = ErpIntegrationController = __decorate([
     (0, common_1.Controller)('api/erp'),
     __param(0, (0, typeorm_1.InjectRepository)(target_sync_item_entity_1.TargetSyncItem)),

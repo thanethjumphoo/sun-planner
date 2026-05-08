@@ -117,9 +117,8 @@ let OracleIntegrationService = class OracleIntegrationService {
         let conn;
         try {
             conn = await this.connect();
-            const bindNames = itemCodes.map((_, i) => `:code${i}`).join(', ');
             const savedItems = [];
-            const chunkSize = 1000;
+            const chunkSize = 990;
             for (let i = 0; i < itemCodes.length; i += chunkSize) {
                 const chunk = itemCodes.slice(i, i + chunkSize);
                 const bindNames = chunk.map((_, idx) => `:code${idx}`).join(', ');
@@ -172,6 +171,9 @@ let OracleIntegrationService = class OracleIntegrationService {
             console.error('Error syncing items:', err);
             throw err;
         }
+    }
+    async getLocalItems() {
+        return this.stgErpItemRepository.find({ order: { erpItemCode: 'ASC' } });
     }
     async syncOrderHeaders() {
         let conn;
@@ -247,7 +249,7 @@ let OracleIntegrationService = class OracleIntegrationService {
                 return [];
             const headerIds = headers.map(h => h.erpOrderHeaderId);
             const savedLines = [];
-            const chunkSize = 1000;
+            const chunkSize = 990;
             for (let i = 0; i < headerIds.length; i += chunkSize) {
                 const chunk = headerIds.slice(i, i + chunkSize);
                 const bindNames = chunk.map((_, idx) => `:hid${idx}`).join(', ');
@@ -310,6 +312,86 @@ let OracleIntegrationService = class OracleIntegrationService {
         return this.stgErpOrderLineRepository.find({
             order: { erpOrderHeaderId: 'DESC', erpOrderLineNumber: 'ASC' },
         });
+    }
+    async saveManualOrder(data) {
+        const header = this.stgErpOrderHeaderRepository.create({
+            erpOrderNumber: data.erpOrderNumber,
+            erpOrderType: data.erpOrderType,
+            erpCustomerName: data.erpCustomerName,
+            erpOrderDate: new Date(data.erpOrderDate),
+            erpOrderStatus: 'BOOKED',
+            erpOrgId: 82,
+            isManual: true,
+            erpCreationDate: new Date(),
+            erpLastUpdateDate: new Date(),
+        });
+        const savedHeader = await this.stgErpOrderHeaderRepository.save(header);
+        savedHeader.erpOrderHeaderId = 900000000 + savedHeader.id;
+        await this.stgErpOrderHeaderRepository.save(savedHeader);
+        const savedLines = [];
+        for (let i = 0; i < data.lines.length; i++) {
+            const lineData = data.lines[i];
+            let line = this.stgErpOrderLineRepository.create({
+                erpOrderHeaderId: savedHeader.erpOrderHeaderId,
+                erpOrgId: 82,
+                erpOrderLineNumber: String(i + 1),
+                erpOrderItemCode: lineData.erpOrderItemCode,
+                erpOrderItemQty: lineData.erpOrderItemQty,
+                erpOrderItemUom: 'KG',
+                erpOrderShipDate: new Date(lineData.erpOrderShipDate),
+                erpOrderStatus: 'BOOKED',
+                isManual: true,
+                erpCreationDate: new Date(),
+                erpLastUpdateDate: new Date(),
+            });
+            line = await this.stgErpOrderLineRepository.save(line);
+            line.erpOrderLineId = 900000000 + line.id;
+            await this.stgErpOrderLineRepository.save(line);
+            savedLines.push(line);
+        }
+        return { ...savedHeader, lines: savedLines };
+    }
+    async updateManualOrder(id, data) {
+        const header = await this.stgErpOrderHeaderRepository.findOne({ where: { id, isManual: true } });
+        if (!header)
+            throw new Error('Order not found');
+        header.erpOrderNumber = data.erpOrderNumber;
+        header.erpOrderType = data.erpOrderType;
+        header.erpCustomerName = data.erpCustomerName;
+        header.erpOrderDate = new Date(data.erpOrderDate);
+        header.erpLastUpdateDate = new Date();
+        await this.stgErpOrderHeaderRepository.save(header);
+        await this.stgErpOrderLineRepository.delete({ erpOrderHeaderId: header.erpOrderHeaderId });
+        const savedLines = [];
+        for (let i = 0; i < data.lines.length; i++) {
+            const lineData = data.lines[i];
+            let line = this.stgErpOrderLineRepository.create({
+                erpOrderHeaderId: header.erpOrderHeaderId,
+                erpOrgId: 82,
+                erpOrderLineNumber: String(i + 1),
+                erpOrderItemCode: lineData.erpOrderItemCode,
+                erpOrderItemQty: lineData.erpOrderItemQty,
+                erpOrderItemUom: 'KG',
+                erpOrderShipDate: new Date(lineData.erpOrderShipDate),
+                erpOrderStatus: 'BOOKED',
+                isManual: true,
+                erpCreationDate: new Date(),
+                erpLastUpdateDate: new Date(),
+            });
+            line = await this.stgErpOrderLineRepository.save(line);
+            line.erpOrderLineId = 900000000 + line.id;
+            await this.stgErpOrderLineRepository.save(line);
+            savedLines.push(line);
+        }
+        return { ...header, lines: savedLines };
+    }
+    async deleteManualOrder(headerId) {
+        const header = await this.stgErpOrderHeaderRepository.findOne({ where: { id: headerId, isManual: true } });
+        if (!header)
+            throw new Error('Order not found or not a manual order');
+        await this.stgErpOrderLineRepository.delete({ erpOrderHeaderId: header.erpOrderHeaderId });
+        await this.stgErpOrderHeaderRepository.delete(header.id);
+        return { success: true };
     }
     async getDemandOrders() {
         const headers = await this.stgErpOrderHeaderRepository.find({ order: { erpOrderDate: 'DESC' } });

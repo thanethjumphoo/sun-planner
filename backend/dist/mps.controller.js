@@ -1,10 +1,43 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
     var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
     if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
@@ -14,6 +47,8 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MpsController = void 0;
 const common_1 = require("@nestjs/common");
+const express = __importStar(require("express"));
+const ExcelJS = __importStar(require("exceljs"));
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const stg_erp_order_line_entity_1 = require("./stg-erp-order-line.entity");
@@ -25,6 +60,8 @@ const weight_distribution_entity_1 = require("./weight-distribution.entity");
 const fillet_size_entity_1 = require("./fillet-size.entity");
 const mps_exception_entity_1 = require("./mps-exception.entity");
 const chicken_receiving_service_1 = require("./chicken-receiving/chicken-receiving.service");
+const manual_operation_entity_1 = require("./manual-operation.entity");
+const stg_erp_item_entity_1 = require("./stg-erp-item.entity");
 let MpsController = class MpsController {
     orderLineRepo;
     orderHeaderRepo;
@@ -36,8 +73,10 @@ let MpsController = class MpsController {
     weightDistRepo;
     exceptionRepo;
     filletSizeRepo;
+    manualOpRepo;
+    itemRepo;
     chickenReceivingService;
-    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, filletSizeRepo, chickenReceivingService) {
+    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, filletSizeRepo, manualOpRepo, itemRepo, chickenReceivingService) {
         this.orderLineRepo = orderLineRepo;
         this.orderHeaderRepo = orderHeaderRepo;
         this.specRepo = specRepo;
@@ -48,6 +87,8 @@ let MpsController = class MpsController {
         this.weightDistRepo = weightDistRepo;
         this.exceptionRepo = exceptionRepo;
         this.filletSizeRepo = filletSizeRepo;
+        this.manualOpRepo = manualOpRepo;
+        this.itemRepo = itemRepo;
         this.chickenReceivingService = chickenReceivingService;
     }
     async updateDate(body) {
@@ -77,12 +118,19 @@ let MpsController = class MpsController {
                         quantityKg: body.splitQty,
                         shipDate: planOrder.shipDate,
                         plannedProductionDate: new Date(body.date),
+                        finishedProductionDate: planOrder.productType === 'chilled'
+                            ? new Date(body.date)
+                            : new Date(new Date(body.date).getTime() + 4 * 24 * 60 * 60 * 1000),
                         isManualOverride: true
                     });
                     await this.mpsOrderRepo.save(splitOrder);
                 }
                 else {
-                    planOrder.plannedProductionDate = new Date(body.date);
+                    const newDate = new Date(body.date);
+                    planOrder.plannedProductionDate = newDate;
+                    planOrder.finishedProductionDate = planOrder.productType === 'chilled'
+                        ? newDate
+                        : new Date(newDate.getTime() + 4 * 24 * 60 * 60 * 1000);
                     planOrder.isManualOverride = true;
                     await this.mpsOrderRepo.save(planOrder);
                 }
@@ -94,12 +142,20 @@ let MpsController = class MpsController {
                 where: { mpsPlan: { id: body.planId }, erpOrderLineId: body.lineId }
             });
             if (planOrder) {
-                planOrder.plannedProductionDate = new Date(body.date);
+                const newDate = new Date(body.date);
+                planOrder.plannedProductionDate = newDate;
+                planOrder.finishedProductionDate = planOrder.productType === 'chilled'
+                    ? newDate
+                    : new Date(newDate.getTime() + 4 * 24 * 60 * 60 * 1000);
                 planOrder.isManualOverride = true;
                 await this.mpsOrderRepo.save(planOrder);
                 const line = await this.orderLineRepo.findOne({ where: { erpOrderLineId: body.lineId } });
                 if (line) {
-                    line.plannedProductionDate = new Date(body.date);
+                    const newDate = new Date(body.date);
+                    line.plannedProductionDate = newDate;
+                    line.finishedProductionDate = planOrder.productType === 'chilled'
+                        ? newDate
+                        : new Date(newDate.getTime() + 4 * 24 * 60 * 60 * 1000);
                     await this.orderLineRepo.save(line);
                 }
                 return { success: true };
@@ -107,7 +163,9 @@ let MpsController = class MpsController {
         }
         const line = await this.orderLineRepo.findOne({ where: { erpOrderLineId: body.lineId } });
         if (line) {
-            line.plannedProductionDate = new Date(body.date);
+            const newDate = new Date(body.date);
+            line.plannedProductionDate = newDate;
+            line.finishedProductionDate = newDate;
             await this.orderLineRepo.save(line);
             return { success: true };
         }
@@ -133,6 +191,9 @@ let MpsController = class MpsController {
                 plannedDate.setDate(plannedDate.getDate() - 5);
             }
             line.plannedProductionDate = plannedDate;
+            line.finishedProductionDate = type === 'chilled'
+                ? plannedDate
+                : new Date(plannedDate.getTime() + 4 * 24 * 60 * 60 * 1000);
             await this.orderLineRepo.save(line);
             allocatedCount++;
         }
@@ -216,7 +277,7 @@ let MpsController = class MpsController {
             const d = parseLocalDate(intake.receive_date);
             if (d) {
                 const intakeKg = Number(intake.chicken_weight || 0);
-                const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * 0.9;
+                const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * 0.907;
                 supplyMap.set(d, (supplyMap.get(d) || 0) + rmFlAvailKg);
             }
         });
@@ -292,11 +353,12 @@ let MpsController = class MpsController {
                             erpOrderLineId: order.erpOrderLineId,
                             soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
                             itemCode: order.erpOrderItemCode,
-                            itemDesc: order.erpOrderItemCode,
+                            itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
                             productType: order.productType,
                             quantityKg: allocQty,
                             shipDate: order.shipDate,
                             plannedProductionDate: d,
+                            finishedProductionDate: d,
                             isManualOverride: false
                         }));
                         supplyMap.set(dateStr, supply - allocQty);
@@ -477,11 +539,12 @@ let MpsController = class MpsController {
                         erpOrderLineId: order.erpOrderLineId,
                         soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
                         itemCode: order.erpOrderItemCode,
-                        itemDesc: order.erpOrderItemCode,
+                        itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
                         productType: order.productType,
                         quantityKg: allocQty,
                         shipDate: order.shipDate,
                         plannedProductionDate: dateObj,
+                        finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
                         isManualOverride: false
                     }));
                     supplyMap.set(dateStr, totalRmForDate - allocQty);
@@ -542,7 +605,7 @@ let MpsController = class MpsController {
                 if (d === dayStr) {
                     intakeBirds += Number(intake.chicken_count || 0);
                     const intakeKg = Number(intake.chicken_weight || 0);
-                    originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * 0.9;
+                    originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * 0.907;
                 }
             });
             const demand = dailyDemand.get(dayStr) || 0;
@@ -607,7 +670,7 @@ let MpsController = class MpsController {
                     const pct = Number(row.distValue || 0);
                     if (pct <= 0)
                         return;
-                    const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.9);
+                    const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.907);
                     const groupName = filletMap.get(row.colLabel);
                     if (groupName) {
                         const key = groupName.replace(/\s+/g, '').replace(/-/g, '_');
@@ -713,6 +776,288 @@ let MpsController = class MpsController {
         }
         return { success: true, updated: body.priorities.length };
     }
+    async exportPlan(id, res) {
+        const plan = await this.mpsPlanRepo.findOne({
+            where: { id },
+            relations: ['dailySummaries', 'exceptions', 'supplyBreakdown']
+        });
+        if (!plan)
+            return res.status(404).json({ success: false, message: 'Plan not found' });
+        const orders = await this.mpsOrderRepo.find({
+            where: { mpsPlan: { id: plan.id } },
+        });
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('Fillet MPS Plan');
+        const headers = await this.orderHeaderRepo.find();
+        const gradeMap = new Map();
+        headers.forEach(h => {
+            if (h.erpOrderNumber)
+                gradeMap.set(h.erpOrderNumber, h.erpCustomerGrade);
+        });
+        const dailyMap = new Map();
+        plan.dailySummaries.sort((a, b) => new Date(a.productionDate).getTime() - new Date(b.productionDate).getTime()).forEach(d => {
+            dailyMap.set(new Date(d.productionDate).toISOString().split('T')[0], { summary: d, orders: new Map(), supply: null });
+        });
+        plan.supplyBreakdown.forEach(s => {
+            const dateKey = new Date(s.productionDate).toISOString().split('T')[0];
+            if (dailyMap.has(dateKey)) {
+                dailyMap.get(dateKey).supply = s;
+            }
+        });
+        const [year, month] = plan.targetMonth.split('-').map(Number);
+        const startDate = new Date(year, month - 1, 1);
+        const endDate = new Date(year, month, 0);
+        const manualOps = await this.manualOpRepo.find({
+            where: {
+                productionDate: (0, typeorm_2.Between)(startDate, endDate)
+            }
+        });
+        const manualOpMap = new Map();
+        manualOps.forEach(op => {
+            const dateKey = new Date(op.productionDate).toISOString().split('T')[0];
+            manualOpMap.set(dateKey, op);
+        });
+        const erpItems = await this.itemRepo.find();
+        const itemDescMap = new Map();
+        erpItems.forEach(i => {
+            if (i.erpItemCode)
+                itemDescMap.set(i.erpItemCode, i.erpItemDesc);
+        });
+        const specs = await this.specRepo.find();
+        const specMap = new Map();
+        specs.forEach(s => specMap.set(s.erpItemCode, itemDescMap.get(s.erpItemCode) || s.erpItemDesc));
+        const itemMap = new Map();
+        orders.forEach(o => itemMap.set(o.itemCode, specMap.get(o.itemCode) || o.itemDesc));
+        const itemCodes = Array.from(itemMap.keys()).sort();
+        orders.forEach(o => {
+            const dateKey = new Date(o.plannedProductionDate).toISOString().split('T')[0];
+            if (dailyMap.has(dateKey)) {
+                const d = dailyMap.get(dateKey);
+                d.orders.set(o.itemCode, (d.orders.get(o.itemCode) || 0) + o.quantityKg);
+            }
+        });
+        const dates = Array.from(dailyMap.keys());
+        const sectionRow = sheet.addRow([]);
+        sectionRow.getCell(1).value = 'Supply Control';
+        sheet.mergeCells(1, 1, 1, 6);
+        sectionRow.getCell(7).value = 'Manpower & Execution';
+        sheet.mergeCells(1, 7, 1, 11);
+        sectionRow.getCell(12).value = 'RM FL by Size';
+        sheet.mergeCells(1, 12, 1, 19);
+        sectionRow.getCell(20).value = 'Production Plan';
+        sheet.mergeCells(1, 20, 1, 20 + itemCodes.length - 1);
+        [
+            { start: 1, end: 6, color: 'FF4472C4' },
+            { start: 7, end: 11, color: 'FF70AD47' },
+            { start: 12, end: 19, color: 'FFED7D31' },
+            { start: 20, end: 20 + itemCodes.length - 1, color: 'FF7030A0' }
+        ].forEach(sec => {
+            for (let i = sec.start; i <= sec.end; i++) {
+                const cell = sectionRow.getCell(i);
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sec.color } };
+                cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
+                cell.alignment = { horizontal: 'center' };
+                cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+            }
+        });
+        const descRowData = new Array(19).fill('');
+        itemCodes.forEach(code => descRowData.push(itemMap.get(code) || ''));
+        const descRow = sheet.addRow(descRowData);
+        descRow.eachCell((cell, colNumber) => {
+            if (colNumber >= 20) {
+                cell.font = { bold: true, size: 8 };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+                cell.alignment = { horizontal: 'center', wrapText: true };
+                cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+            }
+        });
+        descRow.height = 30;
+        const subHeaders = [
+            'Date', 'Day', 'Avg. Wt', 'RM FL Total', 'RM Used (Demand)', 'RM Balance',
+            'Cut (P)', 'Sup (P)', 'Cut (A)', 'Sup (A)', 'Variance',
+            '40 down', '40 45', '45 50', '50 55', '55 60', '60 65', '65 70', '70 up',
+            ...itemCodes
+        ];
+        const headerRow = sheet.addRow(subHeaders);
+        headerRow.eachCell((cell, colNumber) => {
+            cell.font = { bold: true, size: 9 };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        });
+        dates.forEach(dateStr => {
+            const d = dailyMap.get(dateStr);
+            const s = d.summary;
+            const supply = d.supply;
+            const dateObj = new Date(dateStr);
+            const isNoSupply = !s.intakeBirds || s.intakeBirds === 0;
+            const manualOp = manualOpMap.get(dateStr);
+            const actualCut = manualOp?.actualCuttingWorkers || 0;
+            const actualSup = manualOp?.actualStationWorkers || 0;
+            const plannedCut = s.cuttingStaff;
+            const plannedSup = manualOp?.plannedStationWorkers || s.supportStaff;
+            const variance = (actualCut + actualSup) - (plannedCut + plannedSup);
+            const rowData = [
+                dateStr,
+                dateObj.toLocaleDateString('en-US', { weekday: 'short' }),
+                supply?.avgWeight || '-',
+                Math.round(s.rmFlAvailKg),
+                Math.round(s.demandKg),
+                Math.round(s.rmFlAvailKg - s.demandKg),
+                plannedCut,
+                plannedSup,
+                actualCut,
+                actualSup,
+                variance,
+                Math.round(supply?.size40Down || 0),
+                Math.round(supply?.size40_45 || 0),
+                Math.round(supply?.size45_50 || 0),
+                Math.round(supply?.size50_55 || 0),
+                Math.round(supply?.size55_60 || 0),
+                Math.round(supply?.size60_65 || 0),
+                Math.round(supply?.size65_70 || 0),
+                Math.round(supply?.size70_up || 0),
+                ...itemCodes.map(code => d.orders.has(code) ? Math.round(d.orders.get(code)) : '-')
+            ];
+            const r = sheet.addRow(rowData);
+            r.eachCell((cell, colNumber) => {
+                cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+                cell.font = { size: 9 };
+                if (isNoSupply) {
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEDED' } };
+                    cell.font = { color: { argb: 'FF999999' }, size: 9 };
+                }
+                else if (colNumber === 11) {
+                    if (variance > 0) {
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+                        cell.font = { color: { argb: 'FF006100' }, bold: true, size: 9 };
+                    }
+                    else if (variance < 0) {
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
+                        cell.font = { color: { argb: 'FF9C0006' }, bold: true, size: 9 };
+                    }
+                }
+                else if (colNumber >= 20 && cell.value !== '-') {
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+                    cell.font = { color: { argb: 'FF375623' }, bold: true, size: 9 };
+                }
+            });
+        });
+        sheet.getColumn(1).width = 12;
+        sheet.getColumn(2).width = 8;
+        sheet.getColumn(4).width = 15;
+        sheet.getColumn(5).width = 15;
+        sheet.getColumn(6).width = 15;
+        for (let i = 20; i <= 20 + itemCodes.length; i++) {
+            sheet.getColumn(i).width = 15;
+        }
+        sheet.views = [{ state: 'frozen', xSplit: 6, ySplit: 3 }];
+        const demandSheet = workbook.addWorksheet('Demand Plan');
+        demandSheet.columns = [
+            { header: 'SO Number', key: 'so', width: 15 },
+            { header: 'Grade', key: 'grade', width: 10 },
+            { header: 'Item Code', key: 'code', width: 15 },
+            { header: 'Item Description', key: 'desc', width: 40 },
+            { header: 'Type', key: 'type', width: 12 },
+            { header: 'Qty (KG)', key: 'qty', width: 15 },
+            { header: 'Ship Date', key: 'ship', width: 15 },
+            { header: 'Planned Prod', key: 'planned', width: 15 },
+            { header: 'Finished Prod', key: 'finished', width: 15 },
+            { header: 'Method', key: 'method', width: 12 }
+        ];
+        const dHeaderRow = demandSheet.getRow(1);
+        dHeaderRow.height = 30;
+        dHeaderRow.eachCell((cell) => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F81BD' } };
+            cell.font = { color: { argb: 'FFFFFFFF' }, bold: true, size: 11 };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        });
+        const sortedOrders = [...orders].sort((a, b) => {
+            const dateA = new Date(a.plannedProductionDate).getTime();
+            const dateB = new Date(b.plannedProductionDate).getTime();
+            if (dateA !== dateB)
+                return dateA - dateB;
+            return (a.soNumber || '').localeCompare(b.soNumber || '');
+        });
+        sortedOrders.forEach((o, idx) => {
+            const row = demandSheet.addRow({
+                so: o.soNumber,
+                grade: gradeMap.get(o.soNumber) || '-',
+                code: o.itemCode,
+                desc: specMap.get(o.itemCode) || o.itemDesc || '-',
+                type: o.productType?.toUpperCase(),
+                qty: Math.round(Number(o.quantityKg)),
+                ship: new Date(o.shipDate).toLocaleDateString('en-GB'),
+                planned: new Date(o.plannedProductionDate).toLocaleDateString('en-GB'),
+                finished: o.finishedProductionDate ? new Date(o.finishedProductionDate).toLocaleDateString('en-GB') : '-',
+                method: o.isManualOverride ? 'Manual' : 'Auto'
+            });
+            row.eachCell((cell, colNum) => {
+                cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+                cell.font = { size: 10 };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                if (colNum === 4)
+                    cell.alignment.horizontal = 'left';
+                if (idx % 2 === 1) {
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F9F9' } };
+                }
+            });
+            const typeCell = row.getCell(5);
+            if (o.productType?.toLowerCase() === 'chilled') {
+                typeCell.font = { color: { argb: 'FFC0504D' }, bold: true, size: 10 };
+            }
+            else {
+                typeCell.font = { color: { argb: 'FF4F81BD' }, bold: true, size: 10 };
+            }
+        });
+        demandSheet.views = [{ state: 'frozen', ySplit: 1 }];
+        const exceptionSheet = workbook.addWorksheet('Unfulfilled Orders');
+        exceptionSheet.columns = [
+            { header: 'SO Number', key: 'so', width: 15 },
+            { header: 'Item Code', key: 'code', width: 15 },
+            { header: 'Item Description', key: 'desc', width: 40 },
+            { header: 'Ship Date', key: 'ship', width: 15 },
+            { header: 'Required Qty', key: 'req', width: 15 },
+            { header: 'Shortage Qty', key: 'short', width: 15 },
+            { header: 'Reason', key: 'reason', width: 50 }
+        ];
+        const exHeaderRow = exceptionSheet.getRow(1);
+        exHeaderRow.height = 30;
+        exHeaderRow.eachCell((cell) => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0504D' } };
+            cell.font = { color: { argb: 'FFFFFFFF' }, bold: true, size: 11 };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        });
+        plan.exceptions.sort((a, b) => new Date(a.shipDate).getTime() - new Date(b.shipDate).getTime()).forEach((ex, idx) => {
+            const row = exceptionSheet.addRow({
+                so: ex.soNumber,
+                code: ex.itemCode,
+                desc: itemDescMap.get(ex.itemCode) || '-',
+                ship: new Date(ex.shipDate).toLocaleDateString('en-GB'),
+                req: Math.round(Number(ex.requiredKg)),
+                short: Math.round(Number(ex.shortageKg)),
+                reason: ex.reason
+            });
+            row.eachCell((cell, colNum) => {
+                cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+                cell.font = { size: 10 };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                if (colNum === 3 || colNum === 7)
+                    cell.alignment.horizontal = 'left';
+                if (idx % 2 === 1) {
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F9F9' } };
+                }
+            });
+            row.getCell(6).font = { color: { argb: 'FFC0504D' }, bold: true, size: 10 };
+        });
+        exceptionSheet.views = [{ state: 'frozen', ySplit: 1 }];
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=MPS_Plan_${plan.targetMonth}.xlsx`);
+        await workbook.xlsx.write(res);
+        res.end();
+    }
 };
 exports.MpsController = MpsController;
 __decorate([
@@ -784,6 +1129,14 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], MpsController.prototype, "updatePriorities", null);
+__decorate([
+    (0, common_1.Get)('plans/:id/export'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", Promise)
+], MpsController.prototype, "exportPlan", null);
 exports.MpsController = MpsController = __decorate([
     (0, common_1.Controller)('api/mps'),
     __param(0, (0, typeorm_1.InjectRepository)(stg_erp_order_line_entity_1.StgErpOrderLine)),
@@ -796,7 +1149,11 @@ exports.MpsController = MpsController = __decorate([
     __param(7, (0, typeorm_1.InjectRepository)(weight_distribution_entity_1.WeightDistribution)),
     __param(8, (0, typeorm_1.InjectRepository)(mps_exception_entity_1.MpsExceptionReport)),
     __param(9, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletSizeCalc)),
+    __param(10, (0, typeorm_1.InjectRepository)(manual_operation_entity_1.ManualOperation)),
+    __param(11, (0, typeorm_1.InjectRepository)(stg_erp_item_entity_1.StgErpItem)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

@@ -24,6 +24,7 @@ let StgErpOrderHeader = class StgErpOrderHeader {
     erpCreationDate;
     erpLastUpdateDate;
     erpOrderStatus;
+    isManual;
 };
 exports.StgErpOrderHeader = StgErpOrderHeader;
 __decorate([
@@ -74,6 +75,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'erp_order_status', type: 'varchar', length: 50, nullable: true }),
     __metadata("design:type", String)
 ], StgErpOrderHeader.prototype, "erpOrderStatus", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'is_manual', type: 'bit', default: false }),
+    __metadata("design:type", Boolean)
+], StgErpOrderHeader.prototype, "isManual", void 0);
 exports.StgErpOrderHeader = StgErpOrderHeader = __decorate([
     (0, typeorm_1.Entity)('stg_erp_order_headers')
 ], StgErpOrderHeader);

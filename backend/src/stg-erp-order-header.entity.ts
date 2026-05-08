@@ -37,4 +37,7 @@ export class StgErpOrderHeader {
 
   @Column({ name: 'erp_order_status', type: 'varchar', length: 50, nullable: true })
   erpOrderStatus: string;
+
+  @Column({ name: 'is_manual', type: 'bit', default: false })
+  isManual: boolean;
 }

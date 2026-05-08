@@ -11,4 +11,5 @@ export declare class StgErpOrderHeader {
     erpCreationDate: Date;
     erpLastUpdateDate: Date;
     erpOrderStatus: string;
+    isManual: boolean;
 }

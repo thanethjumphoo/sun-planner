@@ -93,12 +93,8 @@ export class OracleIntegrationService implements OnModuleDestroy {
     try {
       conn = await this.connect();
 
-      // สร้าง Bind Variables แบบไดนามิก สำหรับคำสั่ง IN (...)
-      // เช่น :code0, :code1, :code2
-      const bindNames = itemCodes.map((_, i) => `:code${i}`).join(', ');
-
       const savedItems = [];
-      const chunkSize = 1000;
+      const chunkSize = 990;
 
       for (let i = 0; i < itemCodes.length; i += chunkSize) {
         const chunk = itemCodes.slice(i, i + chunkSize);
@@ -161,6 +157,13 @@ export class OracleIntegrationService implements OnModuleDestroy {
       console.error('Error syncing items:', err);
       throw err;
     }
+  }
+
+  /**
+   * ดึงข้อมูล Item ทั้งหมดจาก Local DB
+   */
+  async getLocalItems(): Promise<StgErpItem[]> {
+    return this.stgErpItemRepository.find({ order: { erpItemCode: 'ASC' } });
   }
 
   /**
@@ -261,8 +264,8 @@ export class OracleIntegrationService implements OnModuleDestroy {
       const savedLines = [];
 
       // Oracle has a limit of 1000 items in an IN clause. 
-      // We chunk the headerIds into groups of 1000.
-      const chunkSize = 1000;
+      // We chunk the headerIds into groups of 990 to be safe.
+      const chunkSize = 990;
       for (let i = 0; i < headerIds.length; i += chunkSize) {
         const chunk = headerIds.slice(i, i + chunkSize);
         const bindNames = chunk.map((_, idx) => `:hid${idx}`).join(', ');
@@ -337,6 +340,122 @@ export class OracleIntegrationService implements OnModuleDestroy {
     return this.stgErpOrderLineRepository.find({
       order: { erpOrderHeaderId: 'DESC', erpOrderLineNumber: 'ASC' },
     });
+  }
+
+  /**
+   * บันทึกรายการ Order แบบ Manual (IVQF, YTR, etc.)
+   */
+  async saveManualOrder(data: {
+    erpOrderNumber: string;
+    erpOrderType: string;
+    erpCustomerName: string;
+    erpOrderDate: string;
+    lines: {
+      erpOrderItemCode: string;
+      erpOrderItemQty: number;
+      erpOrderShipDate: string;
+    }[];
+  }): Promise<any> {
+    // 1. Create Header
+    const header = this.stgErpOrderHeaderRepository.create({
+      erpOrderNumber: data.erpOrderNumber,
+      erpOrderType: data.erpOrderType,
+      erpCustomerName: data.erpCustomerName,
+      erpOrderDate: new Date(data.erpOrderDate),
+      erpOrderStatus: 'BOOKED',
+      erpOrgId: 82,
+      isManual: true,
+      erpCreationDate: new Date(),
+      erpLastUpdateDate: new Date(),
+    });
+
+    const savedHeader = await this.stgErpOrderHeaderRepository.save(header);
+
+    // Use a high offset for manual header IDs to avoid collision with Oracle IDs
+    savedHeader.erpOrderHeaderId = 900000000 + savedHeader.id;
+    await this.stgErpOrderHeaderRepository.save(savedHeader);
+
+    // 2. Create Lines
+    const savedLines = [];
+    for (let i = 0; i < data.lines.length; i++) {
+      const lineData = data.lines[i];
+      let line = this.stgErpOrderLineRepository.create({
+        erpOrderHeaderId: savedHeader.erpOrderHeaderId,
+        erpOrgId: 82,
+        erpOrderLineNumber: String(i + 1),
+        erpOrderItemCode: lineData.erpOrderItemCode,
+        erpOrderItemQty: lineData.erpOrderItemQty,
+        erpOrderItemUom: 'KG', // Default
+        erpOrderShipDate: new Date(lineData.erpOrderShipDate),
+        erpOrderStatus: 'BOOKED',
+        isManual: true,
+        erpCreationDate: new Date(),
+        erpLastUpdateDate: new Date(),
+      });
+      line = await this.stgErpOrderLineRepository.save(line);
+      line.erpOrderLineId = 900000000 + line.id;
+      await this.stgErpOrderLineRepository.save(line);
+      savedLines.push(line);
+    }
+
+    return { ...savedHeader, lines: savedLines };
+  }
+
+  /**
+   * แก้ไขรายการ Order แบบ Manual
+   */
+  async updateManualOrder(id: number, data: any): Promise<any> {
+    const header = await this.stgErpOrderHeaderRepository.findOne({ where: { id, isManual: true } });
+    if (!header) throw new Error('Order not found');
+
+    header.erpOrderNumber = data.erpOrderNumber;
+    header.erpOrderType = data.erpOrderType;
+    header.erpCustomerName = data.erpCustomerName;
+    header.erpOrderDate = new Date(data.erpOrderDate);
+    header.erpLastUpdateDate = new Date();
+    await this.stgErpOrderHeaderRepository.save(header);
+
+    // ลบ Lines เก่าทิ้งแล้วลงใหม่
+    await this.stgErpOrderLineRepository.delete({ erpOrderHeaderId: header.erpOrderHeaderId });
+
+    const savedLines = [];
+    for (let i = 0; i < data.lines.length; i++) {
+      const lineData = data.lines[i];
+      let line = this.stgErpOrderLineRepository.create({
+        erpOrderHeaderId: header.erpOrderHeaderId,
+        erpOrgId: 82,
+        erpOrderLineNumber: String(i + 1),
+        erpOrderItemCode: lineData.erpOrderItemCode,
+        erpOrderItemQty: lineData.erpOrderItemQty,
+        erpOrderItemUom: 'KG',
+        erpOrderShipDate: new Date(lineData.erpOrderShipDate),
+        erpOrderStatus: 'BOOKED',
+        isManual: true,
+        erpCreationDate: new Date(),
+        erpLastUpdateDate: new Date(),
+      });
+      line = await this.stgErpOrderLineRepository.save(line);
+      line.erpOrderLineId = 900000000 + line.id;
+      await this.stgErpOrderLineRepository.save(line);
+      savedLines.push(line);
+    }
+
+    return { ...header, lines: savedLines };
+  }
+
+  /**
+   * ลบรายการ Order แบบ Manual
+   */
+  async deleteManualOrder(headerId: number): Promise<any> {
+    const header = await this.stgErpOrderHeaderRepository.findOne({ where: { id: headerId, isManual: true } });
+    if (!header) throw new Error('Order not found or not a manual order');
+
+    // Delete lines first
+    await this.stgErpOrderLineRepository.delete({ erpOrderHeaderId: header.erpOrderHeaderId });
+    // Delete header
+    await this.stgErpOrderHeaderRepository.delete(header.id);
+
+    return { success: true };
   }
 
   /**

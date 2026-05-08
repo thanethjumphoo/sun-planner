@@ -26,12 +26,17 @@ let ProductSpecController = class ProductSpecController {
         this.stgItemRepo = stgItemRepo;
     }
     async getErpItems(search) {
-        const where = {};
         if (search) {
-            where.erpItemCode = (0, typeorm_2.Like)(`%${search}%`);
+            const items = await this.stgItemRepo.find({
+                where: [
+                    { erpItemCode: (0, typeorm_2.Like)(`%${search}%`) },
+                    { erpItemDesc: (0, typeorm_2.Like)(`%${search}%`) }
+                ],
+                order: { erpItemCode: 'ASC' },
+            });
+            return items;
         }
         const items = await this.stgItemRepo.find({
-            where,
             order: { erpItemCode: 'ASC' },
         });
         return items;
@@ -40,7 +45,16 @@ let ProductSpecController = class ProductSpecController {
         const specs = await this.productSpecRepo.find({
             order: { erpItemCode: 'ASC' },
         });
-        return specs;
+        const items = await this.stgItemRepo.find();
+        const itemMap = new Map();
+        items.forEach(i => {
+            if (i.erpItemCode)
+                itemMap.set(i.erpItemCode, i.erpItemDesc);
+        });
+        return specs.map(spec => ({
+            ...spec,
+            erpItemDesc: spec.erpItemDesc || itemMap.get(spec.erpItemCode) || '-'
+        }));
     }
     async getOne(id) {
         return this.productSpecRepo.findOne({ where: { id } });
@@ -52,10 +66,16 @@ let ProductSpecController = class ProductSpecController {
         if (existing) {
             return { success: false, message: 'Product spec already exists for this item code' };
         }
+        let desc = body.erpItemDesc;
+        if (!desc || desc === '-') {
+            const erpItem = await this.stgItemRepo.findOne({ where: { erpItemCode: body.erpItemCode } });
+            if (erpItem)
+                desc = erpItem.erpItemDesc;
+        }
         const spec = this.productSpecRepo.create({
             erpItemId: body.erpItemId,
             erpItemCode: body.erpItemCode,
-            erpItemDesc: body.erpItemDesc,
+            erpItemDesc: desc,
             erpItemType: body.erpItemType,
             productType: body.productType,
             productSize: body.productSize,
@@ -97,10 +117,16 @@ let ProductSpecController = class ProductSpecController {
                 results.push({ itemCode: item.erpItemCode, status: 'skipped', message: 'Already exists' });
                 continue;
             }
+            let desc = item.erpItemDesc;
+            if (!desc || desc === '-') {
+                const erpItem = await this.stgItemRepo.findOne({ where: { erpItemCode: item.erpItemCode } });
+                if (erpItem)
+                    desc = erpItem.erpItemDesc;
+            }
             const spec = this.productSpecRepo.create({
                 erpItemId: item.erpItemId,
                 erpItemCode: item.erpItemCode,
-                erpItemDesc: item.erpItemDesc,
+                erpItemDesc: desc,
                 erpItemType: item.erpItemType,
                 productType: body.productType,
                 productSize: body.productSize,

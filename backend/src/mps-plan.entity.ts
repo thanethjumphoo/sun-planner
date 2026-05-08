@@ -8,7 +8,7 @@ export class MpsPlan {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ name: 'plan_name', type: 'varchar', length: 100 })
+  @Column({ name: 'plan_name', type: 'nvarchar', length: 100, nullable: true })
   planName: string; // เช่น "MPS May 2026 - V1"
 
   @Column({ name: 'target_month', type: 'varchar', length: 7 })
@@ -98,7 +98,7 @@ export class MpsPlanOrder {
   @Column({ name: 'item_code', type: 'varchar', length: 100 })
   itemCode: string;
 
-  @Column({ name: 'item_desc', type: 'varchar', length: 255 })
+  @Column({ name: 'item_desc', type: 'nvarchar', length: 255, nullable: true })
   itemDesc: string;
 
   @Column({ name: 'product_type', type: 'varchar', length: 50 })
@@ -114,6 +114,10 @@ export class MpsPlanOrder {
   // วันที่ระบบ/คนจัดสรรให้ผลิต (Planned Production Date)
   @Column({ name: 'planned_production_date', type: 'date' })
   plannedProductionDate: Date;
+
+  // วันที่ผลิตเสร็จ (Finished Production Date)
+  @Column({ name: 'finished_production_date', type: 'date', nullable: true })
+  finishedProductionDate: Date;
 
   @Column({ name: 'is_manual_override', type: 'bit', default: 0 })
   isManualOverride: boolean; // ให้รู้ว่าอันนี้คนลากย้ายเอง ไม่ได้มาจากการ Auto

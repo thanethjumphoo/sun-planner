@@ -6,7 +6,21 @@ export declare class ProductSpecController {
     private stgItemRepo;
     constructor(productSpecRepo: Repository<ProductSpec>, stgItemRepo: Repository<StgErpItem>);
     getErpItems(search?: string): Promise<StgErpItem[]>;
-    getAll(): Promise<ProductSpec[]>;
+    getAll(): Promise<{
+        erpItemDesc: string;
+        id: number;
+        erpItemId: number;
+        erpItemCode: string;
+        erpItemType: string;
+        productType: string;
+        productSize: string;
+        productYield: number;
+        productWeight: number;
+        productSpeed: number;
+        productLead: number;
+        createdAt: Date;
+        updatedAt: Date;
+    }[]>;
     getOne(id: number): Promise<ProductSpec | null>;
     create(body: {
         erpItemId: number;

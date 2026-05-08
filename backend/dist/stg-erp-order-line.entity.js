@@ -26,7 +26,9 @@ let StgErpOrderLine = class StgErpOrderLine {
     erpLastUpdateDate;
     erpOrderStatus;
     plannedProductionDate;
+    finishedProductionDate;
     priority;
+    isManual;
 };
 exports.StgErpOrderLine = StgErpOrderLine;
 __decorate([
@@ -86,9 +88,17 @@ __decorate([
     __metadata("design:type", Date)
 ], StgErpOrderLine.prototype, "plannedProductionDate", void 0);
 __decorate([
+    (0, typeorm_1.Column)({ name: 'finished_production_date', type: 'datetime', nullable: true }),
+    __metadata("design:type", Date)
+], StgErpOrderLine.prototype, "finishedProductionDate", void 0);
+__decorate([
     (0, typeorm_1.Column)({ name: 'priority', type: 'int', nullable: true, default: null }),
     __metadata("design:type", Number)
 ], StgErpOrderLine.prototype, "priority", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'is_manual', type: 'bit', default: false }),
+    __metadata("design:type", Boolean)
+], StgErpOrderLine.prototype, "isManual", void 0);
 exports.StgErpOrderLine = StgErpOrderLine = __decorate([
     (0, typeorm_1.Entity)('stg_erp_order_lines')
 ], StgErpOrderLine);

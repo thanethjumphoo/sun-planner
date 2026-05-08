@@ -36,5 +36,6 @@ export declare class MpsPlanOrder {
     quantityKg: number;
     shipDate: Date;
     plannedProductionDate: Date;
+    finishedProductionDate: Date;
     isManualOverride: boolean;
 }

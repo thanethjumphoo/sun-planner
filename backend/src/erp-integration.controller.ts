@@ -12,6 +12,11 @@ export class ErpIntegrationController {
     private oracleService: OracleIntegrationService,
   ) {}
 
+  @Get('items')
+  async getItems() {
+    return this.oracleService.getLocalItems();
+  }
+
   // Get all target item codes
   @Get('target-items')
   async getTargetItems() {
@@ -84,5 +89,23 @@ export class ErpIntegrationController {
   @Get('demand-orders')
   async getDemandOrders() {
     return this.oracleService.getDemandOrders();
+  }
+
+  // Create manual demand order
+  @Post('manual-order')
+  async createManualOrder(@Body() body: any) {
+    return this.oracleService.saveManualOrder(body);
+  }
+
+  // Update manual demand order
+  @Post('manual-order/:id')
+  async updateManualOrder(@Param('id') id: number, @Body() body: any) {
+    return this.oracleService.updateManualOrder(id, body);
+  }
+
+  // Delete manual demand order
+  @Delete('manual-order/:id')
+  async deleteManualOrder(@Param('id') id: number) {
+    return this.oracleService.deleteManualOrder(id);
   }
 }

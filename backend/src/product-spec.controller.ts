@@ -16,13 +16,19 @@ export class ProductSpecController {
   // ─── Get all ERP items from stg_erp_items (for selection) ───
   @Get('erp-items')
   async getErpItems(@Query('search') search?: string) {
-    const where: any = {};
     if (search) {
-      // Search by item code or description
-      where.erpItemCode = Like(`%${search}%`);
+      // Search by item code or description using OR
+      const items = await this.stgItemRepo.find({
+        where: [
+          { erpItemCode: Like(`%${search}%`) },
+          { erpItemDesc: Like(`%${search}%`) }
+        ],
+        order: { erpItemCode: 'ASC' },
+      });
+      return items;
     }
+    
     const items = await this.stgItemRepo.find({
-      where,
       order: { erpItemCode: 'ASC' },
     });
     return items;
@@ -34,7 +40,18 @@ export class ProductSpecController {
     const specs = await this.productSpecRepo.find({
       order: { erpItemCode: 'ASC' },
     });
-    return specs;
+
+    // Enrich description from StgErpItem if missing
+    const items = await this.stgItemRepo.find();
+    const itemMap = new Map<string, string>();
+    items.forEach(i => {
+      if (i.erpItemCode) itemMap.set(i.erpItemCode, i.erpItemDesc);
+    });
+
+    return specs.map(spec => ({
+      ...spec,
+      erpItemDesc: spec.erpItemDesc || itemMap.get(spec.erpItemCode) || '-'
+    }));
   }
 
   // ─── Get single product spec by id ───
@@ -65,10 +82,17 @@ export class ProductSpecController {
       return { success: false, message: 'Product spec already exists for this item code' };
     }
 
+    // Fetch description from StgErpItem if body one is missing
+    let desc = body.erpItemDesc;
+    if (!desc || desc === '-') {
+      const erpItem = await this.stgItemRepo.findOne({ where: { erpItemCode: body.erpItemCode } });
+      if (erpItem) desc = erpItem.erpItemDesc;
+    }
+
     const spec = this.productSpecRepo.create({
       erpItemId: body.erpItemId,
       erpItemCode: body.erpItemCode,
-      erpItemDesc: body.erpItemDesc,
+      erpItemDesc: desc,
       erpItemType: body.erpItemType,
       productType: body.productType,
       productSize: body.productSize,
@@ -135,10 +159,17 @@ export class ProductSpecController {
         continue;
       }
 
+      // Fetch description from StgErpItem if missing
+      let desc = item.erpItemDesc;
+      if (!desc || desc === '-') {
+        const erpItem = await this.stgItemRepo.findOne({ where: { erpItemCode: item.erpItemCode } });
+        if (erpItem) desc = erpItem.erpItemDesc;
+      }
+
       const spec = this.productSpecRepo.create({
         erpItemId: item.erpItemId,
         erpItemCode: item.erpItemCode,
-        erpItemDesc: item.erpItemDesc,
+        erpItemDesc: desc,
         erpItemType: item.erpItemType,
         productType: body.productType,
         productSize: body.productSize,

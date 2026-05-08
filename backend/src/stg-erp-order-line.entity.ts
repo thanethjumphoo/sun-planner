@@ -45,7 +45,13 @@ export class StgErpOrderLine {
   @Column({ name: 'planned_production_date', type: 'datetime', nullable: true })
   plannedProductionDate: Date;
 
+  @Column({ name: 'finished_production_date', type: 'datetime', nullable: true })
+  finishedProductionDate: Date;
+
   // Priority: lower number = higher priority (1 = highest)
   @Column({ name: 'priority', type: 'int', nullable: true, default: null })
   priority: number;
+
+  @Column({ name: 'is_manual', type: 'bit', default: false })
+  isManual: boolean;
 }

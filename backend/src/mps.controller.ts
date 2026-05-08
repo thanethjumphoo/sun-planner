@@ -1,4 +1,6 @@
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Res } from '@nestjs/common';
+import * as express from 'express';
+import * as ExcelJS from 'exceljs';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
 import { StgErpOrderLine } from './stg-erp-order-line.entity';
@@ -10,6 +12,8 @@ import { WeightDistribution } from './weight-distribution.entity';
 import { FilletSizeCalc } from './fillet-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
+import { ManualOperation } from './manual-operation.entity';
+import { StgErpItem } from './stg-erp-item.entity';
 
 @Controller('api/mps')
 export class MpsController {
@@ -34,6 +38,10 @@ export class MpsController {
     private exceptionRepo: Repository<MpsExceptionReport>,
     @InjectRepository(FilletSizeCalc)
     private filletSizeRepo: Repository<FilletSizeCalc>,
+    @InjectRepository(ManualOperation)
+    private manualOpRepo: Repository<ManualOperation>,
+    @InjectRepository(StgErpItem)
+    private itemRepo: Repository<StgErpItem>,
     private chickenReceivingService: ChickenReceivingService,
   ) { }
 
@@ -73,12 +81,19 @@ export class MpsController {
             quantityKg: body.splitQty,
             shipDate: planOrder.shipDate,
             plannedProductionDate: new Date(body.date),
+            finishedProductionDate: planOrder.productType === 'chilled'
+              ? new Date(body.date)
+              : new Date(new Date(body.date).getTime() + 4 * 24 * 60 * 60 * 1000),
             isManualOverride: true
           });
           await this.mpsOrderRepo.save(splitOrder);
         } else {
           // Move whole order
-          planOrder.plannedProductionDate = new Date(body.date);
+          const newDate = new Date(body.date);
+          planOrder.plannedProductionDate = newDate;
+          planOrder.finishedProductionDate = planOrder.productType === 'chilled'
+            ? newDate
+            : new Date(newDate.getTime() + 4 * 24 * 60 * 60 * 1000);
           planOrder.isManualOverride = true; // Mark as manually overridden
           await this.mpsOrderRepo.save(planOrder);
         }
@@ -90,14 +105,22 @@ export class MpsController {
         where: { mpsPlan: { id: body.planId }, erpOrderLineId: body.lineId }
       });
       if (planOrder) {
-        planOrder.plannedProductionDate = new Date(body.date);
+        const newDate = new Date(body.date);
+        planOrder.plannedProductionDate = newDate;
+        planOrder.finishedProductionDate = planOrder.productType === 'chilled'
+          ? newDate
+          : new Date(newDate.getTime() + 4 * 24 * 60 * 60 * 1000);
         planOrder.isManualOverride = true;
         await this.mpsOrderRepo.save(planOrder);
 
         // Optionally update the source order line as well
         const line = await this.orderLineRepo.findOne({ where: { erpOrderLineId: body.lineId } });
         if (line) {
-          line.plannedProductionDate = new Date(body.date);
+          const newDate = new Date(body.date);
+          line.plannedProductionDate = newDate;
+          line.finishedProductionDate = planOrder.productType === 'chilled'
+            ? newDate
+            : new Date(newDate.getTime() + 4 * 24 * 60 * 60 * 1000);
           await this.orderLineRepo.save(line);
         }
 
@@ -108,7 +131,11 @@ export class MpsController {
     // Fallback to original logic if planId is not provided
     const line = await this.orderLineRepo.findOne({ where: { erpOrderLineId: body.lineId } });
     if (line) {
-      line.plannedProductionDate = new Date(body.date);
+      const newDate = new Date(body.date);
+      line.plannedProductionDate = newDate;
+      // We don't have spec here, but we can try to guess or just use plannedDate
+      // For fallback, let's just use plannedDate for now or search spec
+      line.finishedProductionDate = newDate;
       await this.orderLineRepo.save(line);
       return { success: true };
     }
@@ -146,6 +173,9 @@ export class MpsController {
 
       // Normally we would check supply here. For now, we allocate to the ideal date.
       line.plannedProductionDate = plannedDate;
+      line.finishedProductionDate = type === 'chilled'
+        ? plannedDate
+        : new Date(plannedDate.getTime() + 4 * 24 * 60 * 60 * 1000);
       await this.orderLineRepo.save(line);
       allocatedCount++;
     }
@@ -252,8 +282,8 @@ export class MpsController {
       if (d) {
         const intakeKg = Number(intake.chicken_weight || 0);
         // Formula matching the previous system mapping logic
-        // Formula: Slaughtered Weight * 4% (Fillet Yield) * 90%
-        const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * 0.9;
+        // Formula: Slaughtered Weight * 4% (Fillet Yield) * 90.7% (to match Net Fillet after 9.3% Grade B)
+        const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * 0.907;
         supplyMap.set(d, (supplyMap.get(d) || 0) + rmFlAvailKg);
       }
     });
@@ -347,11 +377,12 @@ export class MpsController {
               erpOrderLineId: order.erpOrderLineId,
               soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
               itemCode: order.erpOrderItemCode,
-              itemDesc: order.erpOrderItemCode,
+              itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
               productType: order.productType,
               quantityKg: allocQty,
               shipDate: order.shipDate,
               plannedProductionDate: d,
+              finishedProductionDate: d,
               isManualOverride: false
             }));
             supplyMap.set(dateStr, supply - allocQty);
@@ -561,11 +592,12 @@ export class MpsController {
             erpOrderLineId: order.erpOrderLineId,
             soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
             itemCode: order.erpOrderItemCode,
-            itemDesc: order.erpOrderItemCode,
+            itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
             productType: order.productType,
             quantityKg: allocQty,
             shipDate: order.shipDate,
             plannedProductionDate: dateObj,
+            finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
             isManualOverride: false
           }));
 
@@ -638,7 +670,7 @@ export class MpsController {
         if (d === dayStr) {
           intakeBirds += Number(intake.chicken_count || 0);
           const intakeKg = Number(intake.chicken_weight || 0);
-          originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * 0.9;
+          originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * 0.907;
         }
       });
 
@@ -722,7 +754,7 @@ export class MpsController {
           if (pct <= 0) return;
 
           // สูตร: Slaughtered Weight * 4% (Fillet Yield) * % ใน Cell * 90%
-          const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.9);
+          const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.907);
 
           // หา Group จากการชน colLabel กับตาราง fillet_size_calc
           const groupName = filletMap.get(row.colLabel);
@@ -855,5 +887,343 @@ export class MpsController {
 
     return { success: true, updated: body.priorities.length };
   }
-}
 
+  // 11. Export MPS Plan to Excel (Date-Major Matrix Format)
+  @Get('plans/:id/export')
+  async exportPlan(@Param('id') id: number, @Res() res: express.Response) {
+    const plan = await this.mpsPlanRepo.findOne({
+      where: { id },
+      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown']
+    });
+
+    if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
+
+    const orders = await this.mpsOrderRepo.find({
+      where: { mpsPlan: { id: plan.id } },
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Fillet MPS Plan');
+
+    // Fetch Order Headers for Customer Grade mapping
+    const headers = await this.orderHeaderRepo.find();
+    const gradeMap = new Map();
+    headers.forEach(h => {
+      if (h.erpOrderNumber) gradeMap.set(h.erpOrderNumber, h.erpCustomerGrade);
+    });
+
+    // 1. Prepare Data Structures
+    const dailyMap = new Map();
+    plan.dailySummaries.sort((a, b) => new Date(a.productionDate).getTime() - new Date(b.productionDate).getTime()).forEach(d => {
+      dailyMap.set(new Date(d.productionDate).toISOString().split('T')[0], { summary: d, orders: new Map(), supply: null });
+    });
+
+    // Add supply breakdown to the map
+    plan.supplyBreakdown.forEach(s => {
+      const dateKey = new Date(s.productionDate).toISOString().split('T')[0];
+      if (dailyMap.has(dateKey)) {
+        dailyMap.get(dateKey).supply = s;
+      }
+    });
+
+    // Fetch Manual Operations (Actual Staff)
+    const [year, month] = plan.targetMonth.split('-').map(Number);
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0);
+    const manualOps = await this.manualOpRepo.find({
+      where: {
+        productionDate: Between(startDate, endDate)
+      }
+    });
+    const manualOpMap = new Map();
+    manualOps.forEach(op => {
+      const dateKey = new Date(op.productionDate).toISOString().split('T')[0];
+      manualOpMap.set(dateKey, op);
+    });
+
+    // Get mapping of Item Code -> Item Desc (Pull from StgErpItem to ensure correct ERP_ITEM_DESC is used)
+    const erpItems = await this.itemRepo.find();
+    const itemDescMap = new Map();
+    erpItems.forEach(i => {
+      if (i.erpItemCode) itemDescMap.set(i.erpItemCode, i.erpItemDesc);
+    });
+
+    const specs = await this.specRepo.find();
+    const specMap = new Map();
+    specs.forEach(s => specMap.set(s.erpItemCode, itemDescMap.get(s.erpItemCode) || s.erpItemDesc));
+
+    const itemMap = new Map();
+    orders.forEach(o => itemMap.set(o.itemCode, specMap.get(o.itemCode) || o.itemDesc));
+    const itemCodes = Array.from(itemMap.keys()).sort();
+
+    // Group orders by date and item
+    orders.forEach(o => {
+      const dateKey = new Date(o.plannedProductionDate).toISOString().split('T')[0];
+      if (dailyMap.has(dateKey)) {
+        const d = dailyMap.get(dateKey);
+        d.orders.set(o.itemCode, (d.orders.get(o.itemCode) || 0) + o.quantityKg);
+      }
+    });
+
+    const dates = Array.from(dailyMap.keys());
+
+    // 2. Setup Headers
+    // Row 1: Section Headers
+    const sectionRow = sheet.addRow([]);
+    sectionRow.getCell(1).value = 'Supply Control';
+    sheet.mergeCells(1, 1, 1, 6);
+    sectionRow.getCell(7).value = 'Manpower & Execution';
+    sheet.mergeCells(1, 7, 1, 11);
+    sectionRow.getCell(12).value = 'RM FL by Size';
+    sheet.mergeCells(1, 12, 1, 19);
+    sectionRow.getCell(20).value = 'Production Plan';
+    sheet.mergeCells(1, 20, 1, 20 + itemCodes.length - 1);
+
+    // Style Section Headers
+    [
+      { start: 1, end: 6, color: 'FF4472C4' },
+      { start: 7, end: 11, color: 'FF70AD47' },
+      { start: 12, end: 19, color: 'FFED7D31' },
+      { start: 20, end: 20 + itemCodes.length - 1, color: 'FF7030A0' }
+    ].forEach(sec => {
+      for (let i = sec.start; i <= sec.end; i++) {
+        const cell = sectionRow.getCell(i);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sec.color } };
+        cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
+        cell.alignment = { horizontal: 'center' };
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      }
+    });
+
+    // Row 2: Item Descriptions Header
+    const descRowData = new Array(19).fill('');
+    itemCodes.forEach(code => descRowData.push(itemMap.get(code) || ''));
+    const descRow = sheet.addRow(descRowData);
+    descRow.eachCell((cell, colNumber) => {
+      if (colNumber >= 20) {
+        cell.font = { bold: true, size: 8 };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+        cell.alignment = { horizontal: 'center', wrapText: true };
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      }
+    });
+    descRow.height = 30;
+
+    // Row 3: Sub-Headers
+    const subHeaders = [
+      'Date', 'Day', 'Avg. Wt', 'RM FL Total', 'RM Used (Demand)', 'RM Balance',
+      'Cut (P)', 'Sup (P)', 'Cut (A)', 'Sup (A)', 'Variance',
+      '40 down', '40 45', '45 50', '50 55', '55 60', '60 65', '65 70', '70 up',
+      ...itemCodes
+    ];
+    const headerRow = sheet.addRow(subHeaders);
+    headerRow.eachCell((cell, colNumber) => {
+      cell.font = { bold: true, size: 9 };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+
+    // 3. Add Data Rows
+    dates.forEach(dateStr => {
+      const d = dailyMap.get(dateStr);
+      const s = d.summary;
+      const supply = d.supply;
+      const dateObj = new Date(dateStr);
+      const isNoSupply = !s.intakeBirds || s.intakeBirds === 0;
+
+      const manualOp = manualOpMap.get(dateStr);
+      const actualCut = manualOp?.actualCuttingWorkers || 0;
+      const actualSup = manualOp?.actualStationWorkers || 0;
+      const plannedCut = s.cuttingStaff;
+      const plannedSup = manualOp?.plannedStationWorkers || s.supportStaff;
+      const variance = (actualCut + actualSup) - (plannedCut + plannedSup);
+
+      const rowData = [
+        dateStr,
+        dateObj.toLocaleDateString('en-US', { weekday: 'short' }),
+        supply?.avgWeight || '-',
+        Math.round(s.rmFlAvailKg),
+        Math.round(s.demandKg),
+        Math.round(s.rmFlAvailKg - s.demandKg),
+        plannedCut,
+        plannedSup,
+        actualCut,
+        actualSup,
+        variance,
+        Math.round(supply?.size40Down || 0),
+        Math.round(supply?.size40_45 || 0),
+        Math.round(supply?.size45_50 || 0),
+        Math.round(supply?.size50_55 || 0),
+        Math.round(supply?.size55_60 || 0),
+        Math.round(supply?.size60_65 || 0),
+        Math.round(supply?.size65_70 || 0),
+        Math.round(supply?.size70_up || 0),
+        ...itemCodes.map(code => d.orders.has(code) ? Math.round(d.orders.get(code)) : '-')
+      ];
+
+      const r = sheet.addRow(rowData);
+      r.eachCell((cell, colNumber) => {
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        cell.font = { size: 9 };
+
+        if (isNoSupply) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEDED' } };
+          cell.font = { color: { argb: 'FF999999' }, size: 9 };
+        } else if (colNumber === 11) { // Variance column
+          if (variance > 0) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+            cell.font = { color: { argb: 'FF006100' }, bold: true, size: 9 };
+          } else if (variance < 0) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
+            cell.font = { color: { argb: 'FF9C0006' }, bold: true, size: 9 };
+          }
+        } else if (colNumber >= 20 && cell.value !== '-') {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+          cell.font = { color: { argb: 'FF375623' }, bold: true, size: 9 };
+        }
+      });
+    });
+
+    // 4. Formatting
+    sheet.getColumn(1).width = 12;
+    sheet.getColumn(2).width = 8;
+    sheet.getColumn(4).width = 15;
+    sheet.getColumn(5).width = 15;
+    sheet.getColumn(6).width = 15;
+    for (let i = 20; i <= 20 + itemCodes.length; i++) {
+      sheet.getColumn(i).width = 15;
+    }
+    sheet.views = [{ state: 'frozen', xSplit: 6, ySplit: 3 }];
+
+    // 5. Sheet 2: Demand Plan (Detailed View)
+    const demandSheet = workbook.addWorksheet('Demand Plan');
+
+    // Setup Columns
+    demandSheet.columns = [
+      { header: 'SO Number', key: 'so', width: 15 },
+      { header: 'Grade', key: 'grade', width: 10 },
+      { header: 'Item Code', key: 'code', width: 15 },
+      { header: 'Item Description', key: 'desc', width: 40 },
+      { header: 'Type', key: 'type', width: 12 },
+      { header: 'Qty (KG)', key: 'qty', width: 15 },
+      { header: 'Ship Date', key: 'ship', width: 15 },
+      { header: 'Planned Prod', key: 'planned', width: 15 },
+      { header: 'Finished Prod', key: 'finished', width: 15 },
+      { header: 'Method', key: 'method', width: 12 }
+    ];
+
+    // Style Header Row
+    const dHeaderRow = demandSheet.getRow(1);
+    dHeaderRow.height = 30;
+    dHeaderRow.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F81BD' } };
+      cell.font = { color: { argb: 'FFFFFFFF' }, bold: true, size: 11 };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+
+    // Add Data
+    const sortedOrders = [...orders].sort((a, b) => {
+      const dateA = new Date(a.plannedProductionDate).getTime();
+      const dateB = new Date(b.plannedProductionDate).getTime();
+      if (dateA !== dateB) return dateA - dateB;
+      return (a.soNumber || '').localeCompare(b.soNumber || '');
+    });
+
+    sortedOrders.forEach((o, idx) => {
+      const row = demandSheet.addRow({
+        so: o.soNumber,
+        grade: gradeMap.get(o.soNumber) || '-',
+        code: o.itemCode,
+        desc: specMap.get(o.itemCode) || o.itemDesc || '-',
+        type: o.productType?.toUpperCase(),
+        qty: Math.round(Number(o.quantityKg)),
+        ship: new Date(o.shipDate).toLocaleDateString('en-GB'),
+        planned: new Date(o.plannedProductionDate).toLocaleDateString('en-GB'),
+        finished: o.finishedProductionDate ? new Date(o.finishedProductionDate).toLocaleDateString('en-GB') : '-',
+        method: o.isManualOverride ? 'Manual' : 'Auto'
+      });
+
+      // Styling for data rows
+      row.eachCell((cell, colNum) => {
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        cell.font = { size: 10 };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        if (colNum === 4) cell.alignment.horizontal = 'left'; // Item Desc
+        if (idx % 2 === 1) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F9F9' } };
+        }
+      });
+
+      // Special color for types
+      const typeCell = row.getCell(5);
+      if (o.productType?.toLowerCase() === 'chilled') {
+        typeCell.font = { color: { argb: 'FFC0504D' }, bold: true, size: 10 };
+      } else {
+        typeCell.font = { color: { argb: 'FF4F81BD' }, bold: true, size: 10 };
+      }
+    });
+
+    // Freeze Header
+    demandSheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+    // 6. Sheet 3: Unfulfilled Orders
+    const exceptionSheet = workbook.addWorksheet('Unfulfilled Orders');
+    exceptionSheet.columns = [
+      { header: 'SO Number', key: 'so', width: 15 },
+      { header: 'Item Code', key: 'code', width: 15 },
+      { header: 'Item Description', key: 'desc', width: 40 },
+      { header: 'Ship Date', key: 'ship', width: 15 },
+      { header: 'Required Qty', key: 'req', width: 15 },
+      { header: 'Shortage Qty', key: 'short', width: 15 },
+      { header: 'Reason', key: 'reason', width: 50 }
+    ];
+
+    // Style Header Row
+    const exHeaderRow = exceptionSheet.getRow(1);
+    exHeaderRow.height = 30;
+    exHeaderRow.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0504D' } }; // Red header for exceptions
+      cell.font = { color: { argb: 'FFFFFFFF' }, bold: true, size: 11 };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+
+    // Add Data
+    plan.exceptions.sort((a, b) => new Date(a.shipDate).getTime() - new Date(b.shipDate).getTime()).forEach((ex, idx) => {
+      const row = exceptionSheet.addRow({
+        so: ex.soNumber,
+        code: ex.itemCode,
+        desc: itemDescMap.get(ex.itemCode) || '-',
+        ship: new Date(ex.shipDate).toLocaleDateString('en-GB'),
+        req: Math.round(Number(ex.requiredKg)),
+        short: Math.round(Number(ex.shortageKg)),
+        reason: ex.reason
+      });
+
+      // Styling for data rows
+      row.eachCell((cell, colNum) => {
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        cell.font = { size: 10 };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        if (colNum === 3 || colNum === 7) cell.alignment.horizontal = 'left'; // Item Desc & Reason
+        if (idx % 2 === 1) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F9F9' } };
+        }
+      });
+
+      // Highlight shortage qty
+      row.getCell(6).font = { color: { argb: 'FFC0504D' }, bold: true, size: 10 };
+    });
+
+    // Freeze Header
+    exceptionSheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=MPS_Plan_${plan.targetMonth}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  }
+}

@@ -12,7 +12,7 @@ export class ProductSpec {
   @Column({ name: 'ERP_ITEM_CODE', type: 'varchar', length: 100, unique: true })
   erpItemCode: string;
 
-  @Column({ name: 'ERP_ITEM_DESC', type: 'varchar', length: 255, nullable: true })
+  @Column({ name: 'ERP_ITEM_DESC', type: 'nvarchar', length: 255, nullable: true })
   erpItemDesc: string;
 
   @Column({ name: 'ERP_ITEM_TYPE', type: 'varchar', length: 50, nullable: true })

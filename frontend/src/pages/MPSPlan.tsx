@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Calendar, Package, Users, Activity, Scale, Move, ChevronLeft, ChevronRight, Filter, FileText, Trash2, CalendarDays, ShoppingCart, X, Info, CheckCircle2, Lock, Unlock, ShieldCheck } from 'lucide-react';
+import { Calendar, Package, Users, Activity, Scale, Move, ChevronLeft, ChevronRight, Filter, FileText, Trash2, CalendarDays, ShoppingCart, X, Info, CheckCircle2, Lock, Unlock, ShieldCheck, Download, FileSpreadsheet, AlertTriangle } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const API = import.meta.env.VITE_API_URL;
@@ -246,6 +246,10 @@ const MPSPlan: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleExportExcel = (id: number) => {
+    window.open(`${API}/api/mps/plans/${id}/export`, '_blank');
   };
 
   // --- Calendar Helpers ---
@@ -515,7 +519,7 @@ const MPSPlan: React.FC = () => {
       const bCompleteCount = b.plannedLines.filter((l: any) => l.isFull).length;
       const aTotal = a.plannedLines.length;
       const bTotal = b.plannedLines.length;
-      
+
       // Sort by completion ratio
       return (bCompleteCount / bTotal) - (aCompleteCount / aTotal);
     });
@@ -615,6 +619,36 @@ const MPSPlan: React.FC = () => {
                 <StatCard label="Avg. Daily Manpower" value={avgManpower.toString()} unit="People" icon={Users} color="purple" />
               </div>
 
+              <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-orange-100 rounded-xl flex items-center justify-center text-orange-600">
+                    <FileSpreadsheet size={20} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-gray-900">{currentPlan.planName}</h3>
+                    <p className="text-xs text-gray-500">Plan Status: <span className={`font-bold ${currentPlan.status === 'APPROVED' ? 'text-emerald-600' : 'text-amber-600'}`}>{currentPlan.status}</span></p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => handleExportExcel(currentPlan.id)}
+                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm shadow-emerald-200"
+                  >
+                    <Download size={16} />
+                    Export MPS Report (Excel)
+                  </button>
+                  {currentPlan.status === 'DRAFT' && (
+                    <button 
+                      onClick={() => handleApprovePlan(currentPlan.id)}
+                      className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm shadow-orange-200"
+                    >
+                      <CheckCircle2 size={16} />
+                      Approve & Lock Plan
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {currentPlan?.status === 'APPROVED' && (
                 <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-4 shadow-sm flex items-center gap-3">
                   <Lock className="text-emerald-500 flex-shrink-0" />
@@ -676,7 +710,7 @@ const MPSPlan: React.FC = () => {
                         onDragOver={handleDragOver}
                         onDrop={(e) => handleDrop(e, date)}
                         className={`min-h-[180px] border-r border-b border-gray-100 p-2 flex flex-col gap-2 transition-colors
-                      ${isToday ? 'bg-orange-50/30' : 'bg-white hover:bg-gray-50'}
+                      ${isToday ? 'bg-orange-50/30' : (Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) !== 0 ? 'bg-red-100' : 'bg-white hover:bg-gray-50')}
                       ${metrics.supplyBreakdown ? 'cursor-pointer hover:shadow-md' : ''}
                     `}
                         onClick={() => {
@@ -693,9 +727,17 @@ const MPSPlan: React.FC = () => {
                             {dayNum}
                           </span>
                           {metrics.intake > 0 && (
-                            <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
-                              🐔 {metrics.intake.toLocaleString()}
-                            </span>
+                            <div className="flex flex-col items-end gap-1">
+                              <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                🐔 {metrics.intake.toLocaleString()}
+                              </span>
+                              {metrics.intake > 0 && (
+                                <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase ${Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) !== 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                  {Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) < 0 ? <AlertTriangle size={10} /> : (Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) > 0 ? <Info size={10} /> : <CheckCircle2 size={10} />)}
+                                  {Math.abs(Math.round(metrics.rmFlAvailable - metrics.totalOrderQty)).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
 
@@ -736,8 +778,15 @@ const MPSPlan: React.FC = () => {
 
                             <div className="flex justify-between items-center">
                               <span className="text-slate-500 font-bold uppercase tracking-tighter">Demand Plan</span>
-                              <span className={`font-black px-1.5 py-0.5 rounded shadow-sm ${metrics.totalOrderQty > metrics.rmFlAvailable ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                              <span className={`font-black px-1.5 py-0.5 rounded shadow-sm ${Math.round(metrics.totalOrderQty) > Math.round(metrics.rmFlAvailable) ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
                                 {Math.round(metrics.totalOrderQty).toLocaleString()} <span className="opacity-50">kg</span>
+                              </span>
+                            </div>
+
+                            <div className="flex justify-between items-center pt-1 mt-1 border-t border-slate-200/50">
+                              <span className="text-slate-400 font-bold uppercase tracking-tighter text-[9px]">RM Balance</span>
+                              <span className={`font-black px-1.5 py-0.5 rounded shadow-sm ${Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) !== 0 ? 'bg-red-500 text-white' : 'bg-emerald-100 text-emerald-700'}`}>
+                                {(Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) + 0).toLocaleString()} <span className="opacity-50">kg</span>
                               </span>
                             </div>
                             <div className="flex justify-between items-center pt-1.5 border-t border-slate-200/50">
@@ -854,6 +903,13 @@ const MPSPlan: React.FC = () => {
                                 <CheckCircle2 size={16} />
                               </button>
                               <button
+                                onClick={() => handleExportExcel(p.id)}
+                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Export to Excel"
+                              >
+                                <Download size={16} />
+                              </button>
+                              <button
                                 onClick={() => handleDeletePlan(p.id)}
                                 className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                                 title="Delete Plan"
@@ -862,14 +918,23 @@ const MPSPlan: React.FC = () => {
                               </button>
                             </>
                           ) : p.status === 'APPROVED' ? (
-                            <button
-                              onClick={() => handleRejectPlan(p.id)}
-                              className="px-3 py-1.5 text-xs font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors inline-flex items-center gap-1"
-                              title="Reject Plan (revert to DRAFT)"
-                            >
-                              <Unlock size={12} />
-                              Reject
-                            </button>
+                            <div className="flex items-center gap-1 justify-end">
+                              <button
+                                onClick={() => handleExportExcel(p.id)}
+                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Export to Excel"
+                              >
+                                <Download size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleRejectPlan(p.id)}
+                                className="px-3 py-1.5 text-xs font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors inline-flex items-center gap-1"
+                                title="Reject Plan (revert to DRAFT)"
+                              >
+                                <Unlock size={12} />
+                                Reject
+                              </button>
+                            </div>
                           ) : (
                             <button
                               onClick={() => handleDeletePlan(p.id)}
@@ -984,8 +1049,9 @@ const MPSPlan: React.FC = () => {
                             <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Item Code</th>
                             <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Description</th>
                             <th className="px-3 py-2 text-right font-semibold text-gray-600 border-b w-28">Qty (kg)</th>
-                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Ship Date</th>
                             <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Planned Date</th>
+                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Finished Date</th>
+                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Ship Date</th>
                             <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Production</th>
                           </tr>
                         </thead>
@@ -1013,15 +1079,22 @@ const MPSPlan: React.FC = () => {
                                 <td className="px-3 py-2 font-medium text-gray-800">{line.erpOrderItemCode}</td>
                                 <td className="px-3 py-2 text-gray-600 truncate max-w-[200px]" title={line.erpItemDesc}>{line.erpItemDesc || '-'}</td>
                                 <td className="px-3 py-2 text-right font-bold text-blue-700">{Number(line.erpOrderItemQty).toLocaleString()}</td>
-                                <td className="px-3 py-2 text-center text-gray-600 text-xs">
-                                  {new Date(line.erpOrderShipDate).toLocaleDateString()}
-                                </td>
                                 <td className="px-3 py-2 text-center text-xs">
                                   {plannedDate ? (
-                                    <span className="text-emerald-700 font-bold">{new Date(plannedDate).toLocaleDateString()}</span>
+                                    <span className="text-gray-700 font-bold">{new Date(plannedDate).toLocaleDateString()}</span>
                                   ) : (
                                     <span className="text-gray-400">-</span>
                                   )}
+                                </td>
+                                <td className="px-3 py-2 text-center text-xs">
+                                  {line.planned.length > 0 && line.planned[0].finishedProductionDate ? (
+                                    <span className="text-blue-700 font-bold">{new Date(line.planned[0].finishedProductionDate).toLocaleDateString()}</span>
+                                  ) : (
+                                    <span className="text-gray-400">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center text-emerald-700 text-xs font-bold">
+                                  {new Date(line.erpOrderShipDate).toLocaleDateString()}
                                 </td>
                                 <td className="px-3 py-2 text-center">
                                   {isFull ? (
@@ -1074,7 +1147,7 @@ const MPSPlan: React.FC = () => {
               <div className="space-y-5">
                 {section2Unfulfilled.map((header: any) => {
                   const exceptions = currentPlan?.exceptions || [];
-                  
+
                   return (
                     <div key={header.erpOrderHeaderId} className="border border-red-100 rounded-xl overflow-hidden shadow-sm">
                       {/* SO Header */}

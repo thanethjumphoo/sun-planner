@@ -40,7 +40,7 @@ __decorate([
     __metadata("design:type", String)
 ], ProductSpec.prototype, "erpItemCode", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'ERP_ITEM_DESC', type: 'varchar', length: 255, nullable: true }),
+    (0, typeorm_1.Column)({ name: 'ERP_ITEM_DESC', type: 'nvarchar', length: 255, nullable: true }),
     __metadata("design:type", String)
 ], ProductSpec.prototype, "erpItemDesc", void 0);
 __decorate([

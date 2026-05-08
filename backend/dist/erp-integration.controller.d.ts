@@ -5,6 +5,7 @@ export declare class ErpIntegrationController {
     private targetItemRepo;
     private oracleService;
     constructor(targetItemRepo: Repository<TargetSyncItem>, oracleService: OracleIntegrationService);
+    getItems(): Promise<import("./stg-erp-item.entity").StgErpItem[]>;
     getTargetItems(): Promise<string[]>;
     addTargetItems(body: {
         itemCodes: string[];
@@ -38,4 +39,7 @@ export declare class ErpIntegrationController {
     }>;
     getOrderLines(): Promise<import("./stg-erp-order-line.entity").StgErpOrderLine[]>;
     getDemandOrders(): Promise<any[]>;
+    createManualOrder(body: any): Promise<any>;
+    updateManualOrder(id: number, body: any): Promise<any>;
+    deleteManualOrder(id: number): Promise<any>;
 }

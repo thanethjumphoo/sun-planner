@@ -33,7 +33,7 @@ __decorate([
     __metadata("design:type", Number)
 ], MpsPlan.prototype, "id", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'plan_name', type: 'varchar', length: 100 }),
+    (0, typeorm_1.Column)({ name: 'plan_name', type: 'nvarchar', length: 100, nullable: true }),
     __metadata("design:type", String)
 ], MpsPlan.prototype, "planName", void 0);
 __decorate([
@@ -146,6 +146,7 @@ let MpsPlanOrder = class MpsPlanOrder {
     quantityKg;
     shipDate;
     plannedProductionDate;
+    finishedProductionDate;
     isManualOverride;
 };
 exports.MpsPlanOrder = MpsPlanOrder;
@@ -171,7 +172,7 @@ __decorate([
     __metadata("design:type", String)
 ], MpsPlanOrder.prototype, "itemCode", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'item_desc', type: 'varchar', length: 255 }),
+    (0, typeorm_1.Column)({ name: 'item_desc', type: 'nvarchar', length: 255, nullable: true }),
     __metadata("design:type", String)
 ], MpsPlanOrder.prototype, "itemDesc", void 0);
 __decorate([
@@ -190,6 +191,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'planned_production_date', type: 'date' }),
     __metadata("design:type", Date)
 ], MpsPlanOrder.prototype, "plannedProductionDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'finished_production_date', type: 'date', nullable: true }),
+    __metadata("design:type", Date)
+], MpsPlanOrder.prototype, "finishedProductionDate", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'is_manual_override', type: 'bit', default: 0 }),
     __metadata("design:type", Boolean)
