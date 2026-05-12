@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   Sun, Menu, LayoutDashboard, TrendingUp, CalendarDays,
   Truck, Activity, Users,
-  ClipboardList, Scale, RefreshCw
+  ClipboardList, Scale, RefreshCw, PieChart
 } from 'lucide-react';
 
 const menuGroups = [
@@ -17,7 +17,7 @@ const menuGroups = [
     label: "Planning",
     items: [
       { title: "MPS (Master Plan)", icon: CalendarDays, path: "/mps" },
-      /*{ title: "Yield & Allocation", icon: PieChart, path: "/yield-allocation" },*/
+      { title: "Master Yield", icon: PieChart, path: "/master-yield" },
       { title: "DPS (Daily Plan)", icon: Activity, path: "/dps" },
       { title: "Demand Management", icon: TrendingUp, path: "/demand-management" },
       { title: "Chicken Receiving", icon: Truck, path: "/chicken-receiving" }

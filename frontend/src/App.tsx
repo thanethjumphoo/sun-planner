@@ -9,6 +9,7 @@ import WeightDistribution from './pages/WeightDistribution';
 import MPSPlan from './pages/MPSPlan';
 import DPSPlan from './pages/DPSPlan';
 import ManualOperation from './pages/ManualOperation';
+import MasterYield from './pages/MasterYield';
 import MainLayout from './components/layout/MainLayout';
 function App() {
   return (
@@ -26,6 +27,7 @@ function App() {
           <Route path="/weight-distribution" element={<WeightDistribution />} />
           <Route path="/mps" element={<MPSPlan />} />
           <Route path="/dps" element={<DPSPlan />} />
+          <Route path="/master-yield" element={<MasterYield />} />
           <Route path="/manual-operation" element={<ManualOperation />} />
         </Route>
 

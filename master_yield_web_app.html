@@ -1,0 +1,333 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans); }
+.app { padding: 1.5rem; }
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 0.5px solid var(--color-border-tertiary); }
+.header-left { display: flex; align-items: center; gap: 12px; }
+.logo-mark { width: 36px; height: 36px; background: #1D9E75; border-radius: var(--border-radius-md); display: flex; align-items: center; justify-content: center; }
+.logo-mark i { color: #fff; font-size: 18px; }
+.header-title { font-size: 18px; font-weight: 500; color: var(--color-text-primary); }
+.header-sub { font-size: 12px; color: var(--color-text-secondary); margin-top: 2px; }
+.badge { background: #E1F5EE; color: #0F6E56; font-size: 11px; padding: 3px 10px; border-radius: 99px; font-weight: 500; }
+.tabs { display: flex; gap: 4px; margin-bottom: 1.5rem; background: var(--color-background-secondary); padding: 4px; border-radius: var(--border-radius-md); width: fit-content; }
+.tab { padding: 6px 16px; font-size: 13px; font-weight: 500; border-radius: 6px; cursor: pointer; border: none; background: transparent; color: var(--color-text-secondary); transition: all 0.15s; }
+.tab.active { background: var(--color-background-primary); color: var(--color-text-primary); border: 0.5px solid var(--color-border-secondary); }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 1.5rem; }
+.metric { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 1rem; }
+.metric-label { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.metric-value { font-size: 22px; font-weight: 500; color: var(--color-text-primary); }
+.metric-sub { font-size: 11px; color: var(--color-text-secondary); margin-top: 4px; }
+.tree-section { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1.25rem; margin-bottom: 1rem; }
+.tree-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.tree-title { font-size: 14px; font-weight: 500; color: var(--color-text-primary); display: flex; align-items: center; gap: 8px; }
+.tree-title i { font-size: 16px; color: #1D9E75; }
+.input-weight { display: flex; align-items: center; gap: 8px; }
+.input-weight label { font-size: 12px; color: var(--color-text-secondary); }
+.input-weight input { width: 80px; padding: 4px 8px; font-size: 13px; border: 0.5px solid var(--color-border-secondary); border-radius: 6px; background: var(--color-background-secondary); color: var(--color-text-primary); text-align: right; }
+.root-node { display: flex; align-items: center; justify-content: space-between; background: #E1F5EE; border: 0.5px solid #5DCAA5; border-radius: var(--border-radius-md); padding: 10px 14px; margin-bottom: 1rem; }
+.root-label { font-size: 14px; font-weight: 500; color: #085041; }
+.root-yield { font-size: 13px; color: #0F6E56; font-weight: 500; }
+.product-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.product-card { border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); overflow: hidden; }
+.product-card-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--color-background-secondary); cursor: pointer; user-select: none; }
+.product-card-header:hover { background: var(--color-background-tertiary); }
+.product-name { font-size: 13px; font-weight: 500; color: var(--color-text-primary); display: flex; align-items: center; gap: 6px; }
+.product-pct { font-size: 12px; color: var(--color-text-secondary); display: flex; align-items: center; gap: 8px; }
+.pct-badge { font-weight: 500; color: #0F6E56; background: #E1F5EE; padding: 1px 7px; border-radius: 99px; font-size: 11px; }
+.amt-badge { font-weight: 500; color: var(--color-text-primary); font-size: 12px; }
+.chevron { font-size: 14px; color: var(--color-text-secondary); transition: transform 0.2s; }
+.chevron.open { transform: rotate(180deg); }
+.sub-items { display: none; padding: 8px 12px; border-top: 0.5px solid var(--color-border-tertiary); }
+.sub-items.open { display: block; }
+.mode-tabs-sm { display: flex; gap: 4px; margin-bottom: 8px; }
+.mode-tab { padding: 3px 10px; font-size: 11px; border: 0.5px solid var(--color-border-secondary); border-radius: 99px; cursor: pointer; background: transparent; color: var(--color-text-secondary); }
+.mode-tab.active { background: #E1F5EE; color: #0F6E56; border-color: #5DCAA5; }
+.sub-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; border-bottom: 0.5px solid var(--color-border-tertiary); }
+.sub-row:last-child { border-bottom: none; }
+.sub-name { font-size: 12px; color: var(--color-text-primary); }
+.sub-pct { font-size: 11px; color: var(--color-text-secondary); }
+.sub-amt { font-size: 12px; font-weight: 500; color: var(--color-text-primary); }
+.bar-container { height: 4px; background: var(--color-border-tertiary); border-radius: 99px; flex: 1; margin: 0 8px; }
+.bar-fill { height: 100%; border-radius: 99px; background: #1D9E75; }
+.search-bar { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: var(--color-background-secondary); border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); margin-bottom: 1rem; }
+.search-bar i { font-size: 16px; color: var(--color-text-secondary); }
+.search-bar input { border: none; background: transparent; font-size: 13px; color: var(--color-text-primary); outline: none; flex: 1; }
+.table-view { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table-view th { text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 500; color: var(--color-text-secondary); border-bottom: 0.5px solid var(--color-border-tertiary); text-transform: uppercase; letter-spacing: 0.05em; }
+.table-view td { padding: 8px 10px; border-bottom: 0.5px solid var(--color-border-tertiary); color: var(--color-text-primary); }
+.table-view tr:hover td { background: var(--color-background-secondary); }
+.cat-pill { font-size: 11px; padding: 2px 8px; border-radius: 99px; }
+.cat-ซาก { background: #E6F1FB; color: #185FA5; }
+.cat-เนื้อ { background: #EAF3DE; color: #3B6D11; }
+.cat-ปีก { background: #FAEEDA; color: #854F0B; }
+.cat-พลอยได้ { background: #FBEAF0; color: #993556; }
+.cat-โครง { background: #F1EFE8; color: #5F5E5A; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.section-label { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-secondary); margin-bottom: 8px; }
+</style>
+
+<div class="app">
+  <div class="header">
+    <div class="header-left">
+      <div class="logo-mark"><i class="ti ti-plant-2" aria-hidden="true"></i></div>
+      <div>
+        <div class="header-title">Master Yield</div>
+        <div class="header-sub">ระบบจัดการ Yield ผลิตภัณฑ์ไก่</div>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <span class="badge">อัปเดต 27 มิ.ย. 2023</span>
+      <button onclick="sendPrompt('ช่วยอธิบายโครงสร้าง Yield ของ Master Yield นี้ให้ฉันเข้าใจ')">ขอคำอธิบาย ↗</button>
+    </div>
+  </div>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="metric-label"><i class="ti ti-package" aria-hidden="true" style="font-size:14px;"></i> วัตถุดิบหลัก</div>
+      <div class="metric-value">ไก่เป็น</div>
+      <div class="metric-sub">100 กก. (ฐาน)</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label"><i class="ti ti-category" aria-hidden="true" style="font-size:14px;"></i> กลุ่มผลิตภัณฑ์</div>
+      <div class="metric-value">10</div>
+      <div class="metric-sub">กลุ่มหลัก</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label"><i class="ti ti-list" aria-hidden="true" style="font-size:14px;"></i> รายการทั้งหมด</div>
+      <div class="metric-value">55+</div>
+      <div class="metric-sub">ผลิตภัณฑ์ย่อย</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label"><i class="ti ti-percentage" aria-hidden="true" style="font-size:14px;"></i> Yield รวม</div>
+      <div class="metric-value">~98%</div>
+      <div class="metric-sub">ใช้ประโยชน์จากซาก</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('tree', this)"><i class="ti ti-hierarchy" style="font-size:13px; vertical-align:-2px; margin-right:4px;" aria-hidden="true"></i>Yield Tree</button>
+    <button class="tab" onclick="showTab('table', this)"><i class="ti ti-table" style="font-size:13px; vertical-align:-2px; margin-right:4px;" aria-hidden="true"></i>ตารางข้อมูล</button>
+    <button class="tab" onclick="showTab('calc', this)"><i class="ti ti-calculator" style="font-size:13px; vertical-align:-2px; margin-right:4px;" aria-hidden="true"></i>คำนวณ</button>
+  </div>
+
+  <div id="tab-tree" class="tab-content active">
+    <div class="tree-section">
+      <div class="root-node">
+        <div>
+          <div class="root-label">🐔 ไก่เป็น (Live Chicken)</div>
+          <div style="font-size:11px; color:#0F6E56; margin-top:2px;">วัตถุดิบตั้งต้น — Yield = 100%</div>
+        </div>
+        <div style="font-size:20px; font-weight:500; color:#085041;">100 กก.</div>
+      </div>
+
+      <div class="product-grid" id="productGrid"></div>
+    </div>
+  </div>
+
+  <div id="tab-table" class="tab-content">
+    <div class="search-bar">
+      <i class="ti ti-search" aria-hidden="true"></i>
+      <input type="text" placeholder="ค้นหาผลิตภัณฑ์..." id="searchInput" oninput="filterTable()">
+    </div>
+    <div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); overflow: hidden;">
+      <table class="table-view" id="dataTable">
+        <thead>
+          <tr>
+            <th>ผลิตภัณฑ์</th>
+            <th>กลุ่ม</th>
+            <th>% Yield (เทียบไก่เป็น)</th>
+            <th>ปริมาณ (กก.)</th>
+            <th>สัดส่วน</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="tab-calc" class="tab-content">
+    <div class="tree-section">
+      <div class="section-label">ป้อนน้ำหนักไก่เป็น</div>
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:1.5rem;">
+        <input type="number" id="calcInput" value="1000" min="1" style="width:140px; font-size:16px; padding: 8px 12px;" oninput="calcYields()">
+        <span style="font-size:14px; color:var(--color-text-secondary);">กิโลกรัม</span>
+      </div>
+      <div class="section-label">ผลลัพธ์ที่คาดการณ์</div>
+      <div style="display:grid; grid-template-columns: repeat(3,1fr); gap:10px;" id="calcResults"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const products = [
+  { name: 'ขนไก่', cat: 'ซาก', yieldPct: 0.075, amount: 7.5, modes: null },
+  { name: 'หัวไก่', cat: 'ซาก', yieldPct: 0.023, amount: 2.3, modes: null },
+  { name: 'เลือด', cat: 'ซาก', yieldPct: 0.05, amount: 5, modes: null },
+  { name: 'ขาไก่', cat: 'ซาก', yieldPct: 0.023, amount: 2.3, modes: null },
+  { name: 'สันใน', cat: 'เนื้อ', yieldPct: 0.04, amount: 4, modes: [
+    { id: 1, label: 'สันใน Unsize', items: [{n:'สันใน unsize',p:0.98,a:3.92},{n:'ลูกสันใน',p:0.008,a:0.032},{n:'เศษสันใน',p:0.012,a:0.048}] },
+    { id: 2, label: 'สันใน T/C', items: [{n:'สันใน T/C',p:0.92,a:3.68},{n:'เศษสันในติดเอ็น',p:0.08,a:0.32}] },
+    { id: 3, label: 'W/O Tendon', items: [{n:'สันใน W/O tendon',p:0.85,a:3.4},{n:'เศษสันในติดเอ็น',p:0.1,a:0.4},{n:'เศษสันใน',p:0.05,a:0.2}] }
+  ]},
+  { name: 'BIL L/C', cat: 'เนื้อ', yieldPct: 0.25, amount: 25, modes: [
+    { id: 1, label: 'BIL S/C', items: [{n:'BIL S/C',p:0.96,a:24},{n:'ข้อสั้น',p:0.04,a:1}] },
+    { id: 2, label: 'น่อง+สะโพก', items: [{n:'น่อง',p:0.4,a:10},{n:'สะโพก',p:0.55,a:13.75},{n:'ข้อสั้น',p:0.04,a:1},{n:'หนังติดมันเกรด A',p:0.01,a:0.25}] },
+    { id: 3, label: 'BL แผ่น', items: [{n:'BL แผ่น',p:0.745,a:18.625},{n:'หนังติดมันเกรด A',p:0.028,a:0.7},{n:'กระดูกน่องสะโพก',p:0.206,a:5.15},{n:'knee tendon',p:0.008,a:0.2}] }
+  ]},
+  { name: 'BB (อก)', cat: 'เนื้อ', yieldPct: 0.225, amount: 22.5, modes: [
+    { id: 1, label: 'BB อกคู่ตัดติ่ง', items: [{n:'BB อกคู่ตัดติ่ง',p:0.93,a:20.925},{n:'เศษ BB',p:0.02,a:0.45},{n:'ติ่ง BB',p:0.045,a:1.0125}] },
+    { id: 2, label: 'BB อกคู่ไม่ตัดติ่ง', items: [{n:'BB อกคู่ไม่ตัดติ่ง',p:0.975,a:21.9375},{n:'เศษ BB',p:0.02,a:0.45}] },
+    { id: 3, label: 'SBB อกคู่', items: [{n:'SBB อกคู่',p:0.83,a:18.675},{n:'SKIN BB',p:0.1,a:2.25},{n:'ติ่ง BB',p:0.045,a:1.0125}] },
+    { id: 4, label: 'SBB อกเดี่ยว', items: [{n:'SBB อกเดี่ยว',p:0.8,a:18},{n:'SKIN BB',p:0.1,a:2.25},{n:'ติ่ง BB',p:0.045,a:1.0125}] }
+  ]},
+  { name: '3JW (ปีก)', cat: 'ปีก', yieldPct: 0.076, amount: 7.6, modes: [
+    { id: 1, label: '2JW + WS', items: [{n:'2JW',p:0.48,a:3.648},{n:'WS',p:0.52,a:3.952}] },
+    { id: 2, label: 'MW + WING TIP + WS', items: [{n:'MW',p:0.36,a:2.736},{n:'WING TIP',p:0.12,a:0.912},{n:'WS',p:0.52,a:3.952}] }
+  ]},
+  { name: 'เครื่องในไก่', cat: 'พลอยได้', yieldPct: 0.058, amount: 5.8, modes: [
+    { id: 0, label: 'รายการ', items: [{n:'ตับไก่',p:0.27,a:1.566},{n:'หัวใจไก่',p:0.07,a:0.406},{n:'กึ๋นไก่',p:0.13,a:0.754},{n:'ดีไก่',p:0.02,a:0.116},{n:'ไส้ไก่',p:0.42,a:2.436},{n:'ม้ามไก่',p:0.0171,a:0.09918}] }
+  ]},
+  { name: 'โครงไก่', cat: 'โครง', yieldPct: 0.18, amount: 18, modes: [
+    { id: 0, label: 'รายการ', items: [{n:'เนื้อคอ',p:0.026,a:0.468},{n:'หนังคอ',p:0.1,a:1.8},{n:'เนื้อช่องท้อง',p:0.05,a:0.9},{n:'กระดูกอ่อน',p:0.0078,a:0.1404},{n:'บั้นท้าย',p:0.04,a:0.72},{n:'มันช่องท้อง',p:0.0014,a:0.0252},{n:'โครงเลาะ→CCM st.1',p:0.5,a:6.84},{n:'CCM st.2',p:0.25,a:3.42}] }
+  ]}
+];
+
+const catColors = { 'ซาก':'cat-ซาก','เนื้อ':'cat-เนื้อ','ปีก':'cat-ปีก','พลอยได้':'cat-พลอยได้','โครง':'cat-โครง' };
+const catIcons = { 'ซาก':'ti-feather','เนื้อ':'ti-meat','ปีก':'ti-wings','พลอยได้':'ti-heart','โครง':'ti-bone' };
+
+function buildTree() {
+  const grid = document.getElementById('productGrid');
+  grid.innerHTML = '';
+  products.forEach((p, i) => {
+    const card = document.createElement('div');
+    card.className = 'product-card';
+    const hasModes = p.modes && p.modes.length > 0;
+    const modeTabsHtml = hasModes && p.modes.length > 1 ? `<div class="mode-tabs-sm" id="modetabs-${i}">
+      ${p.modes.map(m => `<button class="mode-tab${m.id===(p.modes[0].id)?'':''}" onclick="switchMode(${i},${p.modes.indexOf(m)})">${m.label}</button>`).join('')}
+    </div>` : '';
+    const firstMode = hasModes ? p.modes[0] : null;
+    const subHtml = firstMode ? firstMode.items.map(it => `
+      <div class="sub-row">
+        <span class="sub-name">${it.n}</span>
+        <div class="bar-container"><div class="bar-fill" style="width:${Math.round(it.p*100)}%"></div></div>
+        <span class="sub-pct">${(it.p*100).toFixed(1)}%</span>
+        <span class="sub-amt" style="min-width:40px; text-align:right;">${it.a.toFixed(3).replace(/\.?0+$/,'')} กก.</span>
+      </div>`).join('') : '';
+    card.innerHTML = `
+      <div class="product-card-header" onclick="toggleCard(${i})">
+        <div class="product-name">
+          <i class="ti ${catIcons[p.cat]||'ti-package'}" aria-hidden="true" style="font-size:14px; color:#1D9E75;"></i>
+          ${p.name}
+        </div>
+        <div class="product-pct">
+          <span class="pct-badge">${(p.yieldPct*100).toFixed(1)}%</span>
+          <span class="amt-badge">${p.amount} กก.</span>
+          ${hasModes ? `<i class="ti ti-chevron-down chevron" id="chev-${i}" aria-hidden="true"></i>` : ''}
+        </div>
+      </div>
+      ${hasModes ? `<div class="sub-items" id="sub-${i}">
+        ${modeTabsHtml}
+        <div id="sublist-${i}">${subHtml}</div>
+      </div>` : ''}`;
+    grid.appendChild(card);
+    if (hasModes && p.modes.length > 1) {
+      setTimeout(() => {
+        const tabs = document.querySelectorAll(`#modetabs-${i} .mode-tab`);
+        if (tabs[0]) tabs[0].classList.add('active');
+      }, 0);
+    }
+  });
+}
+
+function toggleCard(i) {
+  const sub = document.getElementById(`sub-${i}`);
+  const chev = document.getElementById(`chev-${i}`);
+  if (!sub) return;
+  sub.classList.toggle('open');
+  if (chev) chev.classList.toggle('open');
+}
+
+function switchMode(pIdx, mIdx) {
+  const p = products[pIdx];
+  const mode = p.modes[mIdx];
+  const list = document.getElementById(`sublist-${pIdx}`);
+  list.innerHTML = mode.items.map(it => `
+    <div class="sub-row">
+      <span class="sub-name">${it.n}</span>
+      <div class="bar-container"><div class="bar-fill" style="width:${Math.round(it.p*100)}%"></div></div>
+      <span class="sub-pct">${(it.p*100).toFixed(1)}%</span>
+      <span class="sub-amt" style="min-width:40px; text-align:right;">${it.a.toFixed(3).replace(/\.?0+$/,'')} กก.</span>
+    </div>`).join('');
+  const tabs = document.querySelectorAll(`#modetabs-${pIdx} .mode-tab`);
+  tabs.forEach((t,idx) => t.classList.toggle('active', idx===mIdx));
+}
+
+function buildTable() {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '';
+  products.forEach(p => {
+    const tr = document.createElement('tr');
+    const barW = Math.round(p.yieldPct*100*4);
+    tr.innerHTML = `
+      <td style="font-weight:500;">${p.name}</td>
+      <td><span class="cat-pill ${catColors[p.cat]||''}">${p.cat}</span></td>
+      <td>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div class="bar-container" style="width:60px; flex:none;"><div class="bar-fill" style="width:${barW}px; max-width:100%;"></div></div>
+          <span>${(p.yieldPct*100).toFixed(1)}%</span>
+        </div>
+      </td>
+      <td>${p.amount.toFixed(2)} กก.</td>
+      <td>
+        <div style="background:var(--color-background-secondary); border-radius:4px; height:6px; width:80px; overflow:hidden;">
+          <div style="width:${Math.min(100, p.yieldPct*400)}%; height:100%; background:#1D9E75; border-radius:4px;"></div>
+        </div>
+      </td>`;
+    tbody.appendChild(tr);
+    if (p.modes) {
+      p.modes[0].items.forEach(it => {
+        const tr2 = document.createElement('tr');
+        tr2.style.opacity = '0.7';
+        tr2.innerHTML = `
+          <td style="padding-left:24px; font-size:12px; color:var(--color-text-secondary);">↳ ${it.n}</td>
+          <td><span class="cat-pill ${catColors[p.cat]||''}" style="opacity:0.6;">${p.cat}</span></td>
+          <td style="font-size:12px; color:var(--color-text-secondary);">${(it.p*100).toFixed(1)}% (เทียบหลัก)</td>
+          <td style="font-size:12px;">${it.a.toFixed(3)} กก.</td>
+          <td></td>`;
+        tbody.appendChild(tr2);
+      });
+    }
+  });
+}
+
+function filterTable() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  document.querySelectorAll('#tableBody tr').forEach(tr => {
+    tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function calcYields() {
+  const w = parseFloat(document.getElementById('calcInput').value) || 0;
+  const res = document.getElementById('calcResults');
+  res.innerHTML = products.map(p => `
+    <div class="metric" style="border: 0.5px solid var(--color-border-tertiary);">
+      <div class="metric-label"><i class="ti ${catIcons[p.cat]||'ti-package'}" aria-hidden="true" style="font-size:13px;"></i> ${p.name}</div>
+      <div class="metric-value">${(w * p.yieldPct).toFixed(1)}</div>
+      <div class="metric-sub">กก. (${(p.yieldPct*100).toFixed(1)}%)</div>
+    </div>`).join('');
+}
+
+function showTab(id, btn) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  btn.classList.add('active');
+  if (id === 'table') buildTable();
+  if (id === 'calc') calcYields();
+}
+
+buildTree();
+</script>
