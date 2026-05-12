@@ -79,6 +79,6 @@ export class ChickenReceivingService {
       )
     );
     const entities = repo.create(cleaned);
-    return await repo.save(entities);
+    return await repo.save(entities, { chunk: 100 });
   }
 }

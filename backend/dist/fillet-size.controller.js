@@ -27,27 +27,35 @@ let FilletSizeController = class FilletSizeController {
         this.calcRepo = calcRepo;
     }
     async getAll() {
-        const configs = await this.configRepo.find();
-        const groups = await this.groupRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } });
-        const calcs = await this.calcRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } });
-        const yieldConfig = configs.find(c => c.configKey === 'fillet_yield');
-        const filletYield = yieldConfig ? Number(yieldConfig.configValue) : 0.42;
-        return {
-            filletYield,
-            groups: groups.map(g => ({
-                id: g.id,
-                name: g.groupName,
-                sortOrder: g.sortOrder,
-            })),
-            calcs: calcs.map(c => ({
-                id: c.id,
-                colLabel: c.colLabel,
-                lbWeight: Number(c.lbWeight),
-                filletSize: c.filletSize,
-                groupName: c.groupName,
-                sortOrder: c.sortOrder,
-            })),
-        };
+        try {
+            const [configs, groups, calcs] = await Promise.all([
+                this.configRepo.find(),
+                this.groupRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } }),
+                this.calcRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } }),
+            ]);
+            const yieldConfig = configs.find(c => c.configKey === 'fillet_yield');
+            const filletYield = yieldConfig ? Number(yieldConfig.configValue) : 0.04;
+            return {
+                filletYield,
+                groups: groups.map(g => ({
+                    id: g.id,
+                    name: g.groupName,
+                    sortOrder: g.sortOrder,
+                })),
+                calcs: calcs.map(c => ({
+                    id: c.id,
+                    colLabel: c.colLabel,
+                    lbWeight: Number(c.lbWeight),
+                    filletSize: c.filletSize,
+                    groupName: c.groupName,
+                    sortOrder: c.sortOrder,
+                })),
+            };
+        }
+        catch (error) {
+            console.error('Error fetching fillet data:', error);
+            throw new Error('Failed to fetch fillet size data from database');
+        }
     }
     async saveYield(body) {
         let config = await this.configRepo.findOne({ where: { configKey: 'fillet_yield' } });

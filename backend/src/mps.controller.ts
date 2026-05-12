@@ -9,7 +9,7 @@ import { ProductSpec } from './product-spec.entity';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 import { WeightDistribution } from './weight-distribution.entity';
-import { FilletSizeCalc } from './fillet-size.entity';
+import { FilletSizeCalc, FilletConfig } from './fillet-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
 import { ManualOperation } from './manual-operation.entity';
@@ -38,6 +38,8 @@ export class MpsController {
     private exceptionRepo: Repository<MpsExceptionReport>,
     @InjectRepository(FilletSizeCalc)
     private filletSizeRepo: Repository<FilletSizeCalc>,
+    @InjectRepository(FilletConfig)
+    private filletConfigRepo: Repository<FilletConfig>,
     @InjectRepository(ManualOperation)
     private manualOpRepo: Repository<ManualOperation>,
     @InjectRepository(StgErpItem)
@@ -268,6 +270,10 @@ export class MpsController {
     };
 
     // Step 3: Fetch Supply (Chicken Receiving Month)
+    // Fetch Fillet Yield Config
+    const configRow = await this.filletConfigRepo.findOne({ where: { configKey: 'fillet_yield' } });
+    const filletYield = configRow ? Number(configRow.configValue) : 0.04;
+
     // We use monthly plan to represent the actual supply for continuous mapping
     const allIntakesRaw = await this.chickenReceivingService.findAll('monthly');
     // Filter to only this target month
@@ -282,8 +288,8 @@ export class MpsController {
       if (d) {
         const intakeKg = Number(intake.chicken_weight || 0);
         // Formula matching the previous system mapping logic
-        // Formula: Slaughtered Weight * 4% (Fillet Yield) * 90.7% (to match Net Fillet after 9.3% Grade B)
-        const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * 0.907;
+        // Formula: Slaughtered Weight * Fillet Yield * 90.7% (to match Net Fillet after 9.3% Grade B)
+        const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * filletYield * 0.907;
         supplyMap.set(d, (supplyMap.get(d) || 0) + rmFlAvailKg);
       }
     });
@@ -449,8 +455,8 @@ export class MpsController {
         const pct = Number(row.distValue || 0);
         if (pct <= 0) return;
 
-        // KG for this cell = Slaughtered * 4% * cell * 90%
-        const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.9);
+        // KG for this cell = Slaughtered * Fillet Yield * cell * 90%
+        const kg = Math.round(slaughteredWeight * filletYield * pct * 0.9);
 
         // Get group from manual assignment map
         const groupName = filletMap.get(row.colLabel);
@@ -637,9 +643,9 @@ export class MpsController {
     // 5g. Run allocation: Follow Priority Sort (Absolute)
     allocateFreeze(freezeOrders, true);
 
-    await this.mpsOrderRepo.save(mpsOrdersToSave, { chunk: 500 });
+    await this.mpsOrderRepo.save(mpsOrdersToSave, { chunk: 100 });
     if (exceptionsToSave.length > 0) {
-      await this.exceptionRepo.save(exceptionsToSave, { chunk: 500 });
+      await this.exceptionRepo.save(exceptionsToSave, { chunk: 100 });
     }
 
     // Step 6: Generate Daily Summaries for the Month
@@ -694,7 +700,7 @@ export class MpsController {
       }));
     }
 
-    await this.mpsDailyRepo.save(mpsDailiesToSave, { chunk: 500 });
+    await this.mpsDailyRepo.save(mpsDailiesToSave, { chunk: 100 });
 
     // Step 7: Generate Detailed Supply Breakdown (Size Distribution)
     const mpsSuppliesToSave: MpsPlanSupply[] = [];
@@ -753,8 +759,8 @@ export class MpsController {
           const pct = Number(row.distValue || 0);
           if (pct <= 0) return;
 
-          // สูตร: Slaughtered Weight * 4% (Fillet Yield) * % ใน Cell * 90%
-          const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.907);
+          // สูตร: Slaughtered Weight * Fillet Yield * % ใน Cell * 90.7%
+          const kg = Math.round(slaughteredWeight * filletYield * pct * 0.907);
 
           // หา Group จากการชน colLabel กับตาราง fillet_size_calc
           const groupName = filletMap.get(row.colLabel);
@@ -776,7 +782,7 @@ export class MpsController {
     }
 
     if (mpsSuppliesToSave.length > 0) {
-      await this.mpsSupplyRepo.save(mpsSuppliesToSave, { chunk: 500 });
+      await this.mpsSupplyRepo.save(mpsSuppliesToSave, { chunk: 100 });
     }
 
     plan.totalIntakeBirds = totalIntakeBirds;
@@ -865,10 +871,21 @@ export class MpsController {
   async getApprovedOrdersForDate(@Param('date') date: string) {
     const orders = await this.mpsOrderRepo.createQueryBuilder('order')
       .leftJoinAndSelect('order.mpsPlan', 'plan')
+      .leftJoin('stg_erp_order_lines', 'sol', 'sol.erp_order_line_id = order.erp_order_line_id')
+      .addSelect('sol.priority', 'priority')
       .where('plan.status = :status', { status: 'APPROVED' })
       .andWhere('order.planned_production_date = :date', { date })
-      .getMany();
-    return orders;
+      .getRawAndEntities();
+
+    // Merge priority into entities
+    const merged = orders.entities.map((order, idx) => {
+      return {
+        ...order,
+        priority: orders.raw[idx].priority
+      };
+    });
+    
+    return merged;
   }
 
   // 10. Update Order Priorities (Batch)

@@ -19,6 +19,7 @@ export declare class DpsSublot {
     sublotNumber: string;
     farmName: string;
     totalBirds: number;
+    shift: string;
     totalWeightKg: number;
     avgLiveWeight: number;
     coProductKg: number;

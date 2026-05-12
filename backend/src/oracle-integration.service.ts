@@ -298,11 +298,18 @@ export class OracleIntegrationService implements OnModuleDestroy {
         });
 
         const erpRows: any[] = result.rows || [];
+        const linesToSave = [];
+
+        // 1. Fetch existing lines in one go for this chunk to check existence
+        const erpLineIds = erpRows.map(r => r.ERP_ORDER_LINE_ID);
+        const existingLines = await this.stgErpOrderLineRepository.find({
+          where: erpLineIds.map(id => ({ erpOrderLineId: id, erpOrgId: 82 })) // Assuming Org 82
+        });
+        const lineMap = new Map(existingLines.map(l => [`${l.erpOrderLineId}_${l.erpOrgId}`, l]));
 
         for (const row of erpRows) {
-          let line = await this.stgErpOrderLineRepository.findOne({
-            where: { erpOrderLineId: row.ERP_ORDER_LINE_ID, erpOrgId: row.ERP_ORG_ID },
-          });
+          const key = `${row.ERP_ORDER_LINE_ID}_${row.ERP_ORG_ID}`;
+          let line = lineMap.get(key);
 
           if (!line) {
             line = this.stgErpOrderLineRepository.create();
@@ -321,8 +328,13 @@ export class OracleIntegrationService implements OnModuleDestroy {
           line.erpLastUpdateDate = row.ERP_LAST_UPDATE_DATE;
           line.erpOrderStatus = String(row.ERP_ORDER_STATUS ?? '');
 
-          const saved = await this.stgErpOrderLineRepository.save(line);
-          savedLines.push(saved);
+          linesToSave.push(line);
+        }
+
+        // 2. Bulk save for this chunk
+        if (linesToSave.length > 0) {
+          const saved = await this.stgErpOrderLineRepository.save(linesToSave, { chunk: 100 });
+          savedLines.push(...saved);
         }
       }
 

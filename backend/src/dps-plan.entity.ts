@@ -62,6 +62,9 @@ export class DpsSublot {
   @Column({ name: 'total_birds', type: 'int' })
   totalBirds: number;
 
+  @Column({ name: 'shift', type: 'varchar', length: 20, default: 'A' })
+  shift: string;
+
   @Column({ name: 'total_weight_kg', type: 'decimal', precision: 18, scale: 2 })
   totalWeightKg: number;
 

@@ -61,6 +61,7 @@ export class DpsController {
       const sublot = new DpsSublot();
       sublot.sublotNumber = sl.id;
       sublot.farmName = sl.farmName;
+      sublot.shift = sl.shift || 'A';
       sublot.totalBirds = Math.round(sl.totalBirds);
       sublot.totalWeightKg = Math.round(sl.totalWeightKg);
       sublot.avgLiveWeight = sl.avgLiveWeight;

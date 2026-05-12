@@ -42,13 +42,13 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 // Sample data for template per type
 const SAMPLE_DATA: Record<string, Record<string, string>> = {
   monthly: {
-    'Receive Date': '3/5/2026',
+    'Receive Date': '12/5/2026',
     'Chicken Type': 'ไก่เนื้อ',
     'Count (Birds)': '27355',
     'Weight (Kg)': '31390',
   },
   weekly: {
-    'Receive Date': '3/5/2026',
+    'Receive Date': '12/5/2026',
     'Receive Time': '3:50:00',
     'Chicken Type': 'ไก่เนื้อ',
     'Count (Birds)': '2970',
@@ -62,7 +62,7 @@ const SAMPLE_DATA: Record<string, Record<string, string>> = {
     'Batch': '01',
   },
   daily: {
-    'Receive Date': '3/5/2026',
+    'Receive Date': '12/5/2026',
     'Receive Time': '3:50:00',
     'Chicken Type': 'ไก่เนื้อ',
     'Count (Birds)': '2970',
@@ -126,26 +126,65 @@ export default function ImportModal({ isOpen, onClose, activeTab, onImportDone }
         const workbook = XLSX.read(data, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '', raw: false });
+        const jsonDataRaw = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '', raw: true });
+        const jsonDataFormatted = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '', raw: false });
 
         // Map Excel column labels to our keys
-        let parsed = jsonData.map((excelRow) => {
+        let parsed = jsonDataRaw.map((rawExcelRow, idx) => {
+          const formattedExcelRow = jsonDataFormatted[idx] || {};
           const row: Record<string, string> = {};
+          
           columns.forEach(col => {
-            const val = excelRow[col.label];
-            row[col.key] = val !== undefined && val !== null ? String(val).trim() : '';
+            const rawVal = rawExcelRow[col.label];
+            const formattedVal = formattedExcelRow[col.label];
+            
+            // If the library returns a number for date, it's an Excel serial date.
+            // We manually convert it using UTC to completely avoid any Timezone offset (-1 day) bugs.
+            if (col.key === 'receive_date' && typeof rawVal === 'number') {
+               const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+               const jsDate = new Date(excelEpoch.getTime() + rawVal * 86400000);
+               const d = String(jsDate.getUTCDate()).padStart(2, '0');
+               const m = String(jsDate.getUTCMonth() + 1).padStart(2, '0');
+               const y = jsDate.getUTCFullYear();
+               row[col.key] = `${y}-${m}-${d}`;
+            } else {
+               // Fallback to formatted text to preserve 'Receive Time' and other strings
+               row[col.key] = formattedVal !== undefined && formattedVal !== null ? String(formattedVal).trim() : '';
+            }
           });
           
           // Format date and time if present
-          if (row.receive_date && row.receive_date.includes('/')) {
-              const parts = row.receive_date.split('/');
-              if (parts.length === 3) {
-                 // Format: M/D/YYYY (month/day/year)
-                 const m = parts[0].padStart(2, '0');
-                 const d = parts[1].padStart(2, '0');
-                 let y = parts[2];
-                 if (y.length === 2) y = '20' + y;
-                 row.receive_date = `${y}-${m}-${d}`;
+          if (row.receive_date) {
+              const dateStr = String(row.receive_date).trim();
+              const separator = dateStr.includes('/') ? '/' : (dateStr.includes('-') ? '-' : null);
+              
+              if (separator) {
+                  const parts = dateStr.split(separator);
+                  if (parts.length === 3) {
+                      let d, m, y;
+                      
+                      if (parts[0].length === 4) {
+                          // Case: YYYY/MM/DD (International Standard)
+                          y = parts[0];
+                          m = parts[1];
+                          d = parts[2];
+                      } else {
+                          // Case: DD/MM/YYYY (User's Requirement)
+                          // We strictly map parts[0] to Day and parts[1] to Month
+                          d = parts[0];
+                          m = parts[1];
+                          y = parts[2];
+                          if (y.length === 2) y = '20' + y;
+                      }
+                      
+                      // Ensure double digits
+                      const finalDay = d.padStart(2, '0');
+                      const finalMonth = m.padStart(2, '0');
+                      const finalYear = y;
+                      
+                      // Final DB format: YYYY-MM-DD
+                      row.receive_date = `${finalYear}-${finalMonth}-${finalDay}`;
+                  }
               }
           }
           if (row.receive_time) {

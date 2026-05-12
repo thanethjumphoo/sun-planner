@@ -32,7 +32,7 @@ const WeightDistributionPage: React.FC = () => {
   const tableRef = useRef<HTMLDivElement>(null);
 
   // ─── Fillet Size state ───
-  const [filletYield, setFilletYield] = useState(0.42);
+  const [filletYield, setFilletYield] = useState(0.04);
   const [filletGroups, setFilletGroups] = useState<FilletGroup[]>([]);
   const [newGroupName, setNewGroupName] = useState('');
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
@@ -57,12 +57,12 @@ const WeightDistributionPage: React.FC = () => {
       }
       if (filletRes.ok) {
         const f = await filletRes.json();
-        setFilletYield(f.filletYield ?? 0.42);
+        setFilletYield(f.filletYield ?? 0.04);
         setFilletGroups((f.groups || []).map((g: any) => ({
           id: String(g.id),
           name: g.name
         })));
-        
+
         // Populate assignments from saved calcs
         const assignments: Record<string, string> = {};
         (f.calcs || []).forEach((c: any) => {
@@ -182,8 +182,8 @@ const WeightDistributionPage: React.FC = () => {
         {activeTab === 'weight' && (
           <button onClick={handleSave} disabled={saving || !dirty}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg transition-all ${dirty && !saving
-                ? 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white shadow-orange-200'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'}`}>
+              ? 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white shadow-orange-200'
+              : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'}`}>
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             บันทึกทั้งหมด
             {dirty && <span className="ml-1 px-1.5 py-0.5 bg-white/20 rounded text-[10px]">มีการแก้ไข</span>}
@@ -201,8 +201,8 @@ const WeightDistributionPage: React.FC = () => {
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
               className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold transition-all ${isActive
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
                 }`}
             >
               <Icon className="w-4 h-4" />
@@ -386,10 +386,10 @@ const WeightDistributionPage: React.FC = () => {
           if (!name) return;
           try {
             const method = 'POST';
-            const url = editingGroupId 
+            const url = editingGroupId
               ? `${API}/api/fillet-size/groups/${editingGroupId}`
               : `${API}/api/fillet-size/groups`;
-            
+
             const r = await fetch(url, {
               method,
               headers: { 'Content-Type': 'application/json' },
@@ -611,9 +611,8 @@ const WeightDistributionPage: React.FC = () => {
                               <select
                                 value={currentGroup || ''}
                                 onChange={e => setFilletAssignments(prev => ({ ...prev, [item.col]: e.target.value }))}
-                                className={`w-full max-w-[200px] border rounded-xl px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-violet-300 transition-all ${
-                                  currentGroup ? 'bg-violet-50 border-violet-200 text-violet-700 font-bold' : 'bg-white border-gray-200 text-gray-400'
-                                }`}
+                                className={`w-full max-w-[200px] border rounded-xl px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-violet-300 transition-all ${currentGroup ? 'bg-violet-50 border-violet-200 text-violet-700 font-bold' : 'bg-white border-gray-200 text-gray-400'
+                                  }`}
                               >
                                 <option value="">-- เลือกกลุ่ม --</option>
                                 {filletGroups.map(g => (
@@ -646,7 +645,7 @@ const WeightDistributionPage: React.FC = () => {
                         {editingGroupId ? <Layers className="text-amber-500 w-5 h-5" /> : <Plus className="text-amber-500 w-5 h-5" />}
                         {editingGroupId ? 'แก้ไขกลุ่ม Fillet' : 'เพิ่มกลุ่ม Fillet'}
                       </h3>
-                      <button 
+                      <button
                         onClick={() => setIsGroupModalOpen(false)}
                         className="text-gray-400 hover:text-gray-700 bg-white p-1 rounded-full shadow-sm border border-gray-200 transition-colors"
                       >
@@ -675,7 +674,7 @@ const WeightDistributionPage: React.FC = () => {
                     <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 flex justify-between items-center">
                       <div>
                         {editingGroupId && (
-                          <button 
+                          <button
                             onClick={() => removeGroup(editingGroupId)}
                             className="text-red-500 hover:text-red-700 text-xs font-bold hover:underline"
                           >
@@ -684,13 +683,13 @@ const WeightDistributionPage: React.FC = () => {
                         )}
                       </div>
                       <div className="flex gap-3">
-                        <button 
+                        <button
                           onClick={() => setIsGroupModalOpen(false)}
                           className="px-5 py-2.5 text-xs font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 transition-colors shadow-sm"
                         >
                           ยกเลิก
                         </button>
-                        <button 
+                        <button
                           onClick={saveGroup}
                           className="px-6 py-2.5 text-xs font-bold text-white bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl shadow-md hover:from-amber-600 hover:to-orange-600 transition-all flex items-center gap-2"
                         >
@@ -707,33 +706,33 @@ const WeightDistributionPage: React.FC = () => {
         );
       })()}
 
-              {/* ═══ TOAST ═══ */}
-              <AnimatePresence>
-                {toast && (
-                  <motion.div initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 50 }}
-                    className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-xl shadow-2xl text-sm font-medium flex items-center gap-2
+      {/* ═══ TOAST ═══ */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 50 }}
+            className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-xl shadow-2xl text-sm font-medium flex items-center gap-2
               ${toast.type === 'success' ? 'bg-gray-900 text-white' : 'bg-red-600 text-white'}`}>
-                    {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4 text-green-400" /> : <AlertTriangle className="w-4 h-4 text-yellow-300" />}
-                    {toast.msg}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-            );
+            {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4 text-green-400" /> : <AlertTriangle className="w-4 h-4 text-yellow-300" />}
+            {toast.msg}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 };
 
-            // ─── Sub Components ───
-            const StatCard = ({label, value, icon: Icon, color }: {label: string; value: any; icon: any; color: string }) => {
+// ─── Sub Components ───
+const StatCard = ({ label, value, icon: Icon, color }: { label: string; value: any; icon: any; color: string }) => {
   const colors: Record<string, string> = {
-              blue: 'from-blue-500 to-blue-600', indigo: 'from-indigo-500 to-indigo-600',
-            purple: 'from-purple-500 to-purple-600', green: 'from-green-500 to-green-600',
+    blue: 'from-blue-500 to-blue-600', indigo: 'from-indigo-500 to-indigo-600',
+    purple: 'from-purple-500 to-purple-600', green: 'from-green-500 to-green-600',
   };
-            return (
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4">
-              <div className={`p-3 rounded-xl bg-gradient-to-br ${colors[color]} text-white shadow-lg`}><Icon className="w-5 h-5" /></div>
-              <div><p className="text-xs font-medium text-gray-500 uppercase tracking-wider">{label}</p><p className="text-2xl font-bold text-gray-900 mt-0.5">{value}</p></div>
-            </div>
-            );
+  return (
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4">
+      <div className={`p-3 rounded-xl bg-gradient-to-br ${colors[color]} text-white shadow-lg`}><Icon className="w-5 h-5" /></div>
+      <div><p className="text-xs font-medium text-gray-500 uppercase tracking-wider">{label}</p><p className="text-2xl font-bold text-gray-900 mt-0.5">{value}</p></div>
+    </div>
+  );
 };
 
-            export default WeightDistributionPage;
+export default WeightDistributionPage;

@@ -74,7 +74,7 @@ let ChickenReceivingService = class ChickenReceivingService {
         const repo = this.getRepo(type);
         const cleaned = rows.map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v === '' ? null : v])));
         const entities = repo.create(cleaned);
-        return await repo.save(entities);
+        return await repo.save(entities, { chunk: 100 });
     }
 };
 exports.ChickenReceivingService = ChickenReceivingService;

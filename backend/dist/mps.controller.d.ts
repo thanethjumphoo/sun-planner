@@ -6,7 +6,7 @@ import { ProductSpec } from './product-spec.entity';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 import { WeightDistribution } from './weight-distribution.entity';
-import { FilletSizeCalc } from './fillet-size.entity';
+import { FilletSizeCalc, FilletConfig } from './fillet-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
 import { ManualOperation } from './manual-operation.entity';
@@ -22,10 +22,11 @@ export declare class MpsController {
     private weightDistRepo;
     private exceptionRepo;
     private filletSizeRepo;
+    private filletConfigRepo;
     private manualOpRepo;
     private itemRepo;
     private chickenReceivingService;
-    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, manualOpRepo: Repository<ManualOperation>, itemRepo: Repository<StgErpItem>, chickenReceivingService: ChickenReceivingService);
+    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, filletConfigRepo: Repository<FilletConfig>, manualOpRepo: Repository<ManualOperation>, itemRepo: Repository<StgErpItem>, chickenReceivingService: ChickenReceivingService);
     updateDate(body: {
         planId?: number;
         mpsOrderId?: number;
@@ -83,7 +84,21 @@ export declare class MpsController {
         success: boolean;
         message: string;
     }>;
-    getApprovedOrdersForDate(date: string): Promise<MpsPlanOrder[]>;
+    getApprovedOrdersForDate(date: string): Promise<{
+        priority: any;
+        id: number;
+        mpsPlan: MpsPlan;
+        erpOrderLineId: number;
+        soNumber: string;
+        itemCode: string;
+        itemDesc: string;
+        productType: string;
+        quantityKg: number;
+        shipDate: Date;
+        plannedProductionDate: Date;
+        finishedProductionDate: Date;
+        isManualOverride: boolean;
+    }[]>;
     updatePriorities(body: {
         priorities: {
             lineId: number;

@@ -12,35 +12,43 @@ export class FilletSizeController {
     private groupRepo: Repository<FilletGroup>,
     @InjectRepository(FilletSizeCalc)
     private calcRepo: Repository<FilletSizeCalc>,
-  ) {}
+  ) { }
 
   // ─── Get all fillet data (yield + groups + saved calcs) ───
   @Get()
   async getAll() {
-    const configs = await this.configRepo.find();
-    const groups = await this.groupRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } });
-    const calcs = await this.calcRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } });
+    try {
+      // Use Promise.all to fetch data in parallel for better performance and reliability
+      const [configs, groups, calcs] = await Promise.all([
+        this.configRepo.find(),
+        this.groupRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } }),
+        this.calcRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } }),
+      ]);
 
-    // Extract fillet yield from config
-    const yieldConfig = configs.find(c => c.configKey === 'fillet_yield');
-    const filletYield = yieldConfig ? Number(yieldConfig.configValue) : 0.42;
+      // Extract fillet yield from config
+      const yieldConfig = configs.find(c => c.configKey === 'fillet_yield');
+      const filletYield = yieldConfig ? Number(yieldConfig.configValue) : 0.04;
 
-    return {
-      filletYield,
-      groups: groups.map(g => ({
-        id: g.id,
-        name: g.groupName,
-        sortOrder: g.sortOrder,
-      })),
-      calcs: calcs.map(c => ({
-        id: c.id,
-        colLabel: c.colLabel,
-        lbWeight: Number(c.lbWeight),
-        filletSize: c.filletSize,
-        groupName: c.groupName,
-        sortOrder: c.sortOrder,
-      })),
-    };
+      return {
+        filletYield,
+        groups: groups.map(g => ({
+          id: g.id,
+          name: g.groupName,
+          sortOrder: g.sortOrder,
+        })),
+        calcs: calcs.map(c => ({
+          id: c.id,
+          colLabel: c.colLabel,
+          lbWeight: Number(c.lbWeight),
+          filletSize: c.filletSize,
+          groupName: c.groupName,
+          sortOrder: c.sortOrder,
+        })),
+      };
+    } catch (error) {
+      console.error('Error fetching fillet data:', error);
+      throw new Error('Failed to fetch fillet size data from database');
+    }
   }
 
   // ─── Save fillet yield ───

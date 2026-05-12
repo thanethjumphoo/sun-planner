@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL;
 
@@ -12,6 +12,7 @@ interface Order {
   size: string;
   unfulfilledKg: number;
   fulfilledKg: number;
+  priority: number | null;
 }
 
 interface Allocation {
@@ -68,6 +69,66 @@ const sizeColorMap: Record<string, string> = {
 const getSizeLabel = (sz: string) => sizeLabelMap[sz] || sz;
 const getSizeColor = (sz: string) => sizeColorMap[getSizeLabel(sz)] || 'bg-gray-400';
 
+const normalizeSize = (sz: string | undefined | null) => {
+  if (!sz) return 'unsize';
+  const lower = sz.trim().toLowerCase();
+  if (lower === 'unsize') return 'unsize';
+  if (lower === 'grade b') return 'Grade B';
+  const match = Object.values(sizeLabelMap).find(v => v.toLowerCase() === lower);
+  return match || sz.trim();
+};
+
+const getMatchingBins = (size: string): string[] => {
+  if (!size || size === 'unsize' || size === 'Grade B') return [];
+  
+  // If exact match with a label, return its key
+  if (Object.values(sizeLabelMap).includes(size)) {
+    const key = Object.keys(sizeLabelMap).find(k => sizeLabelMap[k] === size);
+    if (key) return [key];
+  }
+  
+  const binRanges = [
+    { label: '40 Down', min: 0, max: 40 },
+    { label: '40-45', min: 40, max: 45 },
+    { label: '45-50', min: 45, max: 50 },
+    { label: '50-55', min: 50, max: 55 },
+    { label: '55-60', min: 55, max: 60 },
+    { label: '60-65', min: 60, max: 65 },
+    { label: '65-70', min: 65, max: 70 },
+    { label: '70 Up', min: 70, max: 999 }
+  ];
+
+  let oMin = -1;
+  let oMax = -1;
+  const nums = size.match(/\d+(\.\d+)?/g);
+  const lower = size.toLowerCase();
+  
+  if (nums && nums.length >= 2) {
+    oMin = parseFloat(nums[0]);
+    oMax = parseFloat(nums[1]);
+  } else if (nums && nums.length === 1) {
+    const val = parseFloat(nums[0]);
+    if (lower.includes('up') || lower.includes('>')) {
+      oMin = val;
+      oMax = 999;
+    } else if (lower.includes('down') || lower.includes('<')) {
+      oMin = 0;
+      oMax = val;
+    }
+  }
+
+  if (oMin !== -1 && oMax !== -1) {
+    const matches = binRanges
+      .filter(b => b.min < oMax && b.max > oMin)
+      .map(b => {
+        const key = Object.keys(sizeLabelMap).find(k => sizeLabelMap[k] === b.label);
+        return key || b.label;
+      });
+    if (matches.length > 0) return matches;
+  }
+  return [];
+};
+
 
 const DPSPlan: React.FC = () => {
   // Use local date to avoid UTC timezone shift
@@ -96,9 +157,10 @@ const DPSPlan: React.FC = () => {
   const [sizeModalData, setSizeModalData] = useState<{
     isOpen: boolean;
     sublotId: string;
+    targetSublotId?: string;
     sizeLabel: string;
-    allocations: any[];
     totalRemaining: number;
+    allocations: Allocation[];
   } | null>(null);
 
 
@@ -107,8 +169,10 @@ const DPSPlan: React.FC = () => {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
 
+    const targetId = sizeModalData.targetSublotId || sizeModalData.sublotId;
+
     const newSublots = [...sublots];
-    const sublotIndex = newSublots.findIndex(s => s.id === sizeModalData.sublotId);
+    const sublotIndex = newSublots.findIndex(s => s.id === targetId);
     if (sublotIndex === -1) return;
     const sublot = { ...newSublots[sublotIndex] };
 
@@ -170,40 +234,68 @@ const DPSPlan: React.FC = () => {
     setEditingAlloc(null);
   };
 
-  const handleUpdateAllocation = (sublotId: string, orderId: string, itemDesc: string, sizeLabel: string, newQtyStr: string) => {
+  const handlePullLeftoverAndOpenModal = (fromId: string, toId: string, binKey: string, qty: number) => {
+    const newSublots = [...sublots];
+    const toSl = newSublots.find(s => s.id === toId);
+    
+    if (toSl) {
+        const label = sizeLabelMap[binKey];
+        const allocSize = binKey === 'Grade B (Co-Product)' ? 'Grade B' : 
+                          binKey === 'Unsize / Other Grade A' ? 'unsize' : binKey;
+        const relatedAllocations = toSl.allocations.filter(a => a.size === allocSize);
+
+        setSizeModalData({
+          isOpen: true,
+          sublotId: fromId,
+          targetSublotId: toId,
+          sizeLabel: label,
+          allocations: relatedAllocations,
+          totalRemaining: qty
+        });
+    }
+  };
+
+  const handleUpdateAllocation = (sourceSublotId: string, targetSublotId: string, orderId: string, itemDesc: string, sizeLabel: string, newQtyStr: string) => {
     const newQty = Number(newQtyStr);
     if (isNaN(newQty) || newQty < 0) return;
 
     const newSublots = [...sublots];
-    const sublotIndex = newSublots.findIndex(s => s.id === sublotId);
-    if (sublotIndex === -1) return;
-    const sublot = { ...newSublots[sublotIndex] };
+    const sourceSlIndex = newSublots.findIndex(s => s.id === sourceSublotId);
+    const targetSlIndex = newSublots.findIndex(s => s.id === targetSublotId);
+    if (sourceSlIndex === -1 || targetSlIndex === -1) return;
 
-    const allocIndex = sublot.allocations.findIndex(a => a.orderId === orderId && a.itemDesc === itemDesc && getSizeLabel(a.size) === sizeLabel);
+    const sourceSl = { ...newSublots[sourceSlIndex] };
+    const targetSl = sourceSublotId === targetSublotId ? sourceSl : { ...newSublots[targetSlIndex] };
+
+    const allocIndex = targetSl.allocations.findIndex(a => a.orderId === orderId && a.itemDesc === itemDesc && getSizeLabel(a.size) === sizeLabel);
     if (allocIndex === -1) return;
 
-    const alloc = { ...sublot.allocations[allocIndex] };
+    const alloc = { ...targetSl.allocations[allocIndex] };
     const oldQty = alloc.qty;
     const diff = Number((newQty - oldQty).toFixed(1));
 
-    // Removed the restriction that prevents diff > available to allow negative remaining
-
-
     if (alloc.size === 'Grade B') {
-        sublot.coProductKg = Number((sublot.coProductKg - diff).toFixed(1));
+        if (diff > 0 && sourceSl.coProductKg < diff) return;
+        sourceSl.coProductKg = Number((sourceSl.coProductKg - diff).toFixed(1));
     } else {
-        sublot.bins = { ...sublot.bins, [alloc.size]: Number(((sublot.bins[alloc.size] || 0) - diff).toFixed(1)) };
+        if (diff > 0 && (sourceSl.bins[alloc.size] || 0) < diff) return;
+        sourceSl.bins = { ...sourceSl.bins, [alloc.size]: Number(((sourceSl.bins[alloc.size] || 0) - diff).toFixed(1)) };
     }
 
-    const newAllocations = [...sublot.allocations];
+    const newAllocations = [...targetSl.allocations];
     if (newQty === 0) {
         newAllocations.splice(allocIndex, 1);
     } else {
         alloc.qty = newQty;
         newAllocations[allocIndex] = alloc;
     }
-    sublot.allocations = newAllocations;
-    newSublots[sublotIndex] = sublot;
+    targetSl.allocations = newAllocations;
+
+    newSublots[sourceSlIndex] = sourceSl;
+    if (sourceSublotId !== targetSublotId) {
+        newSublots[targetSlIndex] = targetSl;
+    }
+
     setSublots(newSublots);
 
     const newOrders = [...orders];
@@ -217,7 +309,7 @@ const DPSPlan: React.FC = () => {
     }
 
     if (sizeModalData) {
-        const relatedAllocations = sublot.allocations.filter(a => {
+        const relatedAllocations = targetSl.allocations.filter(a => {
           const aLabel = getSizeLabel(a.size);
           if (sizeModalData.sizeLabel === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
           if (sizeModalData.sizeLabel === 'Grade B (Co-Product)') return aLabel === 'Grade B';
@@ -285,9 +377,10 @@ const DPSPlan: React.FC = () => {
                  itemDesc: o.itemDesc,
                  qty: o.requiredKg,
                  type: o.productType,
-                 size: o.productSize,
+                 size: normalizeSize(o.productSize),
                  unfulfilledKg: o.unfulfilledKg,
-                 fulfilledKg: o.fulfilledKg
+                 fulfilledKg: o.fulfilledKg,
+                 priority: o.priority ?? null
              }));
              const mappedSublots = dbPlan.data.sublots.map((s:any) => {
                  const binsObj: Record<string, number> = {};
@@ -303,6 +396,15 @@ const DPSPlan: React.FC = () => {
                  const avgLiveWeight = s.avgLiveWeight || (s.totalBirds ? s.totalWeightKg / s.totalBirds : 0);
                  const slaughteredWeight = (s.totalWeightKg * 0.9575) * 0.95;
                  const rmFlTotal = slaughteredWeight * 0.04;
+                 const rmFlGradeB = rmFlTotal * 0.093;
+                 const netFillet = rmFlTotal - rmFlGradeB;
+
+                 const initialBinsObj: Record<string, number> = { ...binsObj };
+                 slAllocs.forEach((a:any) => {
+                     if (a.size !== 'Grade B') {
+                         initialBinsObj[a.size] = (initialBinsObj[a.size] || 0) + a.qty;
+                     }
+                 });
 
                  return {
                      id: s.sublotNumber,
@@ -313,12 +415,12 @@ const DPSPlan: React.FC = () => {
                      coProductKg: s.coProductKg,
                      bins: binsObj,
                      allocations: slAllocs,
-                     initialTotalFg: 0,
-                     initialBins: {},
-                     initialCoProductKg: 0,
+                     initialTotalFg: netFillet,
+                     initialBins: initialBinsObj,
+                     initialCoProductKg: rmFlGradeB,
                      slaughteredWeight,
                      rmFlTotal,
-                     shift: 'A'
+                     shift: s.shift || 'A'
                  };
              });
 
@@ -507,9 +609,10 @@ const DPSPlan: React.FC = () => {
             itemDesc: finalDesc,
             qty: Number(Number(l.quantityKg).toFixed(1)),
             type: spec?.type || l.productType || 'chilled',
-            size: spec?.size || 'unsize',
+            size: normalizeSize(spec?.size),
             unfulfilledKg: Number(Number(l.quantityKg).toFixed(1)),
-            fulfilledKg: 0
+            fulfilledKg: 0,
+            priority: l.priority ?? null
           });
         });
       }
@@ -536,20 +639,36 @@ const DPSPlan: React.FC = () => {
     setLoading(true);
     try {
       const loadedSublots = [...unprocessedSublots];
-      const initialOrders = [...unprocessedOrders];
+      const initialOrders = [...unprocessedOrders].sort((a, b) => {
+        // 1. Prioritize Sized over Unsize
+        const aIsSized = a.size !== 'unsize';
+        const bIsSized = b.size !== 'unsize';
+        if (aIsSized && !bIsSized) return -1;
+        if (!aIsSized && bIsSized) return 1;
+        
+        // 2. Sort by Priority (1 = highest, null = lowest)
+        const pA = a.priority === null || a.priority === undefined ? 999 : a.priority;
+        const pB = b.priority === null || b.priority === undefined ? 999 : b.priority;
+        if (pA !== pB) return pA - pB;
+        
+        return a.itemCode.localeCompare(b.itemCode);
+      });
 
       initialOrders.forEach(order => {
         if (order.size !== 'unsize' && order.unfulfilledKg > 0) {
+          const targetBins = getMatchingBins(order.size);
           loadedSublots.forEach(sl => {
-            const avail = sl.bins[order.size] || 0;
-            if (avail > 0 && order.unfulfilledKg > 0) {
-              const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
-              if (take <= 0) return;
-              sl.bins[order.size] = Number((sl.bins[order.size] - take).toFixed(1));
-              order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
-              order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
-              sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: order.size, qty: take });
-            }
+            targetBins.forEach(binSize => {
+              const avail = sl.bins[binSize] || 0;
+              if (avail > 0 && order.unfulfilledKg > 0) {
+                const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
+                if (take <= 0) return;
+                sl.bins[binSize] = Number((sl.bins[binSize] - take).toFixed(1));
+                order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
+                order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
+                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: take });
+              }
+            });
           });
         }
       });
@@ -615,9 +734,10 @@ const DPSPlan: React.FC = () => {
       itemDesc: `${spec.erpItemCode} - ${spec.erpItemDesc || 'Custom Item'}`,
       qty: qty,
       type: spec.productType || 'chilled',
-      size: spec.productSize || 'unsize',
+      size: normalizeSize(spec.productSize),
       unfulfilledKg: qty,
-      fulfilledKg: 0
+      fulfilledKg: 0,
+      priority: null
     };
 
     setOrders([...orders, newOrder]);
@@ -664,20 +784,36 @@ const DPSPlan: React.FC = () => {
         ...o,
         unfulfilledKg: o.qty,
         fulfilledKg: 0
-      }));
+      })).sort((a, b) => {
+        // 1. Prioritize Sized over Unsize
+        const aIsSized = a.size !== 'unsize';
+        const bIsSized = b.size !== 'unsize';
+        if (aIsSized && !bIsSized) return -1;
+        if (!aIsSized && bIsSized) return 1;
+        
+        // 2. Sort by Priority
+        const pA = a.priority === null || a.priority === undefined ? 999 : a.priority;
+        const pB = b.priority === null || b.priority === undefined ? 999 : b.priority;
+        if (pA !== pB) return pA - pB;
+        
+        return a.itemCode.localeCompare(b.itemCode);
+      });
 
       freshOrders.forEach(order => {
         if (order.size !== 'unsize' && order.unfulfilledKg > 0) {
+          const targetBins = getMatchingBins(order.size);
           freshSublots.forEach(sl => {
-            const avail = sl.bins[order.size] || 0;
-            if (avail > 0 && order.unfulfilledKg > 0) {
-              const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
-              if (take <= 0) return;
-              sl.bins[order.size] = Number((sl.bins[order.size] - take).toFixed(1));
-              order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
-              order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
-              sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: order.size, qty: take });
-            }
+            targetBins.forEach(binSize => {
+              const avail = sl.bins[binSize] || 0;
+              if (avail > 0 && order.unfulfilledKg > 0) {
+                const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
+                if (take <= 0) return;
+                sl.bins[binSize] = Number((sl.bins[binSize] - take).toFixed(1));
+                order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
+                order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
+                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: take });
+              }
+            });
           });
         }
       });
@@ -731,6 +867,33 @@ const DPSPlan: React.FC = () => {
   const totalFulfilled = orders.reduce((sum, o) => sum + o.fulfilledKg, 0);
   const percentFulfilled = totalDemand > 0 ? (totalFulfilled / totalDemand) * 100 : 0;
   const totalSublots = sublots.length;
+
+  const calculateManpower = () => {
+    let shiftA_Hours = 0;
+    let shiftB_Hours = 0;
+
+    sublots.forEach(sl => {
+      const shift = sl.shift || 'A';
+      sl.allocations.forEach(alloc => {
+        const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
+        const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
+        const speed = spec?.productSpeed;
+        
+        if (speed && speed > 0) {
+          const hours = alloc.qty / speed;
+          if (shift === 'A') shiftA_Hours += hours;
+          else if (shift === 'B') shiftB_Hours += hours;
+        }
+      });
+    });
+
+    return {
+      shiftA: Math.round(shiftA_Hours > 0 ? (shiftA_Hours / 9.58) : 0),
+      shiftB: Math.round(shiftB_Hours > 0 ? (shiftB_Hours / 9.58) : 0)
+    };
+  };
+
+  const manpower = calculateManpower();
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-6 bg-[#f8fafc] min-h-screen font-sans">
@@ -832,7 +995,14 @@ const DPSPlan: React.FC = () => {
                         <div className="relative z-10 flex flex-col h-full justify-between">
                           <div>
                             <div className="flex justify-between items-start mb-2">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{o.itemCode}</span>
+                              <div className="flex flex-col gap-1">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{o.itemCode}</span>
+                                {o.priority && (
+                                  <span className="inline-flex items-center gap-1 w-fit bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded text-[9px] font-black border border-blue-100">
+                                    <CheckCircle size={8} /> P{o.priority}
+                                  </span>
+                                )}
+                              </div>
                               <div className="flex items-center gap-2">
                                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${isFull ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
                                   {isFull ? 'COMPLETED' : 'PENDING'}
@@ -864,6 +1034,27 @@ const DPSPlan: React.FC = () => {
             </div>
           </div>
 
+          {/* MANPOWER BOX */}
+          <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden p-6 flex flex-col md:flex-row items-center gap-6">
+            <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center flex-shrink-0">
+               <Users size={24} />
+            </div>
+            <div className="flex-1">
+               <h3 className="text-lg font-bold text-gray-800 mb-1">Manpower Planning</h3>
+               <p className="text-sm text-gray-500">Calculated automatically based on Item Product Speed and 9.58 hrs/shift.</p>
+            </div>
+            <div className="flex items-center gap-8">
+               <div className="text-center px-4 border-r border-gray-100">
+                  <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift A</div>
+                  <div className="text-2xl font-black text-gray-900">{manpower.shiftA.toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span></div>
+               </div>
+               <div className="text-center px-4">
+                  <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift B</div>
+                  <div className="text-2xl font-black text-gray-900">{manpower.shiftB.toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span></div>
+               </div>
+            </div>
+          </div>
+
           {/* STEP 2: SUBLOTS ALLOCATION */}
           <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white/80 backdrop-blur-md z-20">
@@ -884,8 +1075,21 @@ const DPSPlan: React.FC = () => {
               ) : (
                 sublots.map((sl, index) => {
                   const totalAllocated = sl.allocations.reduce((sum, a) => sum + a.qty, 0);
-                  const totalRemaining = Object.values(sl.bins).reduce((a, b) => a + b, 0) + sl.coProductKg;
                   const utilPct = sl.initialTotalFg > 0 ? (totalAllocated / sl.initialTotalFg) * 100 : 0;
+
+                  // Calculate Sublot Manpower
+                  let slHours = 0;
+                  sl.allocations.forEach(alloc => {
+                    const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
+                    const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
+                    const speed = spec?.productSpeed;
+                    if (speed && speed > 0) {
+                      slHours += alloc.qty / speed;
+                    }
+                  });
+                  const slManpower = Math.round(slHours > 0 ? (slHours / 9.58) : 0);
+                  const shiftManpower = sl.shift === 'B' ? manpower.shiftB : manpower.shiftA;
+                  const variance = shiftManpower - slManpower;
 
                   return (
                     <div key={sl.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col xl:flex-row">
@@ -937,6 +1141,21 @@ const DPSPlan: React.FC = () => {
                               <p className="text-lg font-black text-blue-700">{Math.round(sl.initialTotalFg).toLocaleString()} <span className="text-xs">kg</span></p>
                             </div>
                           </div>
+
+                          {/* Part 3: Sublot Manpower */}
+                          <div className="bg-purple-50/50 p-3 rounded-xl border border-purple-100 flex items-center justify-between mb-2">
+                            <div>
+                               <p className="text-[10px] font-bold text-purple-500 uppercase">Sublot Manpower</p>
+                               <p className="text-lg font-black text-purple-700">{slManpower.toLocaleString()} <span className="text-[10px]">Head</span></p>
+                            </div>
+                            <div className="text-right">
+                               <p className="text-[10px] font-bold text-purple-400 uppercase">Variance (Shift {sl.shift || 'A'} - Sublot)</p>
+                               <p className={`text-base font-black ${variance > 0 ? 'text-blue-500' : variance < 0 ? 'text-red-500' : 'text-gray-500'}`}>
+                                 {variance > 0 ? `+${variance}` : variance} <span className="text-[10px]">Head</span>
+                               </p>
+                            </div>
+                          </div>
+
                         </div>
 
                         <div className="relative z-10 pt-4 border-t border-gray-200">
@@ -1031,12 +1250,48 @@ const DPSPlan: React.FC = () => {
                                 </div>
                               )}
                             </div>
+                            
+                            {/* NEW LEFTOVERS SECTION */}
+                            {(() => {
+                              const targetIdx = index;
+                              const prevSublots = sublots.slice(0, targetIdx);
+                              const availableLeftovers: { fromId: string, shift: string, binKey: string, qty: number }[] = [];
+                              
+                              prevSublots.forEach(prevSl => {
+                                Object.entries(prevSl.bins).forEach(([k, v]) => {
+                                  if (v > 0) {
+                                    availableLeftovers.push({ fromId: prevSl.id, shift: prevSl.shift, binKey: k, qty: v });
+                                  }
+                                });
+                              });
 
-                            {totalRemaining <= 0 && (
-                              <div className="p-4 bg-gray-100 rounded-xl text-center">
-                                <p className="text-xs font-bold text-gray-500">100% Fully Utilized</p>
-                              </div>
-                            )}
+                              if (availableLeftovers.length === 0) return null;
+
+                              return (
+                                <div className="mt-8 pt-6 border-t border-gray-200 border-dashed">
+                                  <h4 className="text-xs font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2 mb-4">
+                                    <RefreshCw size={14} /> Pull Leftovers from Previous Sublots
+                                  </h4>
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    {availableLeftovers.map((leftover, idx) => {
+                                      const label = sizeLabelMap[leftover.binKey];
+                                      return (
+                                        <div key={idx} onClick={() => handlePullLeftoverAndOpenModal(leftover.fromId, sl.id, leftover.binKey, leftover.qty)} className="bg-indigo-50/30 border border-indigo-100 shadow-sm p-3 rounded-2xl transition-all cursor-pointer hover:border-indigo-300 hover:shadow-md hover:bg-indigo-50 relative overflow-hidden group">
+                                           <div className="absolute top-0 right-0 bg-indigo-100 text-indigo-600 text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
+                                             {leftover.fromId} (Shift {leftover.shift || 'A'})
+                                           </div>
+                                           <p className="text-[9px] font-bold text-indigo-400 uppercase mb-1 tracking-wider mt-2">{label}</p>
+                                           <div className="flex items-baseline gap-1">
+                                             <span className="text-base font-black text-indigo-900">{leftover.qty.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
+                                             <span className="text-[9px] font-bold text-indigo-400">kg</span>
+                                           </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
 
@@ -1174,9 +1429,49 @@ const DPSPlan: React.FC = () => {
                      className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-500 bg-white shadow-sm"
                   >
                      <option value="">+ Add Order to Allocate</option>
-                     {orders.map(o => (
-                         <option key={o.id} value={o.id}>{o.id} - {o.itemDesc}</option>
-                     ))}
+                     {(() => {
+                         const isMatch = (o: Order) => {
+                             const modalSize = sizeModalData.sizeLabel;
+                             if (modalSize === 'Grade B (Co-Product)') return o.size === 'Grade B' || o.type === 'co-product';
+                             if (modalSize === 'Unsize / Other Grade A') return o.size === 'unsize' || !o.size;
+                             return o.size === modalSize;
+                         };
+                         const matchingUnfulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg > 0);
+                         const otherUnfulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg > 0);
+                         const fulfilled = orders.filter(o => o.unfulfilledKg <= 0);
+
+                         return (
+                             <>
+                                 {matchingUnfulfilled.length > 0 && (
+                                     <optgroup label="Requires This Size (Unfulfilled)">
+                                         {matchingUnfulfilled.map(o => (
+                                             <option key={o.id} value={o.id}>
+                                                {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
+                                             </option>
+                                         ))}
+                                     </optgroup>
+                                 )}
+                                 {otherUnfulfilled.length > 0 && (
+                                     <optgroup label="Other Unfulfilled Orders">
+                                         {otherUnfulfilled.map(o => (
+                                             <option key={o.id} value={o.id}>
+                                                {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
+                                             </option>
+                                         ))}
+                                     </optgroup>
+                                 )}
+                                 {fulfilled.length > 0 && (
+                                     <optgroup label="Fully Fulfilled Orders">
+                                         {fulfilled.map(o => (
+                                             <option key={o.id} value={o.id}>
+                                                {o.id} - {o.itemDesc}
+                                             </option>
+                                         ))}
+                                     </optgroup>
+                                 )}
+                             </>
+                         );
+                     })()}
                   </select>
                 </div>
                 {sizeModalData.allocations.length === 0 ? (
@@ -1204,7 +1499,7 @@ const DPSPlan: React.FC = () => {
                                   onChange={(e) => setEditingAlloc({...editingAlloc, val: e.target.value})}
                                   autoFocus
                                 />
-                                <button onClick={() => handleUpdateAllocation(sizeModalData.sublotId, a.orderId, a.itemDesc, sizeModalData.sizeLabel, editingAlloc.val)} className="p-1.5 bg-green-100 text-green-600 rounded-md hover:bg-green-200">
+                                <button onClick={() => handleUpdateAllocation(sizeModalData.sublotId, sizeModalData.targetSublotId || sizeModalData.sublotId, a.orderId, a.itemDesc, sizeModalData.sizeLabel, editingAlloc.val)} className="p-1.5 bg-green-100 text-green-600 rounded-md hover:bg-green-200">
                                     <Check size={14} />
                                 </button>
                                 <button onClick={() => setEditingAlloc(null)} className="p-1.5 bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200">
@@ -1230,6 +1525,7 @@ const DPSPlan: React.FC = () => {
           </div>
         </div>
       )}
+
 
     </div>
   );

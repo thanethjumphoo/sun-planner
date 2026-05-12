@@ -73,10 +73,11 @@ let MpsController = class MpsController {
     weightDistRepo;
     exceptionRepo;
     filletSizeRepo;
+    filletConfigRepo;
     manualOpRepo;
     itemRepo;
     chickenReceivingService;
-    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, filletSizeRepo, manualOpRepo, itemRepo, chickenReceivingService) {
+    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, filletSizeRepo, filletConfigRepo, manualOpRepo, itemRepo, chickenReceivingService) {
         this.orderLineRepo = orderLineRepo;
         this.orderHeaderRepo = orderHeaderRepo;
         this.specRepo = specRepo;
@@ -87,6 +88,7 @@ let MpsController = class MpsController {
         this.weightDistRepo = weightDistRepo;
         this.exceptionRepo = exceptionRepo;
         this.filletSizeRepo = filletSizeRepo;
+        this.filletConfigRepo = filletConfigRepo;
         this.manualOpRepo = manualOpRepo;
         this.itemRepo = itemRepo;
         this.chickenReceivingService = chickenReceivingService;
@@ -267,6 +269,8 @@ let MpsController = class MpsController {
             d.setDate(d.getDate() - days);
             return d;
         };
+        const configRow = await this.filletConfigRepo.findOne({ where: { configKey: 'fillet_yield' } });
+        const filletYield = configRow ? Number(configRow.configValue) : 0.04;
         const allIntakesRaw = await this.chickenReceivingService.findAll('monthly');
         const allIntakes = allIntakesRaw.filter((intake) => {
             const d = parseLocalDate(intake.receive_date);
@@ -277,7 +281,7 @@ let MpsController = class MpsController {
             const d = parseLocalDate(intake.receive_date);
             if (d) {
                 const intakeKg = Number(intake.chicken_weight || 0);
-                const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * 0.04 * 0.907;
+                const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * filletYield * 0.907;
                 supplyMap.set(d, (supplyMap.get(d) || 0) + rmFlAvailKg);
             }
         });
@@ -413,7 +417,7 @@ let MpsController = class MpsController {
                 const pct = Number(row.distValue || 0);
                 if (pct <= 0)
                     return;
-                const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.9);
+                const kg = Math.round(slaughteredWeight * filletYield * pct * 0.9);
                 const groupName = filletMap.get(row.colLabel);
                 if (groupName) {
                     const binKey = groupName.replace(/\s+/g, '').replace(/-/g, '_');
@@ -579,9 +583,9 @@ let MpsController = class MpsController {
             }
         };
         allocateFreeze(freezeOrders, true);
-        await this.mpsOrderRepo.save(mpsOrdersToSave, { chunk: 500 });
+        await this.mpsOrderRepo.save(mpsOrdersToSave, { chunk: 100 });
         if (exceptionsToSave.length > 0) {
-            await this.exceptionRepo.save(exceptionsToSave, { chunk: 500 });
+            await this.exceptionRepo.save(exceptionsToSave, { chunk: 100 });
         }
         const mpsDailiesToSave = [];
         let totalIntakeBirds = 0;
@@ -624,7 +628,7 @@ let MpsController = class MpsController {
                 totalStaff: Math.ceil(cuttingStaff + supportStaff)
             }));
         }
-        await this.mpsDailyRepo.save(mpsDailiesToSave, { chunk: 500 });
+        await this.mpsDailyRepo.save(mpsDailiesToSave, { chunk: 100 });
         const mpsSuppliesToSave = [];
         for (let i = 1; i <= daysInMonth; i++) {
             const dayStr = `${targetMonth}-${i.toString().padStart(2, '0')}`;
@@ -670,7 +674,7 @@ let MpsController = class MpsController {
                     const pct = Number(row.distValue || 0);
                     if (pct <= 0)
                         return;
-                    const kg = Math.round(slaughteredWeight * 0.04 * pct * 0.907);
+                    const kg = Math.round(slaughteredWeight * filletYield * pct * 0.907);
                     const groupName = filletMap.get(row.colLabel);
                     if (groupName) {
                         const key = groupName.replace(/\s+/g, '').replace(/-/g, '_');
@@ -696,7 +700,7 @@ let MpsController = class MpsController {
             }
         }
         if (mpsSuppliesToSave.length > 0) {
-            await this.mpsSupplyRepo.save(mpsSuppliesToSave, { chunk: 500 });
+            await this.mpsSupplyRepo.save(mpsSuppliesToSave, { chunk: 100 });
         }
         plan.totalIntakeBirds = totalIntakeBirds;
         plan.totalRmFlKg = totalRmFlKg;
@@ -762,10 +766,18 @@ let MpsController = class MpsController {
     async getApprovedOrdersForDate(date) {
         const orders = await this.mpsOrderRepo.createQueryBuilder('order')
             .leftJoinAndSelect('order.mpsPlan', 'plan')
+            .leftJoin('stg_erp_order_lines', 'sol', 'sol.erp_order_line_id = order.erp_order_line_id')
+            .addSelect('sol.priority', 'priority')
             .where('plan.status = :status', { status: 'APPROVED' })
             .andWhere('order.planned_production_date = :date', { date })
-            .getMany();
-        return orders;
+            .getRawAndEntities();
+        const merged = orders.entities.map((order, idx) => {
+            return {
+                ...order,
+                priority: orders.raw[idx].priority
+            };
+        });
+        return merged;
     }
     async updatePriorities(body) {
         if (!body.priorities || !Array.isArray(body.priorities)) {
@@ -1149,9 +1161,11 @@ exports.MpsController = MpsController = __decorate([
     __param(7, (0, typeorm_1.InjectRepository)(weight_distribution_entity_1.WeightDistribution)),
     __param(8, (0, typeorm_1.InjectRepository)(mps_exception_entity_1.MpsExceptionReport)),
     __param(9, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletSizeCalc)),
-    __param(10, (0, typeorm_1.InjectRepository)(manual_operation_entity_1.ManualOperation)),
-    __param(11, (0, typeorm_1.InjectRepository)(stg_erp_item_entity_1.StgErpItem)),
+    __param(10, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletConfig)),
+    __param(11, (0, typeorm_1.InjectRepository)(manual_operation_entity_1.ManualOperation)),
+    __param(12, (0, typeorm_1.InjectRepository)(stg_erp_item_entity_1.StgErpItem)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

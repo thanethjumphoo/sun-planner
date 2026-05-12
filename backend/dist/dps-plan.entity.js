@@ -85,6 +85,7 @@ let DpsSublot = class DpsSublot {
     sublotNumber;
     farmName;
     totalBirds;
+    shift;
     totalWeightKg;
     avgLiveWeight;
     coProductKg;
@@ -112,6 +113,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'total_birds', type: 'int' }),
     __metadata("design:type", Number)
 ], DpsSublot.prototype, "totalBirds", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'shift', type: 'varchar', length: 20, default: 'A' }),
+    __metadata("design:type", String)
+], DpsSublot.prototype, "shift", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'total_weight_kg', type: 'decimal', precision: 18, scale: 2 }),
     __metadata("design:type", Number)
