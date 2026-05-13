@@ -27,6 +27,8 @@ import { ManualOperationController } from './manual-operation.controller';
 import { DpsController } from './dps.controller';
 import { FilletConfig, FilletGroup, FilletSizeCalc } from './fillet-size.entity';
 import { FilletSizeController } from './fillet-size.controller';
+import { MasterYield } from './master-yield.entity';
+import { MasterYieldController } from './master-yield.controller';
 
 @Module({
   imports: [
@@ -59,10 +61,10 @@ import { FilletSizeController } from './fillet-size.controller';
       StgErpItem, StgErpOrderHeader, StgErpOrderLine, TargetSyncItem, ProductSpec, 
       WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsExceptionReport,
       DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation,
-      FilletConfig, FilletGroup, FilletSizeCalc
+      FilletConfig, FilletGroup, FilletSizeCalc, MasterYield
     ]),
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController],
+  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController],
   providers: [AppService, OracleIntegrationService],
 })
 export class AppModule { }
