@@ -12,7 +12,6 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
   ],
   weekly: [
     { key: 'receive_date', label: 'Receive Date' },
-    { key: 'receive_time', label: 'Receive Time' },
     { key: 'chicken_type', label: 'Chicken Type' },
     { key: 'chicken_count', label: 'Count (Birds)' },
     { key: 'chicken_weight', label: 'Weight (Kg)' },
@@ -49,7 +48,6 @@ const SAMPLE_DATA: Record<string, Record<string, string>> = {
   },
   weekly: {
     'Receive Date': '12/5/2026',
-    'Receive Time': '3:50:00',
     'Chicken Type': 'ไก่เนื้อ',
     'Count (Birds)': '2970',
     'Weight (Kg)': '8019',

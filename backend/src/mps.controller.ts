@@ -8,10 +8,12 @@ import { StgErpOrderHeader } from './stg-erp-order-header.entity';
 import { ProductSpec } from './product-spec.entity';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
+import { MpsPlanSupplySize } from './mps-plan-supply-size.entity';
 import { WeightDistribution } from './weight-distribution.entity';
 import { FilletSizeCalc, FilletConfig } from './fillet-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
+import { ChickenReceivingWeeklySize } from './chicken-receiving/entities/weekly-size.entity';
 import { ManualOperation } from './manual-operation.entity';
 import { StgErpItem } from './stg-erp-item.entity';
 import { MasterYield } from './master-yield.entity';
@@ -47,6 +49,10 @@ export class MpsController {
     private itemRepo: Repository<StgErpItem>,
     @InjectRepository(MasterYield)
     private masterYieldRepo: Repository<MasterYield>,
+    @InjectRepository(MpsPlanSupplySize)
+    private mpsSupplySizeRepo: Repository<MpsPlanSupplySize>,
+    @InjectRepository(ChickenReceivingWeeklySize)
+    private weeklySizeRepo: Repository<ChickenReceivingWeeklySize>,
     private chickenReceivingService: ChickenReceivingService,
   ) { }
 
@@ -442,6 +448,34 @@ export class MpsController {
       if (c.groupName) filletMap.set(c.colLabel, c.groupName);
     });
 
+    // ── DEBUG: Diagnose size doubling ──────────────────────────────────────────
+    const uniqueRowLabels = [...new Set(weightMatrix.map(r => r.rowLabel))];
+    const uniqueColLabels = [...new Set(weightMatrix.map(r => r.colLabel))];
+    console.log(`[MPS DEBUG] weightMatrix total rows: ${weightMatrix.length}`);
+    console.log(`[MPS DEBUG] unique rowLabels: ${uniqueRowLabels.length}, unique colLabels: ${uniqueColLabels.length}`);
+    console.log(`[MPS DEBUG] expected rows (rowLabels × colLabels): ${uniqueRowLabels.length * uniqueColLabels.length}`);
+    // Check for duplicates: same rowLabel + colLabel appearing more than once
+    const keyCount = new Map<string, number>();
+    weightMatrix.forEach(r => {
+      const k = `${r.rowLabel}|${r.colLabel}`;
+      keyCount.set(k, (keyCount.get(k) || 0) + 1);
+    });
+    const duplicates = [...keyCount.entries()].filter(([, cnt]) => cnt > 1);
+    if (duplicates.length > 0) {
+      console.log(`[MPS DEBUG] ⚠️ DUPLICATE weight_distributions found: ${duplicates.length} keys have duplicates`);
+      duplicates.slice(0, 5).forEach(([k, cnt]) => console.log(`  -> ${k} appears ${cnt} times`));
+    }
+    // Check sum of distValues per rowLabel (should be ~1.0 for 100%)
+    const rowSums = new Map<string, number>();
+    weightMatrix.forEach(r => {
+      rowSums.set(r.rowLabel, (rowSums.get(r.rowLabel) || 0) + Number(r.distValue || 0));
+    });
+    console.log(`[MPS DEBUG] distValue sums per rowLabel:`);
+    rowSums.forEach((sum, label) => console.log(`  ${label}: ${sum.toFixed(4)}`));
+    console.log(`[MPS DEBUG] filletMap size: ${filletMap.size}, filletCalcs total: ${filletCalcs.length}`);
+    console.log(`[MPS DEBUG] filletYield: ${filletYield}`);
+    // ── END DEBUG ─────────────────────────────────────────────────────────────
+
     const sizeSupplyMap = new Map<string, { total: number, bins: Record<string, number> }>();
 
     // Use expanded intakes (includes previous month) for size supply map
@@ -476,8 +510,9 @@ export class MpsController {
         const pct = Number(row.distValue || 0);
         if (pct <= 0) return;
 
-        // KG for this cell = Slaughtered * Fillet Yield * cell * 90.7% (after 9.3% Grade B)
-        const kg = Math.round(slaughteredWeight * filletYield * pct * 0.907);
+        // KG for this cell = Slaughtered * Fillet Yield * cell% * 90.7% (after 9.3% Grade B)
+        // distValue is stored as whole percentage (e.g. 2.16 = 2.16%), so divide by 100
+        const kg = Math.round(slaughteredWeight * filletYield * (pct / 100) * 0.907);
 
         // Get group from manual assignment map
         const groupName = filletMap.get(row.colLabel);
@@ -830,80 +865,96 @@ export class MpsController {
     await this.mpsDailyRepo.save(mpsDailiesToSave, { chunk: 100 });
 
     // Step 7: Generate Detailed Supply Breakdown (Size Distribution)
+    // Now uses normalized mps_plan_supply_size table for size breakdown
+    // IMPORTANT: Process each intake record INDIVIDUALLY (same as Step 3b)
+    // to avoid boundary issues where a blended avgWeight matches two ranges.
     const mpsSuppliesToSave: MpsPlanSupply[] = [];
-    // Reuse weightMatrix from Step 5
+
+    // Determine part name from partType for labeling
+    const partNameMap: Record<string, string> = {
+      'fillet': 'สันใน',
+      'bil': 'BIL L/C',
+    };
+    const currentPartName = partNameMap[partType] || partType;
 
     for (let i = 1; i <= daysInMonth; i++) {
       const dayStr = `${targetMonth}-${i.toString().padStart(2, '0')}`;
 
+      // Gather all intake records for this day
       let dailyIntakeBirds = 0;
       let dailyTotalWeight = 0;
+      const dayIntakes: any[] = [];
 
       allIntakes.forEach((intake: any) => {
         const d = parseLocalDate(intake.receive_date);
         if (d === dayStr) {
           dailyIntakeBirds += Number(intake.chicken_count || 0);
           dailyTotalWeight += Number(intake.chicken_weight || 0);
+          dayIntakes.push(intake);
         }
       });
 
       if (dailyIntakeBirds > 0) {
-        const avgWeight = parseFloat((dailyTotalWeight / dailyIntakeBirds).toFixed(2)); // ปรับทศนิยม 2 ตำแหน่งเพื่อแก้บัค Range
-        // Slaughtered Weight = Weight * 0.9575 * 0.95 (Based on user loss factors: 4.25% loss + 5% loss)
-        const slaughteredWeight = dailyTotalWeight * 0.9575 * 0.95;
-
-        // Find matching row in matrix
-        // Logic: Matrix labels might be "2.40-2.50" or "2.4"
-        const matchingRows = weightMatrix.filter(row => {
-          const label = row.rowLabel;
-          if (label.includes('-')) {
-            const parts = label.split('-').map(s => parseFloat(s.trim()));
-            const min = parts[0];
-            const max = parts[1];
-            return avgWeight >= min && avgWeight <= max;
-          }
-          return Math.abs(Number(label) - avgWeight) < 0.05; // Fallback for single values
-        });
+        const avgWeightDaily = parseFloat((dailyTotalWeight / dailyIntakeBirds).toFixed(2));
+        const slaughteredWeightDaily = dailyTotalWeight * 0.9575 * 0.95;
 
         const supplyEntry = this.mpsSupplyRepo.create({
           mpsPlan: plan,
           productionDate: new Date(dayStr),
           intakeBirds: dailyIntakeBirds,
           totalWeight: dailyTotalWeight,
-          avgWeight: parseFloat(avgWeight.toFixed(2)), // ทศนิยม 2 ตำแหน่งตามที่ขอ
-          slaughteredWeight: slaughteredWeight,
-          size40Down: 0,
-          size40_45: 0,
-          size45_50: 0,
-          size50_55: 0,
-          size55_60: 0,
-          size60_65: 0,
-          size65_70: 0,
-          size70_up: 0
+          avgWeight: parseFloat(avgWeightDaily.toFixed(2)),
+          slaughteredWeight: slaughteredWeightDaily,
         });
 
-        matchingRows.forEach(row => {
-          const pct = Number(row.distValue || 0);
-          if (pct <= 0) return;
+        // Accumulate size bins — process EACH intake record individually
+        // (same approach as Step 3b to avoid boundary mismatch)
+        const sizeBins: Record<string, number> = {};
 
-          // สูตร: Slaughtered Weight * Fillet Yield * % ใน Cell * 90.7%
-          const kg = Math.round(slaughteredWeight * filletYield * pct * 0.907);
+        dayIntakes.forEach((intake: any) => {
+          const intakeKg = Number(intake.chicken_weight || 0);
+          const intakeBirds = Number(intake.chicken_count || 0);
+          if (intakeBirds <= 0 || intakeKg <= 0) return;
 
-          // หา Group จากการชน colLabel กับตาราง fillet_size_calc
-          const groupName = filletMap.get(row.colLabel);
-          if (groupName) {
-            const key = groupName.replace(/\s+/g, '').replace(/-/g, '_');
-            if (key === '40Down') supplyEntry.size40Down += kg;
-            else if (key === '40_45') supplyEntry.size40_45 += kg;
-            else if (key === '45_50') supplyEntry.size45_50 += kg;
-            else if (key === '50_55') supplyEntry.size50_55 += kg;
-            else if (key === '55_60') supplyEntry.size55_60 += kg;
-            else if (key === '60_65') supplyEntry.size60_65 += kg;
-            else if (key === '65_70') supplyEntry.size65_70 += kg;
-            else if (key === '70Up') supplyEntry.size70_up += kg;
-          }
+          const avgWeight = parseFloat((intakeKg / intakeBirds).toFixed(2));
+          const slaughteredWeight = intakeKg * 0.9575 * 0.95;
+
+          const matchingRows = weightMatrix.filter(row => {
+            const label = row.rowLabel;
+            if (label.includes('-')) {
+              const parts = label.split('-').map(s => parseFloat(s.trim()));
+              return avgWeight >= parts[0] && avgWeight <= parts[1];
+            }
+            return Math.abs(Number(label) - avgWeight) < 0.05;
+          });
+
+          matchingRows.forEach(row => {
+            const pct = Number(row.distValue || 0);
+            if (pct <= 0) return;
+
+            // distValue is stored as whole percentage (e.g. 2.16 = 2.16%), so divide by 100
+            const kg = Math.round(slaughteredWeight * filletYield * (pct / 100) * 0.907);
+
+            const groupName = filletMap.get(row.colLabel);
+            if (groupName) {
+              sizeBins[groupName] = (sizeBins[groupName] || 0) + kg;
+            }
+          });
         });
 
+        // Create MpsPlanSupplySize entries for each size bin
+        const sizeEntries: MpsPlanSupplySize[] = [];
+        for (const [groupName, kg] of Object.entries(sizeBins)) {
+          if (kg <= 0) continue;
+          sizeEntries.push(this.mpsSupplySizeRepo.create({
+            groupSize: groupName,
+            partName: currentPartName,
+            quantityKg: Math.round(kg),
+            productionDate: new Date(dayStr),
+          }));
+        }
+
+        supplyEntry.sizes = sizeEntries;
         mpsSuppliesToSave.push(supplyEntry);
       }
     }
@@ -995,12 +1046,131 @@ export class MpsController {
     return { success: true };
   }
 
+  @Get('plans/:id/weekly-sizes')
+  async getWeeklySizesForPlan(@Param('id') id: number) {
+    const plan = await this.mpsPlanRepo.findOne({ where: { id } });
+    if (!plan) return { success: false, message: 'Plan not found' };
+
+    const targetMonth = plan.targetMonth;
+    const partType = plan.partType;
+    const partNameMap: Record<string, string> = { 'fillet': 'สันใน', 'bil': 'BIL L/C' };
+    const currentPartName = partNameMap[partType] || partType;
+
+    const allSizes = await this.weeklySizeRepo.find({ where: { partName: currentPartName } });
+    const monthSizes = allSizes.filter(s => {
+      const recDate = s.receiveDate as any;
+      const dStr = typeof recDate === 'string' ? recDate.split('T')[0] : recDate.toISOString().split('T')[0];
+      return dStr.startsWith(targetMonth);
+    });
+
+    return { success: true, data: monthSizes };
+  }
+
+  // 5b. Import Weekly RM Sizes for a Plan
+  @Post('plans/:id/import-weekly')
+  async importWeeklyForPlan(@Param('id') id: number) {
+    const plan = await this.mpsPlanRepo.findOne({ where: { id } });
+    if (!plan) return { success: false, message: 'Plan not found' };
+
+    const targetMonth = plan.targetMonth;
+    const partType = plan.partType;
+
+    // Fetch Weekly Intakes
+    const allIntakesRaw = await this.chickenReceivingService.findAll('weekly');
+    const targetIntakes = allIntakesRaw.filter((intake: any) => {
+      const d = typeof intake.receive_date === 'string' ? intake.receive_date.split('T')[0] : intake.receive_date.toISOString().split('T')[0];
+      return d.startsWith(targetMonth);
+    });
+
+    const weightMatrix = await this.weightDistRepo.find();
+    const filletCalcs = await this.filletSizeRepo.find();
+    const filletMap = new Map<string, string>();
+    filletCalcs.forEach(c => {
+      if (c.groupName) filletMap.set(c.colLabel, c.groupName);
+    });
+
+    const configRow = await this.filletConfigRepo.findOne({ where: { configKey: 'fillet_yield' } });
+    const filletYield = configRow ? Number(configRow.configValue) : 0.04;
+
+    const partNameMap: Record<string, string> = { 'fillet': 'สันใน', 'bil': 'BIL L/C' };
+    const currentPartName = partNameMap[partType] || partType;
+
+    // Remove existing weekly sizes for this month and part
+    const existingSizes = await this.weeklySizeRepo.find({ where: { partName: currentPartName } });
+    const toRemove = existingSizes.filter(s => {
+       const recDate = s.receiveDate as any;
+       const dStr = typeof recDate === 'string' ? recDate.split('T')[0] : recDate.toISOString().split('T')[0];
+       return dStr.startsWith(targetMonth);
+    });
+    if (toRemove.length > 0) {
+       await this.weeklySizeRepo.remove(toRemove);
+    }
+
+    // Now calculate
+    const sizesToSave: ChickenReceivingWeeklySize[] = [];
+    const dailyGroups = new Map<string, any[]>();
+    targetIntakes.forEach(intake => {
+       const dStr = typeof intake.receive_date === 'string' ? intake.receive_date.split('T')[0] : intake.receive_date.toISOString().split('T')[0];
+       if (!dailyGroups.has(dStr)) dailyGroups.set(dStr, []);
+       dailyGroups.get(dStr)!.push(intake);
+    });
+
+    for (const [dayStr, dayIntakes] of dailyGroups.entries()) {
+       const sizeBins: Record<string, number> = {};
+
+       dayIntakes.forEach((intake: any) => {
+          const intakeKg = Number(intake.chicken_weight || 0);
+          const intakeBirds = Number(intake.chicken_count || 0);
+          if (intakeBirds <= 0 || intakeKg <= 0) return;
+
+          const avgWeight = parseFloat((intakeKg / intakeBirds).toFixed(2));
+          const slaughteredWeight = intakeKg * 0.9575 * 0.95;
+
+          const matchingRows = weightMatrix.filter(row => {
+            const label = row.rowLabel;
+            if (label.includes('-')) {
+              const parts = label.split('-').map(s => parseFloat(s.trim()));
+              return avgWeight >= parts[0] && avgWeight <= parts[1];
+            }
+            return Math.abs(Number(label) - avgWeight) < 0.05;
+          });
+
+          matchingRows.forEach(row => {
+            const pct = Number(row.distValue || 0);
+            if (pct <= 0) return;
+
+            const kg = Math.round(slaughteredWeight * filletYield * (pct / 100) * 0.907);
+            const groupName = filletMap.get(row.colLabel);
+            if (groupName) {
+              sizeBins[groupName] = (sizeBins[groupName] || 0) + kg;
+            }
+          });
+       });
+
+       for (const [groupName, kg] of Object.entries(sizeBins)) {
+          if (kg <= 0) continue;
+          sizesToSave.push(this.weeklySizeRepo.create({
+             receiveDate: new Date(dayStr),
+             groupSize: groupName,
+             partName: currentPartName,
+             quantityKg: Math.round(kg)
+          }));
+       }
+    }
+
+    if (sizesToSave.length > 0) {
+       await this.weeklySizeRepo.save(sizesToSave, { chunk: 100 });
+    }
+
+    return { success: true, count: sizesToSave.length };
+  }
+
   @Get('plans/:id')
   async getPlan(@Param('id') id: number) {
     // 1. Fetch Plan with small relations first
     const plan = await this.mpsPlanRepo.findOne({
       where: { id },
-      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown']
+      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown', 'supplyBreakdown.sizes']
     });
 
     if (!plan) {
@@ -1017,7 +1187,10 @@ export class MpsController {
 
     // Safety: Ensure no leftover circular refs in other relations
     if (plan.dailySummaries) plan.dailySummaries.forEach(d => delete (d as any).mpsPlan);
-    if (plan.supplyBreakdown) plan.supplyBreakdown.forEach(s => delete (s as any).mpsPlan);
+    if (plan.supplyBreakdown) plan.supplyBreakdown.forEach(s => {
+      delete (s as any).mpsPlan;
+      if (s.sizes) s.sizes.forEach(sz => delete (sz as any).mpsPlanSupply);
+    });
     if (plan.exceptions) plan.exceptions.forEach(e => delete (e as any).mpsPlan);
 
     return { success: true, data: plan };
@@ -1090,7 +1263,7 @@ export class MpsController {
   async exportPlan(@Param('id') id: number, @Res() res: express.Response) {
     const plan = await this.mpsPlanRepo.findOne({
       where: { id },
-      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown']
+      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown', 'supplyBreakdown.sizes']
     });
 
     if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
@@ -1236,6 +1409,14 @@ export class MpsController {
       const plannedSup = manualOp?.plannedStationWorkers || s.supportStaff;
       const variance = (actualCut + actualSup) - (plannedCut + plannedSup);
 
+      // Helper: get size kg from normalized sizes array
+      const getSizeKg = (sizeArr: any[] | undefined, groupSize: string): number => {
+        if (!sizeArr) return 0;
+        return sizeArr
+          .filter((sz: any) => sz.groupSize === groupSize)
+          .reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+      };
+
       const rowData = [
         dateStr,
         dateObj.toLocaleDateString('en-US', { weekday: 'short' }),
@@ -1248,14 +1429,14 @@ export class MpsController {
         actualCut,
         actualSup,
         variance,
-        Math.round(supply?.size40Down || 0),
-        Math.round(supply?.size40_45 || 0),
-        Math.round(supply?.size45_50 || 0),
-        Math.round(supply?.size50_55 || 0),
-        Math.round(supply?.size55_60 || 0),
-        Math.round(supply?.size60_65 || 0),
-        Math.round(supply?.size65_70 || 0),
-        Math.round(supply?.size70_up || 0),
+        Math.round(getSizeKg(supply?.sizes, '40 Down')),
+        Math.round(getSizeKg(supply?.sizes, '40-45')),
+        Math.round(getSizeKg(supply?.sizes, '45-50')),
+        Math.round(getSizeKg(supply?.sizes, '50-55')),
+        Math.round(getSizeKg(supply?.sizes, '55-60')),
+        Math.round(getSizeKg(supply?.sizes, '60-65')),
+        Math.round(getSizeKg(supply?.sizes, '65-70')),
+        Math.round(getSizeKg(supply?.sizes, '70 Up')),
         ...itemCodes.map(code => d.orders.has(code) ? Math.round(d.orders.get(code)) : '-')
       ];
 

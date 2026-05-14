@@ -147,6 +147,9 @@ export default function ChickenReceiving() {
       delete payload.sex;
       delete payload.batch;
       delete payload.sublot;
+    } else if (activeTab === 'weekly') {
+      delete payload.receive_time;
+      delete payload.sublot;
     }
 
     // Remove id from payload if POST
@@ -301,7 +304,6 @@ export default function ChickenReceiving() {
                         <Edit size={14} className="text-orange-500" />
                       </div>
                       <div className="text-xs font-bold text-gray-800 mb-1">Shift {record.shift || '-'}</div>
-                      {record.receive_time && <div className="text-xs text-gray-500 mb-2 flex items-center gap-1"><Clock size={12} />{record.receive_time.substring(0, 5)}</div>}
                       <div className="text-xs font-medium mb-1 truncate text-gray-600 flex items-center gap-1"><MapPin size={12} />{record.farm_name || record.farm_name_standard || 'N/A'}</div>
                       <div className="flex justify-between items-center text-xs font-medium mt-2">
                         <span className="text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">{Number(record.chicken_count).toLocaleString()}</span>
@@ -458,7 +460,7 @@ export default function ChickenReceiving() {
             <label className="block text-xs font-semibold text-gray-600 mb-1">Receive Date</label>
             <input type="date" name="receive_date" value={formData.receive_date} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500" />
           </div>
-          {activeTab === 'monthly' ? (
+          {['monthly', 'weekly'].includes(activeTab) ? (
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Chicken Type</label>
               <select name="chicken_type" value={formData.chicken_type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
@@ -477,15 +479,17 @@ export default function ChickenReceiving() {
 
         {activeTab !== 'monthly' && (
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Chicken Type</label>
-              <select name="chicken_type" value={formData.chicken_type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-                <option value="ไก่เนื้อ">ไก่เนื้อ</option>
-                <option value="ไก่ไข่">ไก่ไข่</option>
-                <option value="ไก่พันธุ์">ไก่พันธุ์</option>
-              </select>
-            </div>
-            <div>
+            {activeTab !== 'weekly' && (
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Chicken Type</label>
+                <select name="chicken_type" value={formData.chicken_type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
+                  <option value="ไก่เนื้อ">ไก่เนื้อ</option>
+                  <option value="ไก่ไข่">ไก่ไข่</option>
+                  <option value="ไก่พันธุ์">ไก่พันธุ์</option>
+                </select>
+              </div>
+            )}
+            <div className={activeTab === 'weekly' ? 'col-span-2' : ''}>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Shift</label>
               <select name="shift" value={formData.shift} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
                 <option value="A">Shift A (เช้า)</option>

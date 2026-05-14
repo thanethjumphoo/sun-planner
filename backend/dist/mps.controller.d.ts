@@ -5,10 +5,12 @@ import { StgErpOrderHeader } from './stg-erp-order-header.entity';
 import { ProductSpec } from './product-spec.entity';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
+import { MpsPlanSupplySize } from './mps-plan-supply-size.entity';
 import { WeightDistribution } from './weight-distribution.entity';
 import { FilletSizeCalc, FilletConfig } from './fillet-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
+import { ChickenReceivingWeeklySize } from './chicken-receiving/entities/weekly-size.entity';
 import { ManualOperation } from './manual-operation.entity';
 import { StgErpItem } from './stg-erp-item.entity';
 import { MasterYield } from './master-yield.entity';
@@ -27,8 +29,10 @@ export declare class MpsController {
     private manualOpRepo;
     private itemRepo;
     private masterYieldRepo;
+    private mpsSupplySizeRepo;
+    private weeklySizeRepo;
     private chickenReceivingService;
-    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, filletConfigRepo: Repository<FilletConfig>, manualOpRepo: Repository<ManualOperation>, itemRepo: Repository<StgErpItem>, masterYieldRepo: Repository<MasterYield>, chickenReceivingService: ChickenReceivingService);
+    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, filletConfigRepo: Repository<FilletConfig>, manualOpRepo: Repository<ManualOperation>, itemRepo: Repository<StgErpItem>, masterYieldRepo: Repository<MasterYield>, mpsSupplySizeRepo: Repository<MpsPlanSupplySize>, weeklySizeRepo: Repository<ChickenReceivingWeeklySize>, chickenReceivingService: ChickenReceivingService);
     private getItemCodesByPartType;
     getAllowedItems(partType: string): Promise<{
         partType: string;
@@ -87,6 +91,24 @@ export declare class MpsController {
         message: string;
     } | {
         success: boolean;
+        message?: undefined;
+    }>;
+    getWeeklySizesForPlan(id: number): Promise<{
+        success: boolean;
+        message: string;
+        data?: undefined;
+    } | {
+        success: boolean;
+        data: ChickenReceivingWeeklySize[];
+        message?: undefined;
+    }>;
+    importWeeklyForPlan(id: number): Promise<{
+        success: boolean;
+        message: string;
+        count?: undefined;
+    } | {
+        success: boolean;
+        count: number;
         message?: undefined;
     }>;
     getPlan(id: number): Promise<{

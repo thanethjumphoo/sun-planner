@@ -1,7 +1,6 @@
 export declare class ChickenReceivingPlanWeekly {
     id: string;
     receive_date: Date;
-    receive_time: string;
     chicken_type: string;
     chicken_count: number;
     chicken_weight: number;

@@ -28,8 +28,10 @@ const weight_distribution_controller_1 = require("./weight-distribution.controll
 const mps_controller_1 = require("./mps.controller");
 const mps_plan_entity_1 = require("./mps-plan.entity");
 const mps_plan_supply_entity_1 = require("./mps-plan-supply.entity");
+const mps_plan_supply_size_entity_1 = require("./mps-plan-supply-size.entity");
 const mps_exception_entity_1 = require("./mps-exception.entity");
 const dps_plan_entity_1 = require("./dps-plan.entity");
+const weekly_size_entity_1 = require("./chicken-receiving/entities/weekly-size.entity");
 const manual_operation_entity_1 = require("./manual-operation.entity");
 const manual_operation_controller_1 = require("./manual-operation.controller");
 const dps_controller_1 = require("./dps.controller");
@@ -70,9 +72,9 @@ exports.AppModule = AppModule = __decorate([
             chicken_receiving_module_1.ChickenReceivingModule,
             typeorm_1.TypeOrmModule.forFeature([
                 stg_erp_item_entity_1.StgErpItem, stg_erp_order_header_entity_1.StgErpOrderHeader, stg_erp_order_line_entity_1.StgErpOrderLine, target_sync_item_entity_1.TargetSyncItem, product_spec_entity_1.ProductSpec,
-                weight_distribution_entity_1.WeightDistribution, mps_plan_entity_1.MpsPlan, mps_plan_entity_1.MpsPlanDaily, mps_plan_entity_1.MpsPlanOrder, mps_plan_supply_entity_1.MpsPlanSupply, mps_exception_entity_1.MpsExceptionReport,
+                weight_distribution_entity_1.WeightDistribution, mps_plan_entity_1.MpsPlan, mps_plan_entity_1.MpsPlanDaily, mps_plan_entity_1.MpsPlanOrder, mps_plan_supply_entity_1.MpsPlanSupply, mps_plan_supply_size_entity_1.MpsPlanSupplySize, mps_exception_entity_1.MpsExceptionReport,
                 dps_plan_entity_1.DpsPlan, dps_plan_entity_1.DpsSublot, dps_plan_entity_1.DpsSublotBin, dps_plan_entity_1.DpsOrder, dps_plan_entity_1.DpsAllocation, manual_operation_entity_1.ManualOperation,
-                fillet_size_entity_1.FilletConfig, fillet_size_entity_1.FilletGroup, fillet_size_entity_1.FilletSizeCalc, master_yield_entity_1.MasterYield
+                fillet_size_entity_1.FilletConfig, fillet_size_entity_1.FilletGroup, fillet_size_entity_1.FilletSizeCalc, master_yield_entity_1.MasterYield, weekly_size_entity_1.ChickenReceivingWeeklySize
             ]),
         ],
         controllers: [app_controller_1.AppController, erp_integration_controller_1.ErpIntegrationController, product_spec_controller_1.ProductSpecController, weight_distribution_controller_1.WeightDistributionController, mps_controller_1.MpsController, manual_operation_controller_1.ManualOperationController, dps_controller_1.DpsController, fillet_size_controller_1.FilletSizeController, master_yield_controller_1.MasterYieldController],

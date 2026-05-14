@@ -226,6 +226,8 @@ const MPSPlan: React.FC = () => {
     }
   };
 
+  const [weeklySizes, setWeeklySizes] = useState<any[]>([]);
+
   const loadPlanForMonth = async (allPlans: any[]) => {
     const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
     const planForMonth = allPlans.find(p => p.targetMonth === monthStr);
@@ -237,6 +239,12 @@ const MPSPlan: React.FC = () => {
           const json = await res.json();
           if (json.success) {
             setCurrentPlan(json.data);
+            // Fetch weekly sizes as well
+            const weekRes = await fetch(`${API}/api/mps/plans/${planForMonth.id}/weekly-sizes`);
+            if (weekRes.ok) {
+              const weekJson = await weekRes.json();
+              setWeeklySizes(weekJson.success ? weekJson.data : []);
+            }
             return;
           }
         }
@@ -245,6 +253,7 @@ const MPSPlan: React.FC = () => {
       }
     }
     setCurrentPlan(null);
+    setWeeklySizes([]);
   };
 
   const handleDeletePlan = async (id: number) => {
@@ -455,6 +464,30 @@ const MPSPlan: React.FC = () => {
     }
   };
 
+  const handleImportWeekly = async () => {
+    if (!currentPlan) return;
+    if (currentPlan.status === 'APPROVED') {
+      alert('Plan is locked.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/mps/plans/${currentPlan.id}/import-weekly`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        alert(`✅ Imported ${data.count} weekly size records.`);
+        initData(); // reload
+      } else {
+        alert(data.message || 'Failed to import weekly plan');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Error importing weekly plan');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // --- Calculations ---
   const calculateDailyMetrics = (date: string) => {
     if (!currentPlan) {
@@ -611,6 +644,12 @@ const MPSPlan: React.FC = () => {
           <p className="text-slate-500 mt-3 text-lg font-medium">Monthly Strategic Planning & Yield Optimization Engine</p>
         </div>
         <div className="flex gap-3">
+          {currentPlan && (
+            <button disabled={loading || currentPlan?.status === 'APPROVED'} onClick={handleImportWeekly} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all ${loading || currentPlan?.status === 'APPROVED' ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 shadow-blue-200'}`}>
+              <Download className={`w-4 h-4 ${loading ? 'animate-pulse' : ''}`} />
+              Import Week Plan
+            </button>
+          )}
           <button disabled={loading || currentPlan?.status === 'APPROVED'} onClick={handleGeneratePlan} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all ${loading || currentPlan?.status === 'APPROVED' ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 shadow-orange-200'}`}>
             <Activity className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {currentPlan?.status === 'APPROVED' ? '🔒 Plan Locked' : loading ? 'Generating...' : 'Generate & Save Plan'}
@@ -772,6 +811,7 @@ const MPSPlan: React.FC = () => {
                     const dayNum = i + 1;
                     const todayDateStr = getTodayStr();
                     const isToday = date === todayDateStr;
+                    const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === date : false);
 
                     return (
                       <div
@@ -795,9 +835,16 @@ const MPSPlan: React.FC = () => {
                       >
                         {/* Day Header */}
                         <div className="flex justify-between items-start mb-1">
-                          <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-bold ${isToday ? 'bg-orange-500 text-white shadow-md' : 'text-gray-700'}`}>
-                            {dayNum}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-bold ${isToday ? 'bg-orange-500 text-white shadow-md' : 'text-gray-700'}`}>
+                              {dayNum}
+                            </span>
+                            {hasWeekly && (
+                              <span className="bg-blue-100 text-blue-700 text-[9px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wider shadow-sm border border-blue-200">
+                                Week
+                              </span>
+                            )}
+                          </div>
                           {metrics.intake > 0 && (
                             <div className="flex flex-col items-end gap-1">
                               <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -828,17 +875,18 @@ const MPSPlan: React.FC = () => {
                               <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden flex gap-0.5">
                                 {(() => {
                                   const s = metrics.supplyBreakdown;
-                                  const total = Number(s.size40Down || 0) + Number(s.size40_45 || 0) + Number(s.size45_50 || 0) +
-                                    Number(s.size50_55 || 0) + Number(s.size55_60 || 0) + Number(s.size60_65 || 0) +
-                                    Number(s.size65_70 || 0) + Number(s.size70_up || 0);
+                                  const getSz = (g: string) => (s.sizes || []).filter((sz: any) => sz.groupSize === g).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                                  const total = getSz('40 Down') + getSz('40-45') + getSz('45-50') +
+                                    getSz('50-55') + getSz('55-60') + getSz('60-65') +
+                                    getSz('65-70') + getSz('70 Up');
                                   if (total === 0) return null;
 
                                   const sizes = [
-                                    { val: s.size40Down, color: 'bg-slate-400' },
-                                    { val: s.size40_45, color: 'bg-blue-400' },
-                                    { val: s.size45_50, color: 'bg-cyan-400' },
-                                    { val: Number(s.size50_55) + Number(s.size55_60), color: 'bg-emerald-400' },
-                                    { val: Number(s.size60_65) + Number(s.size65_70) + Number(s.size70_up), color: 'bg-red-400' },
+                                    { val: getSz('40 Down'), color: 'bg-slate-400' },
+                                    { val: getSz('40-45'), color: 'bg-blue-400' },
+                                    { val: getSz('45-50'), color: 'bg-cyan-400' },
+                                    { val: getSz('50-55') + getSz('55-60'), color: 'bg-emerald-400' },
+                                    { val: getSz('60-65') + getSz('65-70') + getSz('70 Up'), color: 'bg-red-400' },
                                   ];
 
                                   return sizes.map((item, i) => (
@@ -1462,27 +1510,44 @@ const MPSPlan: React.FC = () => {
                   {pc.sizeBreakdownTitle}
                 </h4>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  {[
-                    { label: '40 Down', val: selectedSupply.size40Down, color: 'bg-slate-500' },
-                    { label: '40-45', val: selectedSupply.size40_45, color: 'bg-blue-500' },
-                    { label: '45-50', val: selectedSupply.size45_50, color: 'bg-cyan-500' },
-                    { label: '50-55', val: selectedSupply.size50_55, color: 'bg-emerald-500' },
-                    { label: '55-60', val: selectedSupply.size55_60, color: 'bg-green-500' },
-                    { label: '60-65', val: selectedSupply.size60_65, color: 'bg-amber-500' },
-                    { label: '65-70', val: selectedSupply.size65_70, color: 'bg-orange-500' },
-                    { label: '70 Up', val: selectedSupply.size70_up, color: 'bg-red-500' },
-                  ].map((size, idx) => (
-                    <div key={idx} className="bg-white border border-gray-100 p-3 rounded-xl shadow-sm hover:border-orange-200 transition-all">
-                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">{size.label}</p>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-lg font-bold text-gray-800">{Number(size.val || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
-                        <span className="text-[9px] font-bold text-gray-400">kg</span>
+                  {(() => {
+                    const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                    const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                    const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                    const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+
+                    const totalAll = getSizeKg('40 Down') + getSizeKg('40-45') + getSizeKg('45-50') + getSizeKg('50-55') + getSizeKg('55-60') + getSizeKg('60-65') + getSizeKg('65-70') + getSizeKg('70 Up');
+                    return [
+                      { label: '40 Down', val: getSizeKg('40 Down'), monthVal: getMonthSizeKg('40 Down'), color: 'bg-slate-500' },
+                      { label: '40-45', val: getSizeKg('40-45'), monthVal: getMonthSizeKg('40-45'), color: 'bg-blue-500' },
+                      { label: '45-50', val: getSizeKg('45-50'), monthVal: getMonthSizeKg('45-50'), color: 'bg-cyan-500' },
+                      { label: '50-55', val: getSizeKg('50-55'), monthVal: getMonthSizeKg('50-55'), color: 'bg-emerald-500' },
+                      { label: '55-60', val: getSizeKg('55-60'), monthVal: getMonthSizeKg('55-60'), color: 'bg-green-500' },
+                      { label: '60-65', val: getSizeKg('60-65'), monthVal: getMonthSizeKg('60-65'), color: 'bg-amber-500' },
+                      { label: '65-70', val: getSizeKg('65-70'), monthVal: getMonthSizeKg('65-70'), color: 'bg-orange-500' },
+                      { label: '70 Up', val: getSizeKg('70 Up'), monthVal: getMonthSizeKg('70 Up'), color: 'bg-red-500' },
+                    ].map((size, idx) => {
+                      const diff = hasWeekly ? size.val - size.monthVal : 0;
+                      return (
+                      <div key={idx} className="bg-white border border-gray-100 p-3 rounded-xl shadow-sm hover:border-orange-200 transition-all">
+                        <div className="flex justify-between items-start mb-1">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase">{size.label}</p>
+                          {hasWeekly && diff !== 0 && (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${diff > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                              {diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()} kg
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-lg font-bold text-gray-800">{Number(size.val || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
+                          <span className="text-[9px] font-bold text-gray-400">kg</span>
+                        </div>
+                        <div className="mt-2 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
+                          <div className={`h-full ${size.color} opacity-80`} style={{ width: `${totalAll > 0 ? (size.val / totalAll) * 100 : 0}%` }}></div>
+                        </div>
                       </div>
-                      <div className="mt-2 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
-                        <div className={`h-full ${size.color} w-2/3 opacity-80`}></div>
-                      </div>
-                    </div>
-                  ))}
+                    )});
+                  })()}
                 </div>
               </div>
 
@@ -1490,19 +1555,30 @@ const MPSPlan: React.FC = () => {
               <div className="bg-gray-900 rounded-2xl p-6 text-white flex flex-col md:flex-row justify-between items-center gap-6">
                 <div>
                   <p className="text-gray-400 font-bold uppercase text-[10px] mb-1">Estimated Net Output (Aggregate)</p>
-                  <h5 className="text-3xl font-bold flex items-baseline gap-2">
-                    {Math.round(
-                      Number(selectedSupply.size40Down || 0) +
-                      Number(selectedSupply.size40_45 || 0) +
-                      Number(selectedSupply.size45_50 || 0) +
-                      Number(selectedSupply.size50_55 || 0) +
-                      Number(selectedSupply.size55_60 || 0) +
-                      Number(selectedSupply.size60_65 || 0) +
-                      Number(selectedSupply.size65_70 || 0) +
-                      Number(selectedSupply.size70_up || 0)
-                    ).toLocaleString()}
-                    <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">KG</span>
-                  </h5>
+                  {(() => {
+                    const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                    const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                    const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                    const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+
+                    const total = getSizeKg('40 Down') + getSizeKg('40-45') + getSizeKg('45-50') + getSizeKg('50-55') + getSizeKg('55-60') + getSizeKg('60-65') + getSizeKg('65-70') + getSizeKg('70 Up');
+                    const monthTotal = getMonthSizeKg('40 Down') + getMonthSizeKg('40-45') + getMonthSizeKg('45-50') + getMonthSizeKg('50-55') + getMonthSizeKg('55-60') + getMonthSizeKg('60-65') + getMonthSizeKg('65-70') + getMonthSizeKg('70 Up');
+                    const diff = hasWeekly ? total - monthTotal : 0;
+
+                    return (
+                      <>
+                        <h5 className="text-3xl font-bold flex items-baseline gap-2">
+                          {Math.round(total).toLocaleString()}
+                          <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">KG</span>
+                          {hasWeekly && diff !== 0 && (
+                            <span className={`text-sm ml-2 font-bold ${diff > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              ({diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()})
+                            </span>
+                          )}
+                        </h5>
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="w-full md:w-64 space-y-2">
                   <div className="flex justify-between text-[10px] font-bold uppercase text-gray-400">
@@ -1510,27 +1586,27 @@ const MPSPlan: React.FC = () => {
                     <span className="text-orange-400">100% Match</span>
                   </div>
                   <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden flex">
-                    {[
-                      { val: selectedSupply.size40Down, color: 'bg-slate-500' },
-                      { val: selectedSupply.size40_45, color: 'bg-blue-500' },
-                      { val: selectedSupply.size45_50, color: 'bg-cyan-500' },
-                      { val: selectedSupply.size50_55, color: 'bg-emerald-500' },
-                      { val: selectedSupply.size55_60, color: 'bg-green-500' },
-                      { val: selectedSupply.size60_65, color: 'bg-amber-500' },
-                      { val: selectedSupply.size65_70, color: 'bg-orange-500' },
-                      { val: selectedSupply.size70_up, color: 'bg-red-500' },
-                    ].map((s, i) => {
-                      const total = Number(selectedSupply.size40Down || 0) +
-                        Number(selectedSupply.size40_45 || 0) +
-                        Number(selectedSupply.size45_50 || 0) +
-                        Number(selectedSupply.size50_55 || 0) +
-                        Number(selectedSupply.size55_60 || 0) +
-                        Number(selectedSupply.size60_65 || 0) +
-                        Number(selectedSupply.size65_70 || 0) +
-                        Number(selectedSupply.size70_up || 0);
-                      const width = total > 0 ? (Number(s.val || 0) / total) * 100 : 0;
-                      return <div key={i} style={{ width: `${width}%` }} className={`${s.color} h-full border-r border-black/20 last:border-0`} />;
-                    })}
+                    {(() => {
+                      const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                      const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                      const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                      const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+
+                      const total = getSizeKg('40 Down') + getSizeKg('40-45') + getSizeKg('45-50') + getSizeKg('50-55') + getSizeKg('55-60') + getSizeKg('60-65') + getSizeKg('65-70') + getSizeKg('70 Up');
+                      return [
+                        { val: getSizeKg('40 Down'), color: 'bg-slate-500' },
+                        { val: getSizeKg('40-45'), color: 'bg-blue-500' },
+                        { val: getSizeKg('45-50'), color: 'bg-cyan-500' },
+                        { val: getSizeKg('50-55'), color: 'bg-emerald-500' },
+                        { val: getSizeKg('55-60'), color: 'bg-green-500' },
+                        { val: getSizeKg('60-65'), color: 'bg-amber-500' },
+                        { val: getSizeKg('65-70'), color: 'bg-orange-500' },
+                        { val: getSizeKg('70 Up'), color: 'bg-red-500' },
+                      ].map((s, i) => {
+                        const width = total > 0 ? (s.val / total) * 100 : 0;
+                        return <div key={i} style={{ width: `${width}%` }} className={`${s.color} h-full border-r border-black/20 last:border-0`} />;
+                      });
+                    })()}
                   </div>
                 </div>
               </div>
@@ -1596,15 +1672,19 @@ const MPSPlan: React.FC = () => {
                         <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
                         {(() => {
                           const sizeLabels = [
-                            { key: '40Down', label: '40 Down', supplyKey: 'size40Down', color: 'bg-slate-500' },
-                            { key: '40_45', label: '40-45', supplyKey: 'size40_45', color: 'bg-blue-500' },
-                            { key: '45_50', label: '45-50', supplyKey: 'size45_50', color: 'bg-cyan-500' },
-                            { key: '50_55', label: '50-55', supplyKey: 'size50_55', color: 'bg-emerald-500' },
-                            { key: '55_60', label: '55-60', supplyKey: 'size55_60', color: 'bg-green-500' },
-                            { key: '60_65', label: '60-65', supplyKey: 'size60_65', color: 'bg-amber-500' },
-                            { key: '65_70', label: '65-70', supplyKey: 'size65_70', color: 'bg-orange-500' },
-                            { key: '70Up', label: '70 Up', supplyKey: 'size70_up', color: 'bg-red-500' },
+                            { key: '40Down', label: '40 Down', groupSize: '40 Down', color: 'bg-slate-500' },
+                            { key: '40_45', label: '40-45', groupSize: '40-45', color: 'bg-blue-500' },
+                            { key: '45_50', label: '45-50', groupSize: '45-50', color: 'bg-cyan-500' },
+                            { key: '50_55', label: '50-55', groupSize: '50-55', color: 'bg-emerald-500' },
+                            { key: '55_60', label: '55-60', groupSize: '55-60', color: 'bg-green-500' },
+                            { key: '60_65', label: '60-65', groupSize: '60-65', color: 'bg-amber-500' },
+                            { key: '65_70', label: '65-70', groupSize: '65-70', color: 'bg-orange-500' },
+                            { key: '70Up', label: '70 Up', groupSize: '70 Up', color: 'bg-red-500' },
                           ];
+                          // Helper: get supply kg from normalized sizes array
+                          const getSupplySizeKg = (groupSize: string): number => {
+                            return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                          };
                           const allBinDefs = [
                             { key: '40Down', lo: 0, hi: 40 },
                             { key: '40_45', lo: 40, hi: 45 },
@@ -1637,7 +1717,7 @@ const MPSPlan: React.FC = () => {
 
                           // Build supply remaining map for waterfall
                           const supplyRemaining: Record<string, number> = {};
-                          sizeLabels.forEach(sl => { supplyRemaining[sl.key] = Number(selectedSupply[sl.supplyKey] || 0); });
+                          sizeLabels.forEach(sl => { supplyRemaining[sl.key] = getSupplySizeKg(sl.groupSize); });
 
                           // Pass 1: Allocate SIZED orders first (they have specific bins)
                           const sizedOrders: any[] = [];
@@ -1686,7 +1766,7 @@ const MPSPlan: React.FC = () => {
                           return (
                             <div className="space-y-1">
                               {sizeLabels.map(sl => {
-                                const supply = Number(selectedSupply[sl.supplyKey] || 0);
+                                const supply = getSupplySizeKg(sl.groupSize);
                                 const demand = demandByBin[sl.key] || 0;
                                 if (supply === 0 && demand === 0) return null;
                                 const remaining = supply - demand;

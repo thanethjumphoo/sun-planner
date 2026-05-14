@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MpsPlanSupply = void 0;
 const typeorm_1 = require("typeorm");
 const mps_plan_entity_1 = require("./mps-plan.entity");
+const mps_plan_supply_size_entity_1 = require("./mps-plan-supply-size.entity");
 let MpsPlanSupply = class MpsPlanSupply {
     id;
     mpsPlan;
@@ -21,14 +22,7 @@ let MpsPlanSupply = class MpsPlanSupply {
     totalWeight;
     avgWeight;
     slaughteredWeight;
-    size40Down;
-    size40_45;
-    size45_50;
-    size50_55;
-    size55_60;
-    size60_65;
-    size65_70;
-    size70_up;
+    sizes;
 };
 exports.MpsPlanSupply = MpsPlanSupply;
 __decorate([
@@ -65,37 +59,9 @@ __decorate([
     __metadata("design:type", Number)
 ], MpsPlanSupply.prototype, "slaughteredWeight", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'size_40_down', type: 'decimal', precision: 18, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], MpsPlanSupply.prototype, "size40Down", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ name: 'size_40_45', type: 'decimal', precision: 18, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], MpsPlanSupply.prototype, "size40_45", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ name: 'size_45_50', type: 'decimal', precision: 18, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], MpsPlanSupply.prototype, "size45_50", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ name: 'size_50_55', type: 'decimal', precision: 18, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], MpsPlanSupply.prototype, "size50_55", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ name: 'size_55_60', type: 'decimal', precision: 18, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], MpsPlanSupply.prototype, "size55_60", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ name: 'size_60_65', type: 'decimal', precision: 18, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], MpsPlanSupply.prototype, "size60_65", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ name: 'size_65_70', type: 'decimal', precision: 18, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], MpsPlanSupply.prototype, "size65_70", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ name: 'size_70_up', type: 'decimal', precision: 18, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], MpsPlanSupply.prototype, "size70_up", void 0);
+    (0, typeorm_1.OneToMany)(() => mps_plan_supply_size_entity_1.MpsPlanSupplySize, size => size.mpsPlanSupply, { cascade: true }),
+    __metadata("design:type", Array)
+], MpsPlanSupply.prototype, "sizes", void 0);
 exports.MpsPlanSupply = MpsPlanSupply = __decorate([
     (0, typeorm_1.Entity)('mps_plan_supply')
 ], MpsPlanSupply);

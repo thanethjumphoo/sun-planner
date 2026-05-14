@@ -14,7 +14,6 @@ const typeorm_1 = require("typeorm");
 let ChickenReceivingPlanWeekly = class ChickenReceivingPlanWeekly {
     id;
     receive_date;
-    receive_time;
     chicken_type;
     chicken_count;
     chicken_weight;
@@ -38,10 +37,6 @@ __decorate([
     (0, typeorm_1.Column)({ type: 'date' }),
     __metadata("design:type", Date)
 ], ChickenReceivingPlanWeekly.prototype, "receive_date", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ type: 'time', nullable: true }),
-    __metadata("design:type", String)
-], ChickenReceivingPlanWeekly.prototype, "receive_time", void 0);
 __decorate([
     (0, typeorm_1.Column)(),
     __metadata("design:type", String)

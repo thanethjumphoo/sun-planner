@@ -8,9 +8,6 @@ export class ChickenReceivingPlanWeekly {
   @Column({ type: 'date' })
   receive_date: Date;
 
-  @Column({ type: 'time', nullable: true })
-  receive_time: string;
-
   @Column()
   chicken_type: string;
 

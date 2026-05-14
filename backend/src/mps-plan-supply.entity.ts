@@ -1,5 +1,6 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
 import { MpsPlan } from './mps-plan.entity';
+import { MpsPlanSupplySize } from './mps-plan-supply-size.entity';
 
 @Entity('mps_plan_supply')
 export class MpsPlanSupply {
@@ -28,28 +29,7 @@ export class MpsPlanSupply {
   @Column({ name: 'slaughtered_weight', type: 'decimal', precision: 18, scale: 2, default: 0 })
   slaughteredWeight: number;
 
-  // Size Bins for Fillet (สันใน)
-  @Column({ name: 'size_40_down', type: 'decimal', precision: 18, scale: 2, default: 0 })
-  size40Down: number;
-
-  @Column({ name: 'size_40_45', type: 'decimal', precision: 18, scale: 2, default: 0 })
-  size40_45: number;
-
-  @Column({ name: 'size_45_50', type: 'decimal', precision: 18, scale: 2, default: 0 })
-  size45_50: number;
-
-  @Column({ name: 'size_50_55', type: 'decimal', precision: 18, scale: 2, default: 0 })
-  size50_55: number;
-
-  @Column({ name: 'size_55_60', type: 'decimal', precision: 18, scale: 2, default: 0 })
-  size55_60: number;
-
-  @Column({ name: 'size_60_65', type: 'decimal', precision: 18, scale: 2, default: 0 })
-  size60_65: number;
-
-  @Column({ name: 'size_65_70', type: 'decimal', precision: 18, scale: 2, default: 0 })
-  size65_70: number;
-
-  @Column({ name: 'size_70_up', type: 'decimal', precision: 18, scale: 2, default: 0 })
-  size70_up: number;
+  // Size breakdown is now stored in mps_plan_supply_size table
+  @OneToMany(() => MpsPlanSupplySize, size => size.mpsPlanSupply, { cascade: true })
+  sizes: MpsPlanSupplySize[];
 }

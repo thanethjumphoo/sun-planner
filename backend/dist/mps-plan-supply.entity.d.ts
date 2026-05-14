@@ -1,4 +1,5 @@
 import { MpsPlan } from './mps-plan.entity';
+import { MpsPlanSupplySize } from './mps-plan-supply-size.entity';
 export declare class MpsPlanSupply {
     id: number;
     mpsPlan: MpsPlan;
@@ -8,12 +9,5 @@ export declare class MpsPlanSupply {
     totalWeight: number;
     avgWeight: number;
     slaughteredWeight: number;
-    size40Down: number;
-    size40_45: number;
-    size45_50: number;
-    size50_55: number;
-    size55_60: number;
-    size60_65: number;
-    size65_70: number;
-    size70_up: number;
+    sizes: MpsPlanSupplySize[];
 }

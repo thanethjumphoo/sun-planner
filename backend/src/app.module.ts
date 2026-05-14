@@ -20,8 +20,10 @@ import { WeightDistributionController } from './weight-distribution.controller';
 import { MpsController } from './mps.controller';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
+import { MpsPlanSupplySize } from './mps-plan-supply-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
 import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps-plan.entity';
+import { ChickenReceivingWeeklySize } from './chicken-receiving/entities/weekly-size.entity';
 import { ManualOperation } from './manual-operation.entity';
 import { ManualOperationController } from './manual-operation.controller';
 import { DpsController } from './dps.controller';
@@ -59,9 +61,9 @@ import { MasterYieldController } from './master-yield.controller';
     ChickenReceivingModule,
     TypeOrmModule.forFeature([
       StgErpItem, StgErpOrderHeader, StgErpOrderLine, TargetSyncItem, ProductSpec, 
-      WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsExceptionReport,
+      WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsPlanSupplySize, MpsExceptionReport,
       DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation,
-      FilletConfig, FilletGroup, FilletSizeCalc, MasterYield
+      FilletConfig, FilletGroup, FilletSizeCalc, MasterYield, ChickenReceivingWeeklySize
     ]),
   ],
   controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController],
