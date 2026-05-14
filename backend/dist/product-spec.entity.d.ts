@@ -10,6 +10,7 @@ export declare class ProductSpec {
     productWeight: number;
     productSpeed: number;
     productLead: number;
+    masterYieldId: string | null;
     createdAt: Date;
     updatedAt: Date;
 }

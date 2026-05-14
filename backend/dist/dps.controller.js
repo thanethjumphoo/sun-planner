@@ -28,9 +28,10 @@ let DpsController = class DpsController {
         this.orderRepo = orderRepo;
         this.allocationRepo = allocationRepo;
     }
-    async getPlanByDate(date) {
+    async getPlanByDate(date, partType) {
+        const pt = partType || 'fillet';
         const plan = await this.planRepo.findOne({
-            where: { productionDate: new Date(date) },
+            where: { productionDate: new Date(date), partType: pt },
             relations: [
                 'sublots',
                 'sublots.bins',
@@ -45,20 +46,23 @@ let DpsController = class DpsController {
             return { exists: false };
         return { exists: true, data: plan };
     }
-    async deletePlan(date) {
-        const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date) } });
+    async deletePlan(date, partType) {
+        const pt = partType || 'fillet';
+        const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date), partType: pt } });
         if (existing) {
             await this.planRepo.remove(existing);
         }
         return { success: true };
     }
     async saveGeneratedPlan(date, payload) {
-        const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date) } });
+        const pt = payload.partType || 'fillet';
+        const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date), partType: pt } });
         if (existing) {
             await this.planRepo.remove(existing);
         }
         const plan = this.planRepo.create({
             productionDate: new Date(date),
+            partType: pt,
             status: 'CONFIRMED',
             totalSupplyKg: payload.totalSupplyKg,
             totalDemandKg: payload.totalDemandKg,
@@ -128,15 +132,17 @@ exports.DpsController = DpsController;
 __decorate([
     (0, common_1.Get)(':date'),
     __param(0, (0, common_1.Param)('date')),
+    __param(1, (0, common_1.Query)('partType')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], DpsController.prototype, "getPlanByDate", null);
 __decorate([
     (0, common_1.Delete)(':date'),
     __param(0, (0, common_1.Param)('date')),
+    __param(1, (0, common_1.Query)('partType')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], DpsController.prototype, "deletePlan", null);
 __decorate([

@@ -2,6 +2,7 @@ import { MpsPlanSupply } from './mps-plan-supply.entity';
 export declare class MpsPlan {
     id: number;
     planName: string;
+    partType: string;
     targetMonth: string;
     status: string;
     totalIntakeBirds: number;

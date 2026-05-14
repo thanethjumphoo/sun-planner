@@ -16,6 +16,7 @@ let DpsPlan = class DpsPlan {
     id;
     productionDate;
     mpsPlan;
+    partType;
     status;
     totalSupplyKg;
     totalDemandKg;
@@ -40,6 +41,10 @@ __decorate([
     (0, typeorm_1.JoinColumn)({ name: 'mps_plan_id' }),
     __metadata("design:type", mps_plan_entity_1.MpsPlan)
 ], DpsPlan.prototype, "mpsPlan", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'part_type', type: 'varchar', length: 50, default: 'fillet' }),
+    __metadata("design:type", String)
+], DpsPlan.prototype, "partType", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'status', type: 'varchar', length: 20, default: 'DRAFT' }),
     __metadata("design:type", String)

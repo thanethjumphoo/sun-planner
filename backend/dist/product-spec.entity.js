@@ -23,6 +23,7 @@ let ProductSpec = class ProductSpec {
     productWeight;
     productSpeed;
     productLead;
+    masterYieldId;
     createdAt;
     updatedAt;
 };
@@ -71,6 +72,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'PRODUCT_LEAD', type: 'int', nullable: true }),
     __metadata("design:type", Number)
 ], ProductSpec.prototype, "productLead", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'MASTER_YIELD_ID', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], ProductSpec.prototype, "masterYieldId", void 0);
 __decorate([
     (0, typeorm_1.CreateDateColumn)({ name: 'CREATED_AT' }),
     __metadata("design:type", Date)

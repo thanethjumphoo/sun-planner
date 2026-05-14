@@ -14,6 +14,7 @@ const typeorm_1 = require("typeorm");
 let ManualOperation = class ManualOperation {
     id;
     productionDate;
+    partType;
     plannedStationWorkers;
     actualStationWorkers;
     actualCuttingWorkers;
@@ -26,9 +27,13 @@ __decorate([
     __metadata("design:type", Number)
 ], ManualOperation.prototype, "id", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'production_date', type: 'date', unique: true }),
+    (0, typeorm_1.Column)({ name: 'production_date', type: 'date' }),
     __metadata("design:type", Date)
 ], ManualOperation.prototype, "productionDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'part_type', type: 'varchar', length: 50, default: 'fillet' }),
+    __metadata("design:type", String)
+], ManualOperation.prototype, "partType", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'planned_station_workers', type: 'int', default: 0 }),
     __metadata("design:type", Number)
@@ -50,6 +55,7 @@ __decorate([
     __metadata("design:type", Date)
 ], ManualOperation.prototype, "updatedAt", void 0);
 exports.ManualOperation = ManualOperation = __decorate([
-    (0, typeorm_1.Entity)('manual_operations')
+    (0, typeorm_1.Entity)('manual_operations'),
+    (0, typeorm_1.Unique)(['productionDate', 'partType'])
 ], ManualOperation);
 //# sourceMappingURL=manual-operation.entity.js.map

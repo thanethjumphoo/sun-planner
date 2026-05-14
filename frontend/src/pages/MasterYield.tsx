@@ -17,12 +17,17 @@ interface MasterYieldNode {
 export default function MasterYield() {
   const [treeData, setTreeData] = useState<MasterYieldNode[]>([]);
   const [loading, setLoading] = useState(true);
+  const [specs, setSpecs] = useState<any[]>([]);
 
   // Modal State for Add/Edit
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [currentNodeId, setCurrentNodeId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: '', yieldPercentage: 0, parentId: null as string | null, type: 'CATEGORY' });
+  
+  // Spec Selector State
+  const [searchSpec, setSearchSpec] = useState('');
+  const [selectedSpecs, setSelectedSpecs] = useState<any[]>([]);
 
   const API = import.meta.env.VITE_API_URL || 'http://localhost:3333';
 
@@ -37,12 +42,24 @@ export default function MasterYield() {
     }
   };
 
+  const fetchSpecs = async () => {
+    try {
+      const res = await axios.get(`${API}/api/product-spec`);
+      setSpecs(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
     fetchTree();
+    fetchSpecs();
   }, []);
 
   const openAddModal = (parentId: string | null, type: string) => {
     setFormData({ name: '', yieldPercentage: 0, parentId, type });
+    setSelectedSpecs([]);
+    setSearchSpec('');
     setEditMode(false);
     setIsModalOpen(true);
   };
@@ -56,18 +73,31 @@ export default function MasterYield() {
 
   const handleSave = async () => {
     try {
-      const payload = {
-        ...formData,
-        yieldPercentage: formData.yieldPercentage / 100 // Convert back to decimal
-      };
+      const isSpecType = ['PRODUCT', 'CO-PRODUCT', 'BY-PRODUCT'].includes(formData.type);
 
-      if (editMode && currentNodeId) {
-        await axios.put(`${API}/api/master-yield/${currentNodeId}`, payload);
+      if (!editMode && isSpecType && selectedSpecs.length > 0) {
+        // Multi-add for specs: Assign to parentId
+        await axios.post(`${API}/api/product-spec/assign-yield`, {
+          specIds: selectedSpecs.map(s => s.id),
+          masterYieldId: formData.parentId
+        });
       } else {
-        await axios.post(`${API}/api/master-yield`, payload);
+        // Single add / edit for Master Yield nodes
+        const payload = {
+          ...formData,
+          yieldPercentage: formData.yieldPercentage / 100 // Convert back to decimal
+        };
+
+        if (editMode && currentNodeId) {
+          await axios.put(`${API}/api/master-yield/${currentNodeId}`, payload);
+        } else {
+          await axios.post(`${API}/api/master-yield`, payload);
+        }
       }
+
       setIsModalOpen(false);
       fetchTree();
+      fetchSpecs();
     } catch (err) {
       console.error(err);
       alert('Error saving data');
@@ -86,15 +116,29 @@ export default function MasterYield() {
     }
   };
 
+  const handleDeleteSpec = async (specId: number) => {
+    if (confirm('คุณต้องการนำรายการนี้ออกจาก Yield นี้หรือไม่?')) {
+      try {
+        await axios.post(`${API}/api/product-spec/assign-yield`, { specIds: [specId], masterYieldId: null });
+        fetchSpecs();
+      } catch (err) {
+        console.error(err);
+        alert('Error removing spec');
+      }
+    }
+  };
+
   const renderTree = (nodes: MasterYieldNode[], level: number = 0) => {
     return nodes.map((node) => (
       <TreeNode 
         key={node.id} 
         node={node} 
         level={level} 
+        specs={specs}
         onAdd={openAddModal} 
         onEdit={openEditModal} 
         onDelete={handleDelete} 
+        onDeleteSpec={handleDeleteSpec}
       />
     ));
   };
@@ -144,36 +188,17 @@ export default function MasterYield() {
               initial={{ opacity: 0, scale: 0.95 }} 
               animate={{ opacity: 1, scale: 1 }} 
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-2xl shadow-2xl border border-gray-200 w-full max-w-md overflow-hidden"
+              className={`bg-white rounded-2xl shadow-2xl border border-gray-200 w-full overflow-hidden ${
+                !editMode && ['PRODUCT', 'CO-PRODUCT', 'BY-PRODUCT'].includes(formData.type) 
+                  ? 'max-w-3xl' 
+                  : 'max-w-md'
+              }`}
             >
               <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                 <h3 className="text-lg font-bold text-gray-900">{editMode ? 'แก้ไขรายการ' : 'เพิ่มรายการใหม่'}</h3>
                 <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
               </div>
               <div className="p-5 space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">ชื่อรายการ</label>
-                  <input 
-                    type="text" 
-                    value={formData.name} 
-                    onChange={e => setFormData({ ...formData, name: e.target.value })} 
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
-                    placeholder="เช่น สันใน, หัวไก่, process: 1"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">% Yield</label>
-                  <div className="relative">
-                    <input 
-                      type="number" 
-                      step="0.01"
-                      value={formData.yieldPercentage} 
-                      onChange={e => setFormData({ ...formData, yieldPercentage: parseFloat(e.target.value) || 0 })} 
-                      className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
-                    />
-                    <span className="absolute right-4 top-2.5 text-gray-500 font-medium">%</span>
-                  </div>
-                </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">ประเภท (Type)</label>
                   <select 
@@ -189,12 +214,114 @@ export default function MasterYield() {
                     <option value="BY-PRODUCT">BY-PRODUCT (ผลพลอยได้)</option>
                   </select>
                 </div>
+
+                {(() => {
+                  const isSpecType = ['PRODUCT', 'CO-PRODUCT', 'BY-PRODUCT'].includes(formData.type);
+                  
+                  if (!editMode && isSpecType) {
+                    // Specs that are already assigned to ANY masterYield node
+                    const usedSpecIds = specs.filter(s => s.masterYieldId).map(s => s.id);
+                    
+                    // Filter by search only
+                    const displayedSpecs = specs.filter(s => 
+                      s.erpItemCode.toLowerCase().includes(searchSpec.toLowerCase()) || 
+                      (s.erpItemDesc && s.erpItemDesc.toLowerCase().includes(searchSpec.toLowerCase()))
+                    );
+
+                    return (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-semibold text-gray-700 mb-1.5">เลือกจาก Product Spec</label>
+                          <input 
+                            type="text" 
+                            placeholder="ค้นหา Item Code หรือ Description..."
+                            value={searchSpec}
+                            onChange={e => setSearchSpec(e.target.value)}
+                            className="w-full border border-gray-300 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-400 mb-2"
+                          />
+                        </div>
+                        <div className="border border-gray-200 rounded-xl max-h-80 overflow-y-auto divide-y divide-gray-100">
+                          {displayedSpecs.length === 0 ? (
+                            <div className="p-4 text-center text-gray-500 text-sm">ไม่พบรายการ</div>
+                          ) : displayedSpecs.map(spec => {
+                            const isAdded = usedSpecIds.includes(spec.id);
+                            const isSelected = selectedSpecs.some(s => s.id === spec.id);
+                            
+                            return (
+                              <label key={spec.id} className={`flex items-start gap-3 p-3 transition-colors ${
+                                isAdded ? 'bg-gray-50 opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-emerald-50'
+                              } ${isSelected && !isAdded ? 'bg-emerald-50/50' : ''}`}>
+                                <input 
+                                  type="checkbox" 
+                                  disabled={isAdded}
+                                  className="mt-1 border-gray-300 rounded text-emerald-500 focus:ring-emerald-500 disabled:opacity-50"
+                                  checked={isAdded ? true : isSelected}
+                                  onChange={(e) => {
+                                    if (isAdded) return;
+                                    if (e.target.checked) {
+                                      setSelectedSpecs([...selectedSpecs, spec]);
+                                    } else {
+                                      setSelectedSpecs(selectedSpecs.filter(s => s.id !== spec.id));
+                                    }
+                                  }}
+                                />
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <div className="font-semibold text-sm text-gray-800">{spec.erpItemCode}</div>
+                                    {isAdded && (
+                                      <span className="px-2 py-0.5 bg-gray-200 text-gray-600 rounded-md text-[10px] font-bold tracking-wide">ADDED</span>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-gray-500">{spec.erpItemDesc}</div>
+                                  <div className="text-[10px] text-emerald-600 font-medium mt-0.5">Yield: {(spec.productYield * 100).toFixed(2)}%</div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <div className="text-xs text-gray-500 text-right">เลือกแล้ว {selectedSpecs.length} รายการ</div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1.5">ชื่อรายการ</label>
+                        <input 
+                          type="text" 
+                          value={formData.name} 
+                          onChange={e => setFormData({ ...formData, name: e.target.value })} 
+                          className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+                          placeholder="เช่น สันใน, หัวไก่, process: 1"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1.5">% Yield</label>
+                        <div className="relative">
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={formData.yieldPercentage} 
+                            onChange={e => setFormData({ ...formData, yieldPercentage: parseFloat(e.target.value) || 0 })} 
+                            className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+                          />
+                          <span className="absolute right-4 top-2.5 text-gray-500 font-medium">%</span>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
               <div className="p-5 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
                 <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-50">ยกเลิก</button>
                 <button 
                   onClick={handleSave} 
-                  disabled={!formData.name} 
+                  disabled={(() => {
+                    const isSpecType = ['PRODUCT', 'CO-PRODUCT', 'BY-PRODUCT'].includes(formData.type);
+                    if (!editMode && isSpecType) return selectedSpecs.length === 0;
+                    return !formData.name;
+                  })()}
                   className="px-5 py-2 text-sm font-semibold text-white bg-emerald-500 rounded-xl hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   <Save className="w-4 h-4" /> บันทึก
@@ -209,15 +336,19 @@ export default function MasterYield() {
 }
 
 // Recursive Tree Node Component
-const TreeNode = ({ node, level, onAdd, onEdit, onDelete }: { 
+const TreeNode = ({ node, level, specs, onAdd, onEdit, onDelete, onDeleteSpec }: { 
   node: MasterYieldNode; 
   level: number; 
+  specs: any[];
   onAdd: (parentId: string, type: string) => void;
   onEdit: (node: MasterYieldNode) => void;
   onDelete: (id: string) => void;
+  onDeleteSpec: (id: number) => void;
 }) => {
   const [expanded, setExpanded] = useState(true);
-  const hasChildren = node.children && node.children.length > 0;
+  
+  const nodeSpecs = specs.filter(s => s.masterYieldId === node.id);
+  const hasChildren = (node.children && node.children.length > 0) || nodeSpecs.length > 0;
   
   const colors = [
     'border-emerald-200 bg-emerald-50', 
@@ -278,15 +409,46 @@ const TreeNode = ({ node, level, onAdd, onEdit, onDelete }: {
             exit={{ height: 0, opacity: 0 }}
             className="pl-8 border-l-2 border-gray-100 ml-4 mb-2 overflow-hidden"
           >
-            {node.children.map(child => (
+            {(node.children || []).map(child => (
               <TreeNode 
                 key={child.id} 
                 node={child} 
                 level={level + 1} 
+                specs={specs}
                 onAdd={onAdd} 
                 onEdit={onEdit} 
                 onDelete={onDelete} 
+                onDeleteSpec={onDeleteSpec}
               />
+            ))}
+            
+            {/* Render Assigned Specs */}
+            {nodeSpecs.map(spec => (
+              <div key={`spec-${spec.id}`} className="w-full mb-2">
+                <div className="flex items-center justify-between p-2 border border-gray-200 bg-white rounded-xl hover:border-emerald-200 hover:bg-emerald-50/30 transition-all">
+                  <div className="flex items-center gap-3 pl-2">
+                    <Package className="w-4 h-4 text-emerald-500 opacity-70" />
+                    <div>
+                      <div className="font-semibold text-gray-800 text-sm">{spec.erpItemCode}</div>
+                      <div className="text-xs text-gray-500">{spec.erpItemDesc}</div>
+                    </div>
+                    {spec.productType && (
+                      <span className="px-2 py-0.5 ml-1 bg-gray-100 text-gray-600 rounded-md text-[10px] font-bold uppercase">
+                        {spec.productType}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <button 
+                      onClick={() => onDeleteSpec(spec.id)} 
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors" 
+                      title="นำออกจากกลุ่ม"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
             ))}
           </motion.div>
         )}

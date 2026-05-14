@@ -11,6 +11,9 @@ export class MpsPlan {
   @Column({ name: 'plan_name', type: 'nvarchar', length: 100, nullable: true })
   planName: string; // เช่น "MPS May 2026 - V1"
 
+  @Column({ name: 'part_type', type: 'varchar', length: 50, default: 'fillet' })
+  partType: string;
+
   @Column({ name: 'target_month', type: 'varchar', length: 7 })
   targetMonth: string; // "YYYY-MM" (เช่น "2026-05")
 

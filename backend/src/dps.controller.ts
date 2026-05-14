@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps-plan.entity';
@@ -13,9 +13,10 @@ export class DpsController {
   ) {}
 
   @Get(':date')
-  async getPlanByDate(@Param('date') date: string) {
+  async getPlanByDate(@Param('date') date: string, @Query('partType') partType: string) {
+    const pt = partType || 'fillet';
     const plan = await this.planRepo.findOne({
-      where: { productionDate: new Date(date) },
+      where: { productionDate: new Date(date), partType: pt },
       relations: [
         'sublots', 
         'sublots.bins', 
@@ -31,8 +32,9 @@ export class DpsController {
   }
 
   @Delete(':date')
-  async deletePlan(@Param('date') date: string) {
-    const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date) } });
+  async deletePlan(@Param('date') date: string, @Query('partType') partType: string) {
+    const pt = partType || 'fillet';
+    const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date), partType: pt } });
     if (existing) {
       await this.planRepo.remove(existing);
     }
@@ -41,8 +43,10 @@ export class DpsController {
 
   @Post(':date/generate')
   async saveGeneratedPlan(@Param('date') date: string, @Body() payload: any) {
-    // 1. Delete existing if any (to replace)
-    const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date) } });
+    const pt = payload.partType || 'fillet';
+
+    // 1. Delete existing if any (to replace) — scoped by partType
+    const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date), partType: pt } });
     if (existing) {
       await this.planRepo.remove(existing);
     }
@@ -50,6 +54,7 @@ export class DpsController {
     // 2. Map frontend payload to entities
     const plan = this.planRepo.create({
       productionDate: new Date(date),
+      partType: pt,
       status: 'CONFIRMED',
       totalSupplyKg: payload.totalSupplyKg,
       totalDemandKg: payload.totalDemandKg,

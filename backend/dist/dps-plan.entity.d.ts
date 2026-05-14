@@ -3,6 +3,7 @@ export declare class DpsPlan {
     id: number;
     productionDate: Date;
     mpsPlan: MpsPlan;
+    partType: string;
     status: string;
     totalSupplyKg: number;
     totalDemandKg: number;

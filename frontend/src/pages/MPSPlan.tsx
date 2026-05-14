@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { Calendar, Package, Users, Activity, Scale, Move, ChevronLeft, ChevronRight, Filter, FileText, Trash2, CalendarDays, ShoppingCart, X, Info, CheckCircle2, Lock, Unlock, ShieldCheck, Download, FileSpreadsheet, AlertTriangle } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -9,9 +10,36 @@ interface Spec {
   productType: string;
   productYield: number;
   productSpeed: number;
+  productSize: string;
 }
 
+// ─── Part Configuration: Controls all part-specific text, labels and calculations ───
+const PART_CONFIGS: Record<string, {
+  title: string;
+  rmPrefix: string;      // e.g. "RM FL" or "RM BIL"
+  yieldLabel: string;    // e.g. "Fillet Yield" or "BIL Yield"
+  sizeBreakdownTitle: string;
+  netLabel: string;      // e.g. "Net Fillet Available" or "Net BIL Available"
+}> = {
+  fillet: {
+    title: 'Fillet',
+    rmPrefix: 'RM FL',
+    yieldLabel: 'Fillet Yield',
+    sizeBreakdownTitle: 'Fillet Size Breakdown',
+    netLabel: 'Net Fillet Available',
+  },
+  bil: {
+    title: 'Bone in Leg',
+    rmPrefix: 'RM BIL',
+    yieldLabel: 'BIL Yield',
+    sizeBreakdownTitle: 'BIL Size Breakdown',
+    netLabel: 'Net BIL Available',
+  },
+};
+
 const MPSPlan: React.FC = () => {
+  const { partId } = useParams<{ partId: string }>();
+  const pc = PART_CONFIGS[partId || 'fillet'] || PART_CONFIGS['fillet'];
   const [currentMonth, setCurrentMonth] = useState(new Date(2026, 4, 1)); // May 2026
   const [specs, setSpecs] = useState<Record<string, Spec>>({});
   const [loading, setLoading] = useState(true);
@@ -24,11 +52,15 @@ const MPSPlan: React.FC = () => {
   const [manpowerData, setManpowerData] = useState<any[]>([]);
   const [selectedSupply, setSelectedSupply] = useState<any>(null);
   const [selectedManpower, setSelectedManpower] = useState<any>(null);
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [selectedDailyOrders, setSelectedDailyOrders] = useState<any[]>([]);
+  const [expandedSizeBins, setExpandedSizeBins] = useState<Record<string, boolean>>({});
   const [showSupplyModal, setShowSupplyModal] = useState(false);
   const [highlightedSoNumber, setHighlightedSoNumber] = useState<string | null>(null);
   const [priorityMap, setPriorityMap] = useState<Record<number, number | null>>({});
   const [priorityDirty, setPriorityDirty] = useState(false);
   const [savingPriority, setSavingPriority] = useState(false);
+  const [allowedItemCodes, setAllowedItemCodes] = useState<string[]>([]);
 
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const getDefaultStartDate = () => {
@@ -56,7 +88,7 @@ const MPSPlan: React.FC = () => {
 
   React.useEffect(() => {
     initData();
-  }, [currentMonth]);
+  }, [currentMonth, partId]);
 
   const fetchManpowerData = async () => {
     try {
@@ -65,7 +97,7 @@ const MPSPlan: React.FC = () => {
       const startDate = `${monthStr}-01`;
       const endDate = `${monthStr}-${lastDay.toString().padStart(2, '0')}`;
 
-      const res = await fetch(`${API}/api/manual-operation?startDate=${startDate}&endDate=${endDate}`);
+      const res = await fetch(`${API}/api/manual-operation?startDate=${startDate}&endDate=${endDate}&partType=${partId || 'fillet'}`);
       if (res.ok) {
         setManpowerData(await res.json());
       }
@@ -79,11 +111,24 @@ const MPSPlan: React.FC = () => {
     await Promise.all([
       fetchSpecs(),
       fetchDemandOrders(),
-      fetchManpowerData()
+      fetchManpowerData(),
+      fetchAllowedItems()
     ]);
     const allPlans = await fetchPlans();
     await loadPlanForMonth(allPlans);
     setLoading(false);
+  };
+
+  const fetchAllowedItems = async () => {
+    try {
+      const res = await fetch(`${API}/api/mps/allowed-items?partType=${partId || 'fillet'}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAllowedItemCodes(data.itemCodes || []);
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const fetchDemandOrders = async () => {
@@ -147,7 +192,7 @@ const MPSPlan: React.FC = () => {
 
   const fetchPlans = async () => {
     try {
-      const res = await fetch(`${API}/api/mps/plans`);
+      const res = await fetch(`${API}/api/mps/plans?partType=${partId || 'fillet'}`);
       if (res.ok) {
         const data = await res.json();
         setPlans(data);
@@ -170,7 +215,8 @@ const MPSPlan: React.FC = () => {
             erpItemCode: s.erpItemCode,
             productType: s.productType,
             productYield: Number(s.productYield || 0),
-            productSpeed: Number(s.productSpeed || 1)
+            productSpeed: Number(s.productSpeed || 1),
+            productSize: s.productSize || 'unsize'
           };
         });
         setSpecs(specMap);
@@ -360,25 +406,46 @@ const MPSPlan: React.FC = () => {
     setShowGenerateModal(true);
   };
 
+  // Compute which months a date range covers (for UI display)
+  const getMonthsInRange = (startDate: string, endDate: string): string[] => {
+    if (!startDate || !endDate || startDate > endDate) return [];
+    const months: string[] = [];
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T23:59:59`);
+    const current = new Date(start.getFullYear(), start.getMonth(), 1);
+    while (current <= end) {
+      const label = current.toLocaleString('default', { month: 'long', year: 'numeric' });
+      months.push(label);
+      current.setMonth(current.getMonth() + 1);
+    }
+    return months;
+  };
+
   const executeGeneratePlan = async () => {
     setShowGenerateModal(false);
     setLoading(true);
     try {
-      const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
-      const res = await fetch(`${API}/api/mps/generate`, {
+      const res = await fetch(`${API}/api/mps/generate-range`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          targetMonth: monthStr,
           orderStartDate: generateRange.startDate,
-          orderEndDate: generateRange.endDate
+          orderEndDate: generateRange.endDate,
+          partType: partId || 'fillet'
         })
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Plan generated successfully! Plan ID: ${data.planId}\nOrders from ${generateRange.startDate} to ${generateRange.endDate}`);
+        const results = data.results || [];
+        const successMonths = results.filter((r: any) => r.success).map((r: any) => r.targetMonth);
+        const failedMonths = results.filter((r: any) => !r.success).map((r: any) => `${r.targetMonth}: ${r.message}`);
+        let msg = `✅ Plans generated for: ${successMonths.join(', ')}`;
+        if (failedMonths.length > 0) {
+          msg += `\n\n⚠️ Skipped:\n${failedMonths.join('\n')}`;
+        }
+        alert(msg);
       } else {
-        alert(data.message || 'Failed to generate plan');
+        alert(data.message || 'Failed to generate plans');
       }
       await initData();
     } catch (e) {
@@ -488,6 +555,8 @@ const MPSPlan: React.FC = () => {
     const filteredLines = header.lines.filter((line: any) => {
       if (!line.erpOrderShipDate) return false;
       if (!specs[line.erpOrderItemCode]) return false;
+      // Filter by allowed item codes from Master Yield Tree
+      if (allowedItemCodes.length > 0 && !allowedItemCodes.includes(line.erpOrderItemCode)) return false;
       const shipDate = new Date(line.erpOrderShipDate);
       return shipDate.getFullYear() === currentMonth.getFullYear() &&
         shipDate.getMonth() === currentMonth.getMonth();
@@ -537,7 +606,7 @@ const MPSPlan: React.FC = () => {
             <div className="p-3 bg-orange-500 rounded-2xl shadow-lg shadow-orange-200">
               <Calendar className="w-8 h-8 text-white" />
             </div>
-            <span>Master Production Schedule <span className="text-orange-500">(MPS)</span></span>
+            <span>Master Production Schedule <span className="text-orange-500">({pc.title} MPS)</span></span>
           </h1>
           <p className="text-slate-500 mt-3 text-lg font-medium">Monthly Strategic Planning & Yield Optimization Engine</p>
         </div>
@@ -717,6 +786,9 @@ const MPSPlan: React.FC = () => {
                           if (metrics.supplyBreakdown) {
                             setSelectedSupply(metrics.supplyBreakdown);
                             setSelectedManpower(metrics.manpowerBreakdown);
+                            setSelectedDate(date);
+                            setSelectedDailyOrders(metrics.dailyOrders || []);
+                            setExpandedSizeBins({});
                             setShowSupplyModal(true);
                           }
                         }}
@@ -1245,19 +1317,19 @@ const MPSPlan: React.FC = () => {
         </div>
       )}
 
-      {/* Supply Detail Modal */}
+      {/* Supply & Demand Breakdown Modal */}
       {showSupplyModal && selectedSupply && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            className="bg-white rounded-2xl shadow-xl w-full max-w-2xl flex flex-col max-h-[90vh] border border-gray-200"
+            className="bg-white rounded-2xl shadow-xl w-full max-w-6xl flex flex-col max-h-[90vh] border border-gray-200"
           >
             {/* Modal Header */}
             <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl">
               <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                 <Info size={20} className="text-orange-500" />
-                Raw Material Breakdown
+                Raw Material Breakdown — <span className="text-orange-600">{selectedDate}</span>
               </h3>
               <button
                 onClick={() => setShowSupplyModal(false)}
@@ -1267,9 +1339,16 @@ const MPSPlan: React.FC = () => {
               </button>
             </div>
 
-            <div className="px-6 py-6 overflow-y-auto flex-1 space-y-8">
+            <div className="px-6 py-6 overflow-y-auto flex-1">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* ====== LEFT: SUPPLY PANEL ====== */}
+                <div className="space-y-6">
+                  <h4 className="text-sm font-black text-emerald-700 uppercase tracking-wider flex items-center gap-2">
+                    <Scale size={16} /> Supply (RM Available)
+                  </h4>
+
               {/* Top Summary Chips */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 {[
                   { label: 'Intake Birds', val: selectedSupply.intakeBirds, unit: 'Birds', color: 'blue' },
                   { label: 'Total Weight', val: selectedSupply.totalWeight, unit: 'kg', color: 'slate' },
@@ -1288,11 +1367,11 @@ const MPSPlan: React.FC = () => {
                 ))}
               </div>
 
-              {/* RM FL Calculations Section */}
+              {/* RM Calculations Section */}
               <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
                 <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
                   <Activity size={16} className="text-orange-500" />
-                  RM FL Summary (Yield 4%)
+                  {pc.rmPrefix} Summary ({pc.yieldLabel})
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   {(() => {
@@ -1304,7 +1383,7 @@ const MPSPlan: React.FC = () => {
                     return (
                       <>
                         <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
-                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">RM FL Total</p>
+                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Total</p>
                           <div className="flex items-baseline gap-1">
                             <span className="text-2xl font-black text-orange-900">{Math.round(rmFlTotal).toLocaleString()}</span>
                             <span className="text-xs font-bold text-orange-500">kg</span>
@@ -1312,7 +1391,7 @@ const MPSPlan: React.FC = () => {
                           <p className="text-[9px] text-orange-400 mt-1 italic">Slaughtered * 4%</p>
                         </div>
                         <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
-                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">RM FL Grade B</p>
+                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Grade B</p>
                           <div className="flex items-baseline gap-1">
                             <span className="text-2xl font-black text-orange-900">{Math.round(rmFlGradeB).toLocaleString()}</span>
                             <span className="text-xs font-bold text-orange-500">kg</span>
@@ -1320,12 +1399,12 @@ const MPSPlan: React.FC = () => {
                           <p className="text-[9px] text-orange-400 mt-1 italic">Total * 9.3%</p>
                         </div>
                         <div className="bg-orange-500 p-4 rounded-xl shadow-md">
-                          <p className="text-[10px] font-bold text-white/80 uppercase mb-1">RM FL หัก Grade B</p>
+                          <p className="text-[10px] font-bold text-white/80 uppercase mb-1">{pc.rmPrefix} หัก Grade B</p>
                           <div className="flex items-baseline gap-1">
                             <span className="text-2xl font-black text-white">{Math.round(rmFlNet).toLocaleString()}</span>
                             <span className="text-xs font-bold text-white/80">kg</span>
                           </div>
-                          <p className="text-[9px] text-white/60 mt-1 italic">Net Fillet Available</p>
+                          <p className="text-[9px] text-white/60 mt-1 italic">{pc.netLabel}</p>
                         </div>
                       </>
                     );
@@ -1380,7 +1459,7 @@ const MPSPlan: React.FC = () => {
               <div className="space-y-4">
                 <h4 className="text-sm font-bold text-gray-800 flex items-center gap-2">
                   <Package size={16} className="text-orange-500" />
-                  Fillet Size Breakdown
+                  {pc.sizeBreakdownTitle}
                 </h4>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   {[
@@ -1455,6 +1534,218 @@ const MPSPlan: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+                </div>{/* END LEFT: SUPPLY PANEL */}
+
+                {/* ====== RIGHT: DEMAND PANEL ====== */}
+                <div className="space-y-4">
+                  <h4 className="text-sm font-black text-orange-700 uppercase tracking-wider flex items-center gap-2">
+                    <ShoppingCart size={16} /> Demand (Orders)
+                  </h4>
+
+                  {selectedDailyOrders.length === 0 ? (
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
+                      <Package size={32} className="mx-auto text-gray-300 mb-2" />
+                      <p className="text-sm text-gray-400 font-medium">No orders on this date</p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Orders Table */}
+                      <div className="border border-gray-200 rounded-xl overflow-hidden">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-gray-50 text-gray-500 uppercase tracking-wider">
+                              <th className="text-left px-3 py-2 font-bold">SO / Item</th>
+                              <th className="text-left px-3 py-2 font-bold">Type</th>
+                              <th className="text-left px-3 py-2 font-bold">Size</th>
+                              <th className="text-right px-3 py-2 font-bold">Qty (kg)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selectedDailyOrders.map((order: any, idx: number) => {
+                              const spec = specs[order.itemCode];
+                              const size = spec?.productSize || 'unsize';
+                              return (
+                                <tr key={idx} className="border-t border-gray-100 hover:bg-orange-50/30">
+                                  <td className="px-3 py-2">
+                                    <div className="font-bold text-gray-800">{order.soNumber}</div>
+                                    <div className="text-[10px] text-gray-400">{order.itemCode}</div>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${order.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
+                                      {order.type}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 font-bold text-gray-700">{size}</td>
+                                  <td className="px-3 py-2 text-right font-bold text-gray-900">{Math.round(order.qty).toLocaleString()}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr className="bg-gray-900 text-white">
+                              <td colSpan={3} className="px-3 py-2 font-bold text-xs uppercase">Total Demand</td>
+                              <td className="px-3 py-2 text-right font-bold">{Math.round(selectedDailyOrders.reduce((s: number, o: any) => s + o.qty, 0)).toLocaleString()} kg</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+
+                      {/* Demand by Size Summary — expandable */}
+                      <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 space-y-3">
+                        <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
+                        {(() => {
+                          const sizeLabels = [
+                            { key: '40Down', label: '40 Down', supplyKey: 'size40Down', color: 'bg-slate-500' },
+                            { key: '40_45', label: '40-45', supplyKey: 'size40_45', color: 'bg-blue-500' },
+                            { key: '45_50', label: '45-50', supplyKey: 'size45_50', color: 'bg-cyan-500' },
+                            { key: '50_55', label: '50-55', supplyKey: 'size50_55', color: 'bg-emerald-500' },
+                            { key: '55_60', label: '55-60', supplyKey: 'size55_60', color: 'bg-green-500' },
+                            { key: '60_65', label: '60-65', supplyKey: 'size60_65', color: 'bg-amber-500' },
+                            { key: '65_70', label: '65-70', supplyKey: 'size65_70', color: 'bg-orange-500' },
+                            { key: '70Up', label: '70 Up', supplyKey: 'size70_up', color: 'bg-red-500' },
+                          ];
+                          const allBinDefs = [
+                            { key: '40Down', lo: 0, hi: 40 },
+                            { key: '40_45', lo: 40, hi: 45 },
+                            { key: '45_50', lo: 45, hi: 50 },
+                            { key: '50_55', lo: 50, hi: 55 },
+                            { key: '55_60', lo: 55, hi: 60 },
+                            { key: '60_65', lo: 60, hi: 65 },
+                            { key: '65_70', lo: 65, hi: 70 },
+                            { key: '70Up', lo: 70, hi: 999 },
+                          ];
+                          const getSizeBinKeys = (productSize: string): string[] => {
+                            if (!productSize) return [];
+                            const s = productSize.toLowerCase().trim();
+                            if (s === 'unsize' || s === '') return [];
+                            if (s.includes('40 down') || s === '40down') return ['40Down'];
+                            if (s.includes('70 up') || s === '70up' || s.includes('60 up') || s === '60up') return ['60_65', '65_70', '70Up'];
+                            const rangeMatch = s.match(/(\d+)\s*[-–]\s*(\d+)/);
+                            if (rangeMatch) {
+                              const lo = parseInt(rangeMatch[1]);
+                              const hi = parseInt(rangeMatch[2]);
+                              return allBinDefs.filter(b => b.hi > lo && b.lo < hi).map(b => b.key);
+                            }
+                            return [];
+                          };
+
+                          // Build per-bin demand + order details
+                          const demandByBin: Record<string, number> = {};
+                          const ordersByBin: Record<string, { soNumber: string; itemCode: string; size: string; qty: number; type: string }[]> = {};
+                          sizeLabels.forEach(sl => { demandByBin[sl.key] = 0; ordersByBin[sl.key] = []; });
+
+                          // Build supply remaining map for waterfall
+                          const supplyRemaining: Record<string, number> = {};
+                          sizeLabels.forEach(sl => { supplyRemaining[sl.key] = Number(selectedSupply[sl.supplyKey] || 0); });
+
+                          // Pass 1: Allocate SIZED orders first (they have specific bins)
+                          const sizedOrders: any[] = [];
+                          const unsizedOrders: any[] = [];
+                          selectedDailyOrders.forEach((o: any) => {
+                            const spec = specs[o.itemCode];
+                            const size = spec?.productSize || 'unsize';
+                            const binKeys = getSizeBinKeys(size);
+                            if (binKeys.length > 0) {
+                              sizedOrders.push({ ...o, size, binKeys });
+                            } else {
+                              unsizedOrders.push({ ...o, size: 'unsize' });
+                            }
+                          });
+
+                          sizedOrders.forEach(o => {
+                            const perBin = o.qty / o.binKeys.length;
+                            o.binKeys.forEach((key: string) => {
+                              demandByBin[key] = (demandByBin[key] || 0) + perBin;
+                              supplyRemaining[key] = (supplyRemaining[key] || 0) - perBin;
+                              ordersByBin[key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: o.size, qty: perBin, type: o.type });
+                            });
+                          });
+
+                          // Pass 2: Allocate UNSIZE orders via waterfall (fill remaining capacity per bin)
+                          unsizedOrders.forEach(o => {
+                            let remainingQty = o.qty;
+                            for (const sl of sizeLabels) {
+                              if (remainingQty <= 0) break;
+                              const avail = Math.max(0, supplyRemaining[sl.key] || 0);
+                              if (avail <= 0) continue;
+                              const allocQty = Math.min(avail, remainingQty);
+                              demandByBin[sl.key] = (demandByBin[sl.key] || 0) + allocQty;
+                              supplyRemaining[sl.key] -= allocQty;
+                              remainingQty -= allocQty;
+                              ordersByBin[sl.key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: 'unsize', qty: allocQty, type: o.type });
+                            }
+                            // If still remaining after all bins full, dump into last non-zero or first bin
+                            if (remainingQty > 0) {
+                              const fallbackKey = sizeLabels[0].key;
+                              demandByBin[fallbackKey] = (demandByBin[fallbackKey] || 0) + remainingQty;
+                              ordersByBin[fallbackKey].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: 'unsize (overflow)', qty: remainingQty, type: o.type });
+                            }
+                          });
+
+                          return (
+                            <div className="space-y-1">
+                              {sizeLabels.map(sl => {
+                                const supply = Number(selectedSupply[sl.supplyKey] || 0);
+                                const demand = demandByBin[sl.key] || 0;
+                                if (supply === 0 && demand === 0) return null;
+                                const remaining = supply - demand;
+                                const isExpanded = expandedSizeBins[sl.key] || false;
+                                const orders = ordersByBin[sl.key] || [];
+
+                                return (
+                                  <div key={sl.key}>
+                                    <div
+                                      className="bg-white rounded-lg p-2.5 border border-orange-100 flex items-center gap-3 cursor-pointer hover:bg-orange-50/50 transition-colors"
+                                      onClick={() => setExpandedSizeBins(prev => ({ ...prev, [sl.key]: !prev[sl.key] }))}
+                                    >
+                                      <div className={`w-2 h-8 rounded-full ${sl.color}`} />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-[10px] font-bold text-gray-500 uppercase">{sl.label}</span>
+                                          {orders.length > 0 && (
+                                            <span className="text-[9px] text-gray-400">
+                                              {isExpanded ? '▲' : '▼'} {orders.length} orders
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="flex gap-4 text-xs mt-0.5">
+                                          <span className="text-emerald-600">Supply: <b>{Math.round(supply).toLocaleString()}</b></span>
+                                          <span className="text-orange-600">Demand: <b>{Math.round(demand).toLocaleString()}</b></span>
+                                          <span className={remaining >= 0 ? 'text-blue-600' : 'text-red-600 font-bold'}>
+                                            {remaining >= 0 ? 'Rem' : 'Short'}: <b>{Math.round(Math.abs(remaining)).toLocaleString()}</b>
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    {/* Expanded order list */}
+                                    {isExpanded && orders.length > 0 && (
+                                      <div className="ml-5 mt-1 mb-2 border-l-2 border-orange-200 pl-3 space-y-1">
+                                        {orders.map((ord, idx) => (
+                                          <div key={idx} className="flex items-center gap-2 text-[11px] py-1 px-2 bg-white/80 rounded border border-gray-100">
+                                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${ord.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
+                                              {ord.type === 'chilled' ? 'C' : 'F'}
+                                            </span>
+                                            <span className="font-bold text-gray-700">{ord.soNumber}</span>
+                                            <span className="text-gray-400 text-[10px]">{ord.itemCode}</span>
+                                            <span className="text-gray-400 text-[10px]">({ord.size})</span>
+                                            <span className="ml-auto font-bold text-gray-900">{Math.round(ord.qty).toLocaleString()} kg</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </>
+                  )}
+                </div>{/* END RIGHT: DEMAND PANEL */}
+
+              </div>{/* END grid */}
             </div>
 
             <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl flex justify-end">
@@ -1557,7 +1848,7 @@ const MPSPlan: React.FC = () => {
                   Generate & Save Plan
                 </h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  Planning for <span className="font-bold text-gray-800">{currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}</span>
+                  กำหนด Ship Date Range เพื่อสร้างแผนผลิตอัตโนมัติ
                 </p>
               </div>
               <button onClick={() => setShowGenerateModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors">
@@ -1565,7 +1856,7 @@ const MPSPlan: React.FC = () => {
               </button>
             </div>
 
-            <div className="bg-orange-50/50 border border-orange-100 rounded-2xl p-5 mb-6">
+            <div className="bg-orange-50/50 border border-orange-100 rounded-2xl p-5 mb-4">
               <p className="text-xs font-bold text-orange-600 uppercase tracking-wider mb-4">Sales Order Date Range (Ship Date)</p>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1588,9 +1879,23 @@ const MPSPlan: React.FC = () => {
                 </div>
               </div>
               <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
-                ระบบจะดึง Sales Orders ที่มี Ship Date ตั้งแต่วันที่ <span className="font-bold text-gray-600">{generateRange.startDate}</span> ถึง <span className="font-bold text-gray-600">{generateRange.endDate}</span> เข้ามาจัดทำแผนผลิตเดือน {currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                ระบบจะดึง Sales Orders ที่มี Ship Date ตั้งแต่วันที่ <span className="font-bold text-gray-600">{generateRange.startDate}</span> ถึง <span className="font-bold text-gray-600">{generateRange.endDate}</span> แล้วจัดสรรเข้าแผนผลิตแต่ละเดือนอัตโนมัติ
               </p>
             </div>
+
+            {/* Month preview badges */}
+            {generateRange.startDate && generateRange.endDate && generateRange.startDate <= generateRange.endDate && (
+              <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-4 mb-6">
+                <p className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2">แผนที่จะถูกสร้าง</p>
+                <div className="flex flex-wrap gap-2">
+                  {getMonthsInRange(generateRange.startDate, generateRange.endDate).map((m, i) => (
+                    <span key={i} className="px-3 py-1.5 bg-white border border-blue-200 text-blue-700 text-xs font-bold rounded-lg shadow-sm">
+                      📅 {m}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-3">
               <button
@@ -1604,7 +1909,7 @@ const MPSPlan: React.FC = () => {
                 disabled={!generateRange.startDate || !generateRange.endDate || generateRange.startDate > generateRange.endDate}
                 className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-orange-200 transition-all flex justify-center items-center gap-2"
               >
-                <Activity className="w-4 h-4" /> Generate Plan
+                <Activity className="w-4 h-4" /> Generate {getMonthsInRange(generateRange.startDate, generateRange.endDate).length > 1 ? `${getMonthsInRange(generateRange.startDate, generateRange.endDate).length} Plans` : 'Plan'}
               </button>
             </div>
           </motion.div>

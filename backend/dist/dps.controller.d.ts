@@ -6,14 +6,14 @@ export declare class DpsController {
     private orderRepo;
     private allocationRepo;
     constructor(planRepo: Repository<DpsPlan>, sublotRepo: Repository<DpsSublot>, orderRepo: Repository<DpsOrder>, allocationRepo: Repository<DpsAllocation>);
-    getPlanByDate(date: string): Promise<{
+    getPlanByDate(date: string, partType: string): Promise<{
         exists: boolean;
         data?: undefined;
     } | {
         exists: boolean;
         data: DpsPlan;
     }>;
-    deletePlan(date: string): Promise<{
+    deletePlan(date: string, partType: string): Promise<{
         success: boolean;
     }>;
     saveGeneratedPlan(date: string, payload: any): Promise<{

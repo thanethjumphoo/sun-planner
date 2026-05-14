@@ -15,6 +15,9 @@ export class DpsPlan {
   @JoinColumn({ name: 'mps_plan_id' })
   mpsPlan: MpsPlan;
 
+  @Column({ name: 'part_type', type: 'varchar', length: 50, default: 'fillet' })
+  partType: string;
+
   @Column({ name: 'status', type: 'varchar', length: 20, default: 'DRAFT' })
   status: string; // DRAFT, CONFIRMED, COMPLETED
 

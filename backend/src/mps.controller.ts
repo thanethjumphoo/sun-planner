@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Res } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Res, Query } from '@nestjs/common';
 import * as express from 'express';
 import * as ExcelJS from 'exceljs';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -14,6 +14,7 @@ import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
 import { ManualOperation } from './manual-operation.entity';
 import { StgErpItem } from './stg-erp-item.entity';
+import { MasterYield } from './master-yield.entity';
 
 @Controller('api/mps')
 export class MpsController {
@@ -44,8 +45,56 @@ export class MpsController {
     private manualOpRepo: Repository<ManualOperation>,
     @InjectRepository(StgErpItem)
     private itemRepo: Repository<StgErpItem>,
+    @InjectRepository(MasterYield)
+    private masterYieldRepo: Repository<MasterYield>,
     private chickenReceivingService: ChickenReceivingService,
   ) { }
+
+  // Helper: Get allowed item codes by partType using Master Yield Tree CATEGORY
+  private async getItemCodesByPartType(partType: string): Promise<string[] | null> {
+    const categoryMap: Record<string, string[]> = {
+      'fillet': ['สันใน'],
+      'bil': ['BIL L/C'],
+    };
+    const categoryNames = categoryMap[partType];
+    if (!categoryNames) return null;
+
+    const allNodes = await this.masterYieldRepo.find();
+    const nodeIds: string[] = [];
+
+    const collectTree = (parentId: string) => {
+      const children = allNodes.filter(n => n.parentId === parentId);
+      for (const child of children) {
+        nodeIds.push(child.id);
+        collectTree(child.id);
+      }
+    };
+
+    for (const name of categoryNames) {
+      const matches = allNodes.filter(n => n.type === 'CATEGORY' && n.name === name);
+      for (const m of matches) {
+        nodeIds.push(m.id);
+        collectTree(m.id);
+      }
+    }
+
+    if (nodeIds.length === 0) return null;
+
+    const specs = await this.specRepo.find();
+    const codes = specs
+      .filter(s => s.masterYieldId && nodeIds.includes(s.masterYieldId))
+      .map(s => s.erpItemCode);
+
+    return codes.length > 0 ? codes : null;
+  }
+
+  // 0. Get allowed item codes for a partType (used by Demand Plan tab to filter)
+  @Get('allowed-items')
+  async getAllowedItems(@Query('partType') partType: string) {
+    const pt = partType || 'fillet';
+    const codes = await this.getItemCodesByPartType(pt);
+    return { partType: pt, itemCodes: codes || [] };
+  }
 
   // 1. Manually update planned production date in MpsPlanOrder (Drag & Drop)
   @Post('update-date')
@@ -187,17 +236,18 @@ export class MpsController {
 
   // 3. Generate & Snapshot MPS Plan
   @Post('generate')
-  async generatePlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string }) { // targetMonth format: '2026-05'
+  async generatePlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string; partType?: string; _allocatedMap?: Map<number, number> }) { // targetMonth format: '2026-05'
     const targetMonth = body.targetMonth;
+    const partType = body.partType || 'fillet';
 
-    // Step 1: Check for existing plans for this month
+    // Step 1: Check for existing plans for this month (scoped by partType)
     // Block if an APPROVED plan already exists
-    const existingApproved = await this.mpsPlanRepo.findOne({ where: { targetMonth, status: 'APPROVED' } });
+    const existingApproved = await this.mpsPlanRepo.findOne({ where: { targetMonth, partType, status: 'APPROVED' } });
     if (existingApproved) {
       return { success: false, message: `An approved plan already exists for ${targetMonth}. Reject it first to regenerate.` };
     }
 
-    let plan = await this.mpsPlanRepo.findOne({ where: { targetMonth, status: 'DRAFT' } });
+    let plan = await this.mpsPlanRepo.findOne({ where: { targetMonth, partType, status: 'DRAFT' } });
     if (plan) {
       // Clear old details
       await this.mpsDailyRepo.delete({ mpsPlan: { id: plan.id } });
@@ -208,6 +258,7 @@ export class MpsController {
       plan = this.mpsPlanRepo.create({
         planName: `MPS ${targetMonth} - Draft`,
         targetMonth,
+        partType,
         status: 'DRAFT',
       });
       plan = await this.mpsPlanRepo.save(plan);
@@ -249,6 +300,9 @@ export class MpsController {
     const specMap = new Map();
     specs.forEach(s => specMap.set(s.erpItemCode, s));
 
+    // Filter item codes by partType using Master Yield Tree CATEGORY
+    const allowedItemCodes = await this.getItemCodesByPartType(partType);
+
     // Helper functions — use LOCAL date to avoid UTC timezone shift
     // (toISOString() converts to UTC, shifting +7 timezone dates back by 1 day)
     const formatDate = (date: Date) => {
@@ -269,21 +323,34 @@ export class MpsController {
       return d;
     };
 
-    // Step 3: Fetch Supply (Chicken Receiving Month)
+    // Step 3: Fetch Supply (Chicken Receiving Month + Previous Month Buffer)
     // Fetch Fillet Yield Config
     const configRow = await this.filletConfigRepo.findOne({ where: { configKey: 'fillet_yield' } });
     const filletYield = configRow ? Number(configRow.configValue) : 0.04;
 
     // We use monthly plan to represent the actual supply for continuous mapping
     const allIntakesRaw = await this.chickenReceivingService.findAll('monthly');
-    // Filter to only this target month
+
+    // Calculate previous month for cross-month supply buffer
+    // Chill orders need production 1-3 days before ship date, freeze orders up to 30 days
+    // So we need supply from the previous month to handle orders shipping early in the target month
+    const prevMonthDate = new Date(targetDate.getFullYear(), targetDate.getMonth() - 1, 1);
+    const prevMonth = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
+
+    // Filter to target month + previous month (for cross-month supply matching)
+    const allIntakesExpanded = allIntakesRaw.filter((intake: any) => {
+      const d = parseLocalDate(intake.receive_date);
+      return d && (d.startsWith(targetMonth) || d.startsWith(prevMonth));
+    });
+
+    // Keep a target-month-only filter for daily summaries and supply breakdown (Steps 6 & 7)
     const allIntakes = allIntakesRaw.filter((intake: any) => {
       const d = parseLocalDate(intake.receive_date);
       return d && d.startsWith(targetMonth);
     });
 
     const supplyMap = new Map<string, number>();
-    allIntakes.forEach((intake: any) => {
+    allIntakesExpanded.forEach((intake: any) => {
       const d = parseLocalDate(intake.receive_date);
       if (d) {
         const intakeKg = Number(intake.chicken_weight || 0);
@@ -301,10 +368,20 @@ export class MpsController {
       const spec = specMap.get(order.erpOrderItemCode);
       if (!spec) continue;
 
+      // Skip orders not in this part's allowed item codes (Master Yield Tree filter)
+      if (allowedItemCodes && !allowedItemCodes.includes(order.erpOrderItemCode)) continue;
+
+      // Adjust quantity for already-allocated amounts (cross-month dedup)
+      let adjustedQty = Number(order.erpOrderItemQty || 0);
+      if (body._allocatedMap?.has(order.erpOrderLineId)) {
+        adjustedQty -= body._allocatedMap.get(order.erpOrderLineId)!;
+        if (adjustedQty <= 0) continue; // fully allocated in a previous month
+      }
+
       const orderObj = {
         ...order,
         productType: spec.productType,
-        qty: Number(order.erpOrderItemQty || 0),
+        qty: adjustedQty,
         shipDate: new Date(order.erpOrderShipDate)
       };
 
@@ -356,65 +433,8 @@ export class MpsController {
     chillOrders.sort(prioritySort);
     freezeOrders.sort(prioritySort);
 
-    const mpsOrdersToSave: MpsPlanOrder[] = [];
-    const exceptionsToSave: any[] = [];
-    let totalDemandKg = 0;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Step 4: Map CHILL Orders First (Flexible Lead Time: Ship Date -1 to -3 Days)
-    for (const order of chillOrders) {
-      totalDemandKg += order.qty;
-      let remainingQty = order.qty;
-
-      // Try to find supply starting from Ship Date - 1 backwards to Ship Date - 3
-      for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
-        if (remainingQty <= 0) break;
-
-        const dateStr = formatDate(d);
-        const supply = supplyMap.get(dateStr) || 0;
-
-        if (supply > 0) {
-          const allocQty = Math.round(Math.min(supply, remainingQty));
-          if (allocQty > 0) {
-            mpsOrdersToSave.push(this.mpsOrderRepo.create({
-              mpsPlan: plan,
-              erpOrderLineId: order.erpOrderLineId,
-              soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-              itemCode: order.erpOrderItemCode,
-              itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
-              productType: order.productType,
-              quantityKg: allocQty,
-              shipDate: order.shipDate,
-              plannedProductionDate: d,
-              finishedProductionDate: d,
-              isManualOverride: false
-            }));
-            supplyMap.set(dateStr, supply - allocQty);
-            remainingQty -= allocQty;
-          }
-        }
-      }
-
-      if (remainingQty > 0) {
-        // Discard unmet demand from calendar, log as exception
-        exceptionsToSave.push(this.exceptionRepo.create({
-          mpsPlan: plan,
-          erpOrderLineId: order.erpOrderLineId,
-          soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
-          itemCode: order.erpOrderItemCode,
-          shipDate: order.shipDate,
-          requiredKg: order.qty,
-          shortageKg: remainingQty,
-          reason: `No supply available for Chill order on or before ${formatDate(order.shipDate)}`
-        }));
-      }
-    }
-
-    // Step 5: Map FREEZE Orders — Waterfall FIFO with Size Matching
-    // ─────────────────────────────────────────────────────────────
-    // 5a. Build per-date SIZE supply map using Fillet Size Calc (Manual Groups)
+    // Step 3b: Build per-date SIZE supply map (shared by Chill & Freeze allocation)
+    // ─────────────────────────────────────────────────────────────────────────────
     const weightMatrix = await this.weightDistRepo.find();
     const filletCalcs = await this.filletSizeRepo.find();
     const filletMap = new Map<string, string>(); // colLabel -> groupName
@@ -424,7 +444,8 @@ export class MpsController {
 
     const sizeSupplyMap = new Map<string, { total: number, bins: Record<string, number> }>();
 
-    allIntakes.forEach((intake: any) => {
+    // Use expanded intakes (includes previous month) for size supply map
+    allIntakesExpanded.forEach((intake: any) => {
       const d = parseLocalDate(intake.receive_date);
       if (!d) return;
 
@@ -455,8 +476,8 @@ export class MpsController {
         const pct = Number(row.distValue || 0);
         if (pct <= 0) return;
 
-        // KG for this cell = Slaughtered * Fillet Yield * cell * 90%
-        const kg = Math.round(slaughteredWeight * filletYield * pct * 0.9);
+        // KG for this cell = Slaughtered * Fillet Yield * cell * 90.7% (after 9.3% Grade B)
+        const kg = Math.round(slaughteredWeight * filletYield * pct * 0.907);
 
         // Get group from manual assignment map
         const groupName = filletMap.get(row.colLabel);
@@ -488,7 +509,18 @@ export class MpsController {
       sizeSupplyMap.set(d, existing);
     });
 
-    // 5b. Helper: Map productSize from Spec → size bin key(s)
+    // Rebuild supplyMap from actual size bin totals (instead of formula-based RM FL)
+    // This eliminates rounding discrepancy between RM FL formula and sum-of-size-bins
+    const originalSizeTotalMap = new Map<string, number>(); // snapshot BEFORE allocation
+    sizeSupplyMap.forEach((sizeData, dateStr) => {
+      const binTotal = Object.values(sizeData.bins).reduce((sum, val) => sum + val, 0);
+      if (binTotal > 0) {
+        supplyMap.set(dateStr, binTotal);
+        originalSizeTotalMap.set(dateStr, binTotal);
+      }
+    });
+
+    // Helper: Map productSize from Spec → size bin key(s)
     const getSizeBinKeys = (productSize: string): string[] => {
       if (!productSize) return [];
       const s = productSize.toLowerCase().trim();
@@ -514,6 +546,98 @@ export class MpsController {
       }
       return []; // Unrecognized → treat as unsize
     };
+
+    const mpsOrdersToSave: MpsPlanOrder[] = [];
+    const exceptionsToSave: any[] = [];
+    let totalDemandKg = 0;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Step 4: Map CHILL Orders First (Flexible Lead Time: Ship Date -1 to -3 Days) — WITH Size Matching
+    for (const order of chillOrders) {
+      totalDemandKg += order.qty;
+      let remainingQty = order.qty;
+
+      const spec = specMap.get(order.erpOrderItemCode);
+      const productSize = spec?.productSize || '';
+      const sizeBinKeys = getSizeBinKeys(productSize);
+      const isUnsize = sizeBinKeys.length === 0;
+
+      // Try to find supply starting from Ship Date - 1 backwards to Ship Date - 3
+      for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
+        if (remainingQty <= 0) break;
+
+        const dateStr = formatDate(d);
+        const totalRmForDate = supplyMap.get(dateStr) || 0;
+        if (totalRmForDate <= 0) continue;
+
+        const sizeData = sizeSupplyMap.get(dateStr);
+
+        let availableQty = 0;
+        if (!isUnsize && sizeData) {
+          // Sum available from matching size bins only
+          availableQty = sizeBinKeys.reduce((sum, key) => sum + (sizeData.bins[key] || 0), 0);
+        } else {
+          // Unsize or no size data available: use whatever RM is left
+          availableQty = totalRmForDate;
+        }
+
+        if (availableQty <= 0) continue;
+
+        const allocQty = Math.round(Math.min(availableQty, remainingQty, totalRmForDate));
+        if (allocQty <= 0) continue;
+
+        mpsOrdersToSave.push(this.mpsOrderRepo.create({
+          mpsPlan: plan,
+          erpOrderLineId: order.erpOrderLineId,
+          soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+          itemCode: order.erpOrderItemCode,
+          itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+          productType: order.productType,
+          quantityKg: allocQty,
+          shipDate: order.shipDate,
+          plannedProductionDate: d,
+          finishedProductionDate: d,
+          isManualOverride: false
+        }));
+
+        // Deduct from both supply maps
+        supplyMap.set(dateStr, totalRmForDate - allocQty);
+        if (sizeData) {
+          sizeData.total -= allocQty;
+          if (!isUnsize) {
+            let deductRemaining = allocQty;
+            for (const key of sizeBinKeys) {
+              if (deductRemaining <= 0) break;
+              const binVal = sizeData.bins[key] || 0;
+              const deduct = Math.min(binVal, deductRemaining);
+              sizeData.bins[key] = binVal - deduct;
+              deductRemaining -= deduct;
+            }
+          }
+        }
+        remainingQty -= allocQty;
+      }
+
+      if (remainingQty > 0) {
+        // Discard unmet demand from calendar, log as exception
+        exceptionsToSave.push(this.exceptionRepo.create({
+          mpsPlan: plan,
+          erpOrderLineId: order.erpOrderLineId,
+          soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
+          itemCode: order.erpOrderItemCode,
+          shipDate: order.shipDate,
+          requiredKg: order.qty,
+          shortageKg: remainingQty,
+          reason: `No ${isUnsize ? 'total' : productSize} supply available for Chill order on or before ${formatDate(order.shipDate)}`
+        }));
+      }
+    }
+
+    // Step 5: Map FREEZE Orders — Waterfall FIFO with Size Matching
+    // ─────────────────────────────────────────────────────────────
+    // (sizeSupplyMap, getSizeBinKeys already built in Step 3b above)
 
     // 5c. Sort freeze orders: Ship Date ASC → Grade ASC → SO Number ASC → Priority ASC
     freezeOrders.sort((a, b) => {
@@ -541,14 +665,17 @@ export class MpsController {
     // 5d. Prepare for allocation (Priority already handled in 5c sort)
 
 
-    // 5e. Collect all available dates (today → end of month range) sorted ascending
+    // 5e. Collect all available dates with cross-month buffer, sorted ascending
+    // Include previous month dates (up to 30 days back) for freeze orders
+    // and 3 days back for chill orders whose production falls before the target month
     const addDays = (date: Date, days: number) => {
       const d = new Date(date);
       d.setDate(d.getDate() + days);
       return d;
     };
+    const supplyBufferStart = subtractDays(startOfMonth, 30); // 30-day buffer for freeze lead time
     const allDateStrs: string[] = [];
-    for (let d = new Date(startOfMonth); d <= endOfMonth; d = addDays(d, 1)) {
+    for (let d = new Date(supplyBufferStart); d <= endOfMonth; d = addDays(d, 1)) {
       allDateStrs.push(formatDate(d));
     }
 
@@ -675,10 +802,10 @@ export class MpsController {
         const d = parseLocalDate(intake.receive_date);
         if (d === dayStr) {
           intakeBirds += Number(intake.chicken_count || 0);
-          const intakeKg = Number(intake.chicken_weight || 0);
-          originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * 0.907;
         }
       });
+      // Use original (pre-allocation) size bin total for RM Available
+      originalSupplyKg = originalSizeTotalMap.get(dayStr) || 0;
 
       const demand = dailyDemand.get(dayStr) || 0;
 
@@ -793,10 +920,63 @@ export class MpsController {
     return { success: true, planId: plan.id, status: plan.status };
   }
 
+  // 3b. Generate MPS Plans for ALL months in a date range
+  @Post('generate-range')
+  async generateRange(@Body() body: { orderStartDate: string; orderEndDate: string; partType?: string }) {
+    const { orderStartDate, orderEndDate } = body;
+    const partType = body.partType || 'fillet';
+    if (!orderStartDate || !orderEndDate) {
+      return { success: false, message: 'orderStartDate and orderEndDate are required' };
+    }
+
+    // Compute all months covered by the order date range
+    const start = new Date(`${orderStartDate}T00:00:00`);
+    const end = new Date(`${orderEndDate}T23:59:59`);
+
+    const months: string[] = [];
+    const current = new Date(start.getFullYear(), start.getMonth(), 1);
+    while (current <= end) {
+      const monthStr = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
+      months.push(monthStr);
+      current.setMonth(current.getMonth() + 1);
+    }
+
+    // Generate plans sequentially — pass FULL order range to each month.
+    // Track allocated quantities so orders aren't double-counted across months.
+    const allocatedMap = new Map<number, number>(); // lineId → total allocated kg
+    const results: any[] = [];
+
+    for (const month of months) {
+      const result = await this.generatePlan({
+        targetMonth: month,
+        orderStartDate: body.orderStartDate,
+        orderEndDate: body.orderEndDate,
+        partType,
+        _allocatedMap: new Map(allocatedMap), // pass a copy
+      });
+
+      // After generating, collect how much was allocated per order line
+      if (result.success && result.planId) {
+        const planOrders = await this.mpsOrderRepo.find({
+          where: { mpsPlan: { id: result.planId } }
+        });
+        for (const po of planOrders) {
+          const prev = allocatedMap.get(po.erpOrderLineId) || 0;
+          allocatedMap.set(po.erpOrderLineId, prev + Number(po.quantityKg));
+        }
+      }
+
+      results.push({ targetMonth: month, ...result });
+    }
+
+    return { success: true, results };
+  }
+
   // 4. List all MPS Plans
   @Get('plans')
-  async getPlans() {
+  async getPlans(@Query('partType') partType: string) {
     return this.mpsPlanRepo.find({
+      where: { partType: partType || 'fillet' },
       order: {
         createdAt: 'DESC'
       }

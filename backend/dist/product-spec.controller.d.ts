@@ -18,6 +18,7 @@ export declare class ProductSpecController {
         productWeight: number;
         productSpeed: number;
         productLead: number;
+        masterYieldId: string | null;
         createdAt: Date;
         updatedAt: Date;
     }[]>;
@@ -84,5 +85,31 @@ export declare class ProductSpecController {
             data: ProductSpec;
             message?: undefined;
         })[];
+    }>;
+    importExcel(body: {
+        rows: Array<{
+            erpItemCode: string;
+            productType?: string;
+            productSize?: string;
+            productYield?: number;
+            productWeight?: number;
+            productSpeed?: number;
+            productLead?: number;
+        }>;
+    }): Promise<{
+        success: boolean;
+        summary: {
+            created: number;
+            updated: number;
+            skipped: number;
+            total: number;
+        };
+        results: any[];
+    }>;
+    assignMasterYield(body: {
+        specIds: number[];
+        masterYieldId: string | null;
+    }): Promise<{
+        success: boolean;
     }>;
 }

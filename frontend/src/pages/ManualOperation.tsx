@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { Calendar as CalendarIcon, Users, Save, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL;
@@ -11,6 +12,7 @@ interface DailyManpower {
 }
 
 const ManualOperation: React.FC = () => {
+  const { partId } = useParams<{ partId: string }>();
   const [currentWeekStart, setCurrentWeekStart] = useState<Date>(() => {
     const today = new Date();
     const day = today.getDay();
@@ -38,11 +40,11 @@ const ManualOperation: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [currentWeekStart]);
+  }, [currentWeekStart, partId]);
 
   const loadData = async () => {
     try {
-      const res = await fetch(`${API}/api/manual-operation?startDate=${weekDays[0]}&endDate=${weekDays[6]}`);
+      const res = await fetch(`${API}/api/manual-operation?startDate=${weekDays[0]}&endDate=${weekDays[6]}&partType=${partId || 'fillet'}`);
       let fetchedData: any[] = [];
       if (res.ok) {
         fetchedData = await res.json();
@@ -107,7 +109,7 @@ const ManualOperation: React.FC = () => {
       const res = await fetch(`${API}/api/manual-operation/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ data: payload, partType: partId || 'fillet' })
       });
 
       if (res.ok) {
@@ -157,7 +159,7 @@ const ManualOperation: React.FC = () => {
       const res = await fetch(`${API}/api/manual-operation/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ data: payload, partType: partId || 'fillet' })
       });
 
       if (res.ok) {

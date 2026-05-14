@@ -7,17 +7,9 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-type MenuItem = {
-  title: string;
-  icon: LucideIcon;
-  path?: string;
-  subItems?: { title: string; icon?: LucideIcon; path: string }[];
-};
-
-type MenuGroup = {
-  label: string;
-  items: MenuItem[];
-};
+type SubItem = { title: string; icon: LucideIcon; path: string };
+type MenuItem = { title: string; icon: LucideIcon; path?: string; subItems?: SubItem[] };
+type MenuGroup = { label: string; items: MenuItem[] };
 
 const menuGroups: MenuGroup[] = [
   {
@@ -36,13 +28,22 @@ const menuGroups: MenuGroup[] = [
   {
     label: "Part",
     items: [
-      { 
-        title: "Fillet", 
-        icon: Scissors, 
+      {
+        title: "Fillet",
+        icon: Scissors,
         subItems: [
-          { title: "MPS", icon: CalendarDays, path: "/mps" },
-          { title: "DPS", icon: Activity, path: "/dps" },
-          { title: "Manual Operation", icon: Users, path: "/manual-operation" }
+          { title: "MPS", icon: CalendarDays, path: "/fillet/mps" },
+          { title: "DPS", icon: Activity, path: "/fillet/dps" },
+          { title: "Manual Operation", icon: Users, path: "/fillet/manual-operation" }
+        ]
+      },
+      {
+        title: "Bone in leg",
+        icon: Scissors,
+        subItems: [
+          { title: "MPS", icon: CalendarDays, path: "/bil/mps" },
+          { title: "DPS", icon: Activity, path: "/bil/dps" },
+          { title: "Manual Operation", icon: Users, path: "/bil/manual-operation" }
         ]
       }
     ]
@@ -59,6 +60,10 @@ const menuGroups: MenuGroup[] = [
     label: "System Data",
     items: [
       { title: "ERP Integration Hub", icon: RefreshCw, path: "/erp-integration" }
+      /*{ title: "Reports & Analytics", icon: BarChart3, path: "/reports" },
+      { title: "Master Data", icon: Database, path: "/master-data" },
+      { title: "Workflow & Alerts", icon: Bell, path: "/workflow" },
+      { title: "Security & Admin", icon: Shield, path: "/security" }*/
     ]
   }
 ];
@@ -96,10 +101,10 @@ export default function Sidebar({ isOpen, toggleSidebar }: { isOpen: boolean, to
               const Icon = item.icon;
               const hasSubItems = !!item.subItems;
               const isDropdownOpen = openDropdowns[item.title];
-              
+
               // Check if active (either the item itself or one of its subitems)
-              const isActive = item.path 
-                ? location.pathname.startsWith(item.path) 
+              const isActive = item.path
+                ? location.pathname.startsWith(item.path)
                 : hasSubItems && item.subItems!.some(sub => location.pathname.startsWith(sub.path));
 
               return (

@@ -140,6 +140,61 @@ let ProductSpecController = class ProductSpecController {
         }
         return { success: true, results };
     }
+    async importExcel(body) {
+        const results = [];
+        for (const row of body.rows) {
+            if (!row.erpItemCode) {
+                results.push({ itemCode: '(empty)', status: 'skipped', message: 'No item code' });
+                continue;
+            }
+            const existing = await this.productSpecRepo.findOne({
+                where: { erpItemCode: row.erpItemCode },
+            });
+            if (existing) {
+                if (row.productType !== undefined)
+                    existing.productType = row.productType;
+                if (row.productSize !== undefined)
+                    existing.productSize = row.productSize;
+                if (row.productYield !== undefined)
+                    existing.productYield = row.productYield;
+                if (row.productWeight !== undefined)
+                    existing.productWeight = row.productWeight;
+                if (row.productSpeed !== undefined)
+                    existing.productSpeed = row.productSpeed;
+                if (row.productLead !== undefined)
+                    existing.productLead = row.productLead;
+                await this.productSpecRepo.save(existing);
+                results.push({ itemCode: row.erpItemCode, status: 'updated' });
+            }
+            else {
+                const erpItem = await this.stgItemRepo.findOne({ where: { erpItemCode: row.erpItemCode } });
+                const spec = this.productSpecRepo.create({
+                    erpItemId: erpItem?.erpItemId || undefined,
+                    erpItemCode: row.erpItemCode,
+                    erpItemDesc: erpItem?.erpItemDesc || undefined,
+                    erpItemType: erpItem?.erpItemType || undefined,
+                    productType: row.productType || 'chilled',
+                    productSize: row.productSize || 'unsize',
+                    productYield: row.productYield ?? 0.84,
+                    productWeight: row.productWeight ?? 2,
+                    productSpeed: row.productSpeed ?? 45,
+                    productLead: row.productLead ?? (row.productType === 'freeze' ? 5 : 1),
+                });
+                await this.productSpecRepo.save(spec);
+                results.push({ itemCode: row.erpItemCode, status: 'created' });
+            }
+        }
+        const created = results.filter(r => r.status === 'created').length;
+        const updated = results.filter(r => r.status === 'updated').length;
+        const skipped = results.filter(r => r.status === 'skipped').length;
+        return { success: true, summary: { created, updated, skipped, total: body.rows.length }, results };
+    }
+    async assignMasterYield(body) {
+        if (!body.specIds || body.specIds.length === 0)
+            return { success: true };
+        await this.productSpecRepo.update(body.specIds, { masterYieldId: body.masterYieldId });
+        return { success: true };
+    }
 };
 exports.ProductSpecController = ProductSpecController;
 __decorate([
@@ -184,6 +239,20 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], ProductSpecController.prototype, "bulkCreate", null);
+__decorate([
+    (0, common_1.Post)('import-excel'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], ProductSpecController.prototype, "importExcel", null);
+__decorate([
+    (0, common_1.Post)('assign-yield'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], ProductSpecController.prototype, "assignMasterYield", null);
 exports.ProductSpecController = ProductSpecController = __decorate([
     (0, common_1.Controller)('api/product-spec'),
     __param(0, (0, typeorm_1.InjectRepository)(product_spec_entity_1.ProductSpec)),

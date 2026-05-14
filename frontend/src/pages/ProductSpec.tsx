@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Save, X, Loader2, Package, Edit3, Snowflake, Thermometer, CheckCircle2 } from 'lucide-react';
+import { Search, Plus, Save, X, Loader2, Package, Edit3, Snowflake, Thermometer, CheckCircle2, Upload } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ImportSpecModal from '../components/ImportSpecModal';
 
 const API = import.meta.env.VITE_API_URL;
 
@@ -46,6 +47,7 @@ const ProductSpec: React.FC = () => {
   const [specs, setSpecs] = useState<Spec[]>([]);
   const [erpItems, setErpItems] = useState<ErpItem[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Partial<Spec>>({});
   const [searchTerm, setSearchTerm] = useState('');
@@ -148,9 +150,14 @@ const ProductSpec: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Product Spec</h1>
           <p className="text-gray-500 mt-1">กำหนดข้อมูล Specification ของสินค้าจาก ERP เพื่อใช้ในการคำนวณแผนการผลิต</p>
         </div>
-        <button onClick={openAddModal} className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white rounded-xl shadow-lg shadow-orange-200 text-sm font-semibold transition-all">
-          <Plus className="w-4 h-4" /> เพิ่ม Product Spec
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setIsImportOpen(true)} className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 rounded-xl shadow-sm text-sm font-semibold transition-all">
+            <Upload className="w-4 h-4" /> Import
+          </button>
+          <button onClick={openAddModal} className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white rounded-xl shadow-lg shadow-orange-200 text-sm font-semibold transition-all">
+            <Plus className="w-4 h-4" /> เพิ่ม Product Spec
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -356,6 +363,13 @@ const ProductSpec: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Import Modal */}
+      <ImportSpecModal 
+        isOpen={isImportOpen} 
+        onClose={() => setIsImportOpen(false)} 
+        onImportDone={fetchSpecs} 
+      />
     </div>
   );
 };

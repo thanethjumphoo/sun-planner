@@ -25,10 +25,10 @@ function App() {
           <Route path="/demand-management" element={<DemandManagement />} />
           <Route path="/product-spec" element={<ProductSpec />} />
           <Route path="/weight-distribution" element={<WeightDistribution />} />
-          <Route path="/mps" element={<MPSPlan />} />
-          <Route path="/dps" element={<DPSPlan />} />
+          <Route path="/:partId/mps" element={<MPSPlan />} />
+          <Route path="/:partId/dps" element={<DPSPlan />} />
+          <Route path="/:partId/manual-operation" element={<ManualOperation />} />
           <Route path="/master-yield" element={<MasterYield />} />
-          <Route path="/manual-operation" element={<ManualOperation />} />
         </Route>
 
         {/* Redirect empty path to login */}

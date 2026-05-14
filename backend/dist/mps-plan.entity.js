@@ -15,6 +15,7 @@ const mps_plan_supply_entity_1 = require("./mps-plan-supply.entity");
 let MpsPlan = class MpsPlan {
     id;
     planName;
+    partType;
     targetMonth;
     status;
     totalIntakeBirds;
@@ -36,6 +37,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'plan_name', type: 'nvarchar', length: 100, nullable: true }),
     __metadata("design:type", String)
 ], MpsPlan.prototype, "planName", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'part_type', type: 'varchar', length: 50, default: 'fillet' }),
+    __metadata("design:type", String)
+], MpsPlan.prototype, "partType", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'target_month', type: 'varchar', length: 7 }),
     __metadata("design:type", String)

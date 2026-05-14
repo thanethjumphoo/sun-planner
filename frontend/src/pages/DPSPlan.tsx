@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL;
@@ -131,6 +132,7 @@ const getMatchingBins = (size: string): string[] => {
 
 
 const DPSPlan: React.FC = () => {
+  const { partId } = useParams<{ partId: string }>();
   // Use local date to avoid UTC timezone shift
   const formatLocalDate = (d: Date) => {
     const y = d.getFullYear();
@@ -354,20 +356,20 @@ const DPSPlan: React.FC = () => {
       await fetch(`${API}/api/dps/${targetDate}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ ...payload, partType: partId || 'fillet' })
       });
   };
 
   useEffect(() => {
     fetchData();
-  }, [targetDate]);
+  }, [targetDate, partId]);
 
   const fetchData = async () => {
     setLoading(true);
     setIsGenerated(false);
     try {
       let hasDbPlan = false;
-      const dpsRes = await fetch(`${API}/api/dps/${targetDate}`);
+      const dpsRes = await fetch(`${API}/api/dps/${targetDate}?partType=${partId || 'fillet'}`);
       if (dpsRes.ok) {
         const dbPlan = await dpsRes.json();
         if (dbPlan.exists && dbPlan.data) {
@@ -754,7 +756,7 @@ const DPSPlan: React.FC = () => {
     if (!confirm('Are you sure you want to delete this schedule from the database? This action cannot be undone.')) return;
     setLoading(true);
     try {
-        const res = await fetch(`${API}/api/dps/${targetDate}`, { method: 'DELETE' });
+        const res = await fetch(`${API}/api/dps/${targetDate}?partType=${partId || 'fillet'}`, { method: 'DELETE' });
         if (res.ok) {
             setOrders([]);
             setSublots([]);

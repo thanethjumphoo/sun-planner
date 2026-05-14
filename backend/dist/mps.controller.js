@@ -62,6 +62,7 @@ const mps_exception_entity_1 = require("./mps-exception.entity");
 const chicken_receiving_service_1 = require("./chicken-receiving/chicken-receiving.service");
 const manual_operation_entity_1 = require("./manual-operation.entity");
 const stg_erp_item_entity_1 = require("./stg-erp-item.entity");
+const master_yield_entity_1 = require("./master-yield.entity");
 let MpsController = class MpsController {
     orderLineRepo;
     orderHeaderRepo;
@@ -76,8 +77,9 @@ let MpsController = class MpsController {
     filletConfigRepo;
     manualOpRepo;
     itemRepo;
+    masterYieldRepo;
     chickenReceivingService;
-    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, filletSizeRepo, filletConfigRepo, manualOpRepo, itemRepo, chickenReceivingService) {
+    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, filletSizeRepo, filletConfigRepo, manualOpRepo, itemRepo, masterYieldRepo, chickenReceivingService) {
         this.orderLineRepo = orderLineRepo;
         this.orderHeaderRepo = orderHeaderRepo;
         this.specRepo = specRepo;
@@ -91,7 +93,45 @@ let MpsController = class MpsController {
         this.filletConfigRepo = filletConfigRepo;
         this.manualOpRepo = manualOpRepo;
         this.itemRepo = itemRepo;
+        this.masterYieldRepo = masterYieldRepo;
         this.chickenReceivingService = chickenReceivingService;
+    }
+    async getItemCodesByPartType(partType) {
+        const categoryMap = {
+            'fillet': ['สันใน'],
+            'bil': ['BIL L/C'],
+        };
+        const categoryNames = categoryMap[partType];
+        if (!categoryNames)
+            return null;
+        const allNodes = await this.masterYieldRepo.find();
+        const nodeIds = [];
+        const collectTree = (parentId) => {
+            const children = allNodes.filter(n => n.parentId === parentId);
+            for (const child of children) {
+                nodeIds.push(child.id);
+                collectTree(child.id);
+            }
+        };
+        for (const name of categoryNames) {
+            const matches = allNodes.filter(n => n.type === 'CATEGORY' && n.name === name);
+            for (const m of matches) {
+                nodeIds.push(m.id);
+                collectTree(m.id);
+            }
+        }
+        if (nodeIds.length === 0)
+            return null;
+        const specs = await this.specRepo.find();
+        const codes = specs
+            .filter(s => s.masterYieldId && nodeIds.includes(s.masterYieldId))
+            .map(s => s.erpItemCode);
+        return codes.length > 0 ? codes : null;
+    }
+    async getAllowedItems(partType) {
+        const pt = partType || 'fillet';
+        const codes = await this.getItemCodesByPartType(pt);
+        return { partType: pt, itemCodes: codes || [] };
     }
     async updateDate(body) {
         if (body.planId) {
@@ -203,11 +243,12 @@ let MpsController = class MpsController {
     }
     async generatePlan(body) {
         const targetMonth = body.targetMonth;
-        const existingApproved = await this.mpsPlanRepo.findOne({ where: { targetMonth, status: 'APPROVED' } });
+        const partType = body.partType || 'fillet';
+        const existingApproved = await this.mpsPlanRepo.findOne({ where: { targetMonth, partType, status: 'APPROVED' } });
         if (existingApproved) {
             return { success: false, message: `An approved plan already exists for ${targetMonth}. Reject it first to regenerate.` };
         }
-        let plan = await this.mpsPlanRepo.findOne({ where: { targetMonth, status: 'DRAFT' } });
+        let plan = await this.mpsPlanRepo.findOne({ where: { targetMonth, partType, status: 'DRAFT' } });
         if (plan) {
             await this.mpsDailyRepo.delete({ mpsPlan: { id: plan.id } });
             await this.mpsSupplyRepo.delete({ mpsPlan: { id: plan.id } });
@@ -218,6 +259,7 @@ let MpsController = class MpsController {
             plan = this.mpsPlanRepo.create({
                 planName: `MPS ${targetMonth} - Draft`,
                 targetMonth,
+                partType,
                 status: 'DRAFT',
             });
             plan = await this.mpsPlanRepo.save(plan);
@@ -249,6 +291,7 @@ let MpsController = class MpsController {
         const specs = await this.specRepo.find();
         const specMap = new Map();
         specs.forEach(s => specMap.set(s.erpItemCode, s));
+        const allowedItemCodes = await this.getItemCodesByPartType(partType);
         const formatDate = (date) => {
             const y = date.getFullYear();
             const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -272,12 +315,18 @@ let MpsController = class MpsController {
         const configRow = await this.filletConfigRepo.findOne({ where: { configKey: 'fillet_yield' } });
         const filletYield = configRow ? Number(configRow.configValue) : 0.04;
         const allIntakesRaw = await this.chickenReceivingService.findAll('monthly');
+        const prevMonthDate = new Date(targetDate.getFullYear(), targetDate.getMonth() - 1, 1);
+        const prevMonth = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
+        const allIntakesExpanded = allIntakesRaw.filter((intake) => {
+            const d = parseLocalDate(intake.receive_date);
+            return d && (d.startsWith(targetMonth) || d.startsWith(prevMonth));
+        });
         const allIntakes = allIntakesRaw.filter((intake) => {
             const d = parseLocalDate(intake.receive_date);
             return d && d.startsWith(targetMonth);
         });
         const supplyMap = new Map();
-        allIntakes.forEach((intake) => {
+        allIntakesExpanded.forEach((intake) => {
             const d = parseLocalDate(intake.receive_date);
             if (d) {
                 const intakeKg = Number(intake.chicken_weight || 0);
@@ -291,10 +340,18 @@ let MpsController = class MpsController {
             const spec = specMap.get(order.erpOrderItemCode);
             if (!spec)
                 continue;
+            if (allowedItemCodes && !allowedItemCodes.includes(order.erpOrderItemCode))
+                continue;
+            let adjustedQty = Number(order.erpOrderItemQty || 0);
+            if (body._allocatedMap?.has(order.erpOrderLineId)) {
+                adjustedQty -= body._allocatedMap.get(order.erpOrderLineId);
+                if (adjustedQty <= 0)
+                    continue;
+            }
             const orderObj = {
                 ...order,
                 productType: spec.productType,
-                qty: Number(order.erpOrderItemQty || 0),
+                qty: adjustedQty,
                 shipDate: new Date(order.erpOrderShipDate)
             };
             if (orderObj.productType === 'chilled') {
@@ -336,53 +393,6 @@ let MpsController = class MpsController {
         };
         chillOrders.sort(prioritySort);
         freezeOrders.sort(prioritySort);
-        const mpsOrdersToSave = [];
-        const exceptionsToSave = [];
-        let totalDemandKg = 0;
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        for (const order of chillOrders) {
-            totalDemandKg += order.qty;
-            let remainingQty = order.qty;
-            for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
-                if (remainingQty <= 0)
-                    break;
-                const dateStr = formatDate(d);
-                const supply = supplyMap.get(dateStr) || 0;
-                if (supply > 0) {
-                    const allocQty = Math.round(Math.min(supply, remainingQty));
-                    if (allocQty > 0) {
-                        mpsOrdersToSave.push(this.mpsOrderRepo.create({
-                            mpsPlan: plan,
-                            erpOrderLineId: order.erpOrderLineId,
-                            soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-                            itemCode: order.erpOrderItemCode,
-                            itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
-                            productType: order.productType,
-                            quantityKg: allocQty,
-                            shipDate: order.shipDate,
-                            plannedProductionDate: d,
-                            finishedProductionDate: d,
-                            isManualOverride: false
-                        }));
-                        supplyMap.set(dateStr, supply - allocQty);
-                        remainingQty -= allocQty;
-                    }
-                }
-            }
-            if (remainingQty > 0) {
-                exceptionsToSave.push(this.exceptionRepo.create({
-                    mpsPlan: plan,
-                    erpOrderLineId: order.erpOrderLineId,
-                    soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
-                    itemCode: order.erpOrderItemCode,
-                    shipDate: order.shipDate,
-                    requiredKg: order.qty,
-                    shortageKg: remainingQty,
-                    reason: `No supply available for Chill order on or before ${formatDate(order.shipDate)}`
-                }));
-            }
-        }
         const weightMatrix = await this.weightDistRepo.find();
         const filletCalcs = await this.filletSizeRepo.find();
         const filletMap = new Map();
@@ -391,7 +401,7 @@ let MpsController = class MpsController {
                 filletMap.set(c.colLabel, c.groupName);
         });
         const sizeSupplyMap = new Map();
-        allIntakes.forEach((intake) => {
+        allIntakesExpanded.forEach((intake) => {
             const d = parseLocalDate(intake.receive_date);
             if (!d)
                 return;
@@ -417,7 +427,7 @@ let MpsController = class MpsController {
                 const pct = Number(row.distValue || 0);
                 if (pct <= 0)
                     return;
-                const kg = Math.round(slaughteredWeight * filletYield * pct * 0.9);
+                const kg = Math.round(slaughteredWeight * filletYield * pct * 0.907);
                 const groupName = filletMap.get(row.colLabel);
                 if (groupName) {
                     const binKey = groupName.replace(/\s+/g, '').replace(/-/g, '_');
@@ -452,6 +462,14 @@ let MpsController = class MpsController {
             });
             sizeSupplyMap.set(d, existing);
         });
+        const originalSizeTotalMap = new Map();
+        sizeSupplyMap.forEach((sizeData, dateStr) => {
+            const binTotal = Object.values(sizeData.bins).reduce((sum, val) => sum + val, 0);
+            if (binTotal > 0) {
+                supplyMap.set(dateStr, binTotal);
+                originalSizeTotalMap.set(dateStr, binTotal);
+            }
+        });
         const getSizeBinKeys = (productSize) => {
             if (!productSize)
                 return [];
@@ -480,6 +498,81 @@ let MpsController = class MpsController {
             }
             return [];
         };
+        const mpsOrdersToSave = [];
+        const exceptionsToSave = [];
+        let totalDemandKg = 0;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        for (const order of chillOrders) {
+            totalDemandKg += order.qty;
+            let remainingQty = order.qty;
+            const spec = specMap.get(order.erpOrderItemCode);
+            const productSize = spec?.productSize || '';
+            const sizeBinKeys = getSizeBinKeys(productSize);
+            const isUnsize = sizeBinKeys.length === 0;
+            for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
+                if (remainingQty <= 0)
+                    break;
+                const dateStr = formatDate(d);
+                const totalRmForDate = supplyMap.get(dateStr) || 0;
+                if (totalRmForDate <= 0)
+                    continue;
+                const sizeData = sizeSupplyMap.get(dateStr);
+                let availableQty = 0;
+                if (!isUnsize && sizeData) {
+                    availableQty = sizeBinKeys.reduce((sum, key) => sum + (sizeData.bins[key] || 0), 0);
+                }
+                else {
+                    availableQty = totalRmForDate;
+                }
+                if (availableQty <= 0)
+                    continue;
+                const allocQty = Math.round(Math.min(availableQty, remainingQty, totalRmForDate));
+                if (allocQty <= 0)
+                    continue;
+                mpsOrdersToSave.push(this.mpsOrderRepo.create({
+                    mpsPlan: plan,
+                    erpOrderLineId: order.erpOrderLineId,
+                    soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+                    itemCode: order.erpOrderItemCode,
+                    itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+                    productType: order.productType,
+                    quantityKg: allocQty,
+                    shipDate: order.shipDate,
+                    plannedProductionDate: d,
+                    finishedProductionDate: d,
+                    isManualOverride: false
+                }));
+                supplyMap.set(dateStr, totalRmForDate - allocQty);
+                if (sizeData) {
+                    sizeData.total -= allocQty;
+                    if (!isUnsize) {
+                        let deductRemaining = allocQty;
+                        for (const key of sizeBinKeys) {
+                            if (deductRemaining <= 0)
+                                break;
+                            const binVal = sizeData.bins[key] || 0;
+                            const deduct = Math.min(binVal, deductRemaining);
+                            sizeData.bins[key] = binVal - deduct;
+                            deductRemaining -= deduct;
+                        }
+                    }
+                }
+                remainingQty -= allocQty;
+            }
+            if (remainingQty > 0) {
+                exceptionsToSave.push(this.exceptionRepo.create({
+                    mpsPlan: plan,
+                    erpOrderLineId: order.erpOrderLineId,
+                    soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
+                    itemCode: order.erpOrderItemCode,
+                    shipDate: order.shipDate,
+                    requiredKg: order.qty,
+                    shortageKg: remainingQty,
+                    reason: `No ${isUnsize ? 'total' : productSize} supply available for Chill order on or before ${formatDate(order.shipDate)}`
+                }));
+            }
+        }
         freezeOrders.sort((a, b) => {
             const dateDiff = a.shipDate.getTime() - b.shipDate.getTime();
             if (dateDiff !== 0)
@@ -502,8 +595,9 @@ let MpsController = class MpsController {
             d.setDate(d.getDate() + days);
             return d;
         };
+        const supplyBufferStart = subtractDays(startOfMonth, 30);
         const allDateStrs = [];
-        for (let d = new Date(startOfMonth); d <= endOfMonth; d = addDays(d, 1)) {
+        for (let d = new Date(supplyBufferStart); d <= endOfMonth; d = addDays(d, 1)) {
             allDateStrs.push(formatDate(d));
         }
         const allocateFreeze = (orderList, useSizeMatch) => {
@@ -608,10 +702,9 @@ let MpsController = class MpsController {
                 const d = parseLocalDate(intake.receive_date);
                 if (d === dayStr) {
                     intakeBirds += Number(intake.chicken_count || 0);
-                    const intakeKg = Number(intake.chicken_weight || 0);
-                    originalSupplyKg += intakeKg * 0.9575 * 0.95 * 0.04 * 0.907;
                 }
             });
+            originalSupplyKg = originalSizeTotalMap.get(dayStr) || 0;
             const demand = dailyDemand.get(dayStr) || 0;
             totalIntakeBirds += intakeBirds;
             totalRmFlKg += originalSupplyKg;
@@ -708,8 +801,47 @@ let MpsController = class MpsController {
         await this.mpsPlanRepo.save(plan);
         return { success: true, planId: plan.id, status: plan.status };
     }
-    async getPlans() {
+    async generateRange(body) {
+        const { orderStartDate, orderEndDate } = body;
+        const partType = body.partType || 'fillet';
+        if (!orderStartDate || !orderEndDate) {
+            return { success: false, message: 'orderStartDate and orderEndDate are required' };
+        }
+        const start = new Date(`${orderStartDate}T00:00:00`);
+        const end = new Date(`${orderEndDate}T23:59:59`);
+        const months = [];
+        const current = new Date(start.getFullYear(), start.getMonth(), 1);
+        while (current <= end) {
+            const monthStr = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
+            months.push(monthStr);
+            current.setMonth(current.getMonth() + 1);
+        }
+        const allocatedMap = new Map();
+        const results = [];
+        for (const month of months) {
+            const result = await this.generatePlan({
+                targetMonth: month,
+                orderStartDate: body.orderStartDate,
+                orderEndDate: body.orderEndDate,
+                partType,
+                _allocatedMap: new Map(allocatedMap),
+            });
+            if (result.success && result.planId) {
+                const planOrders = await this.mpsOrderRepo.find({
+                    where: { mpsPlan: { id: result.planId } }
+                });
+                for (const po of planOrders) {
+                    const prev = allocatedMap.get(po.erpOrderLineId) || 0;
+                    allocatedMap.set(po.erpOrderLineId, prev + Number(po.quantityKg));
+                }
+            }
+            results.push({ targetMonth: month, ...result });
+        }
+        return { success: true, results };
+    }
+    async getPlans(partType) {
         return this.mpsPlanRepo.find({
+            where: { partType: partType || 'fillet' },
             order: {
                 createdAt: 'DESC'
             }
@@ -1073,6 +1205,13 @@ let MpsController = class MpsController {
 };
 exports.MpsController = MpsController;
 __decorate([
+    (0, common_1.Get)('allowed-items'),
+    __param(0, (0, common_1.Query)('partType')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], MpsController.prototype, "getAllowedItems", null);
+__decorate([
     (0, common_1.Post)('update-date'),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -1093,9 +1232,17 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], MpsController.prototype, "generatePlan", null);
 __decorate([
-    (0, common_1.Get)('plans'),
+    (0, common_1.Post)('generate-range'),
+    __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], MpsController.prototype, "generateRange", null);
+__decorate([
+    (0, common_1.Get)('plans'),
+    __param(0, (0, common_1.Query)('partType')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], MpsController.prototype, "getPlans", null);
 __decorate([
@@ -1164,7 +1311,9 @@ exports.MpsController = MpsController = __decorate([
     __param(10, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletConfig)),
     __param(11, (0, typeorm_1.InjectRepository)(manual_operation_entity_1.ManualOperation)),
     __param(12, (0, typeorm_1.InjectRepository)(stg_erp_item_entity_1.StgErpItem)),
+    __param(13, (0, typeorm_1.InjectRepository)(master_yield_entity_1.MasterYield)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

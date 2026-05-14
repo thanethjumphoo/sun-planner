@@ -11,6 +11,7 @@ import { MpsExceptionReport } from './mps-exception.entity';
 import { ChickenReceivingService } from './chicken-receiving/chicken-receiving.service';
 import { ManualOperation } from './manual-operation.entity';
 import { StgErpItem } from './stg-erp-item.entity';
+import { MasterYield } from './master-yield.entity';
 export declare class MpsController {
     private orderLineRepo;
     private orderHeaderRepo;
@@ -25,8 +26,14 @@ export declare class MpsController {
     private filletConfigRepo;
     private manualOpRepo;
     private itemRepo;
+    private masterYieldRepo;
     private chickenReceivingService;
-    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, filletConfigRepo: Repository<FilletConfig>, manualOpRepo: Repository<ManualOperation>, itemRepo: Repository<StgErpItem>, chickenReceivingService: ChickenReceivingService);
+    constructor(orderLineRepo: Repository<StgErpOrderLine>, orderHeaderRepo: Repository<StgErpOrderHeader>, specRepo: Repository<ProductSpec>, mpsPlanRepo: Repository<MpsPlan>, mpsDailyRepo: Repository<MpsPlanDaily>, mpsOrderRepo: Repository<MpsPlanOrder>, mpsSupplyRepo: Repository<MpsPlanSupply>, weightDistRepo: Repository<WeightDistribution>, exceptionRepo: Repository<MpsExceptionReport>, filletSizeRepo: Repository<FilletSizeCalc>, filletConfigRepo: Repository<FilletConfig>, manualOpRepo: Repository<ManualOperation>, itemRepo: Repository<StgErpItem>, masterYieldRepo: Repository<MasterYield>, chickenReceivingService: ChickenReceivingService);
+    private getItemCodesByPartType;
+    getAllowedItems(partType: string): Promise<{
+        partType: string;
+        itemCodes: string[];
+    }>;
     updateDate(body: {
         planId?: number;
         mpsOrderId?: number;
@@ -48,6 +55,8 @@ export declare class MpsController {
         targetMonth: string;
         orderStartDate?: string;
         orderEndDate?: string;
+        partType?: string;
+        _allocatedMap?: Map<number, number>;
     }): Promise<{
         success: boolean;
         message: string;
@@ -59,7 +68,20 @@ export declare class MpsController {
         status: string;
         message?: undefined;
     }>;
-    getPlans(): Promise<MpsPlan[]>;
+    generateRange(body: {
+        orderStartDate: string;
+        orderEndDate: string;
+        partType?: string;
+    }): Promise<{
+        success: boolean;
+        message: string;
+        results?: undefined;
+    } | {
+        success: boolean;
+        results: any[];
+        message?: undefined;
+    }>;
+    getPlans(partType: string): Promise<MpsPlan[]>;
     deletePlan(body: any, id: number): Promise<{
         success: boolean;
         message: string;
