@@ -58,6 +58,7 @@ const mps_plan_entity_1 = require("./mps-plan.entity");
 const mps_plan_supply_entity_1 = require("./mps-plan-supply.entity");
 const mps_plan_supply_size_entity_1 = require("./mps-plan-supply-size.entity");
 const weight_distribution_entity_1 = require("./weight-distribution.entity");
+const bil_weight_distribution_entity_1 = require("./bil-weight-distribution.entity");
 const fillet_size_entity_1 = require("./fillet-size.entity");
 const mps_exception_entity_1 = require("./mps-exception.entity");
 const chicken_receiving_service_1 = require("./chicken-receiving/chicken-receiving.service");
@@ -74,6 +75,7 @@ let MpsController = class MpsController {
     mpsOrderRepo;
     mpsSupplyRepo;
     weightDistRepo;
+    bilWeightDistRepo;
     exceptionRepo;
     filletSizeRepo;
     filletConfigRepo;
@@ -83,7 +85,7 @@ let MpsController = class MpsController {
     mpsSupplySizeRepo;
     weeklySizeRepo;
     chickenReceivingService;
-    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, exceptionRepo, filletSizeRepo, filletConfigRepo, manualOpRepo, itemRepo, masterYieldRepo, mpsSupplySizeRepo, weeklySizeRepo, chickenReceivingService) {
+    constructor(orderLineRepo, orderHeaderRepo, specRepo, mpsPlanRepo, mpsDailyRepo, mpsOrderRepo, mpsSupplyRepo, weightDistRepo, bilWeightDistRepo, exceptionRepo, filletSizeRepo, filletConfigRepo, manualOpRepo, itemRepo, masterYieldRepo, mpsSupplySizeRepo, weeklySizeRepo, chickenReceivingService) {
         this.orderLineRepo = orderLineRepo;
         this.orderHeaderRepo = orderHeaderRepo;
         this.specRepo = specRepo;
@@ -92,6 +94,7 @@ let MpsController = class MpsController {
         this.mpsOrderRepo = mpsOrderRepo;
         this.mpsSupplyRepo = mpsSupplyRepo;
         this.weightDistRepo = weightDistRepo;
+        this.bilWeightDistRepo = bilWeightDistRepo;
         this.exceptionRepo = exceptionRepo;
         this.filletSizeRepo = filletSizeRepo;
         this.filletConfigRepo = filletConfigRepo;
@@ -130,7 +133,12 @@ let MpsController = class MpsController {
             return null;
         const specs = await this.specRepo.find();
         const codes = specs
-            .filter(s => s.masterYieldId && nodeIds.includes(s.masterYieldId))
+            .filter(s => {
+            if (!s.masterYieldIds)
+                return false;
+            const ids = s.masterYieldIds.split(',').map(id => id.trim());
+            return ids.some(id => nodeIds.includes(id));
+        })
             .map(s => s.erpItemCode);
         return codes.length > 0 ? codes : null;
     }
@@ -270,6 +278,23 @@ let MpsController = class MpsController {
             });
             plan = await this.mpsPlanRepo.save(plan);
         }
+        const allYieldNodes = await this.masterYieldRepo.find({
+            relations: ['children', 'children.children', 'children.children.children']
+        });
+        const findNode = (nodes, id) => {
+            if (!nodes)
+                return null;
+            for (const n of nodes) {
+                if (n.id === id)
+                    return n;
+                if (n.children) {
+                    const found = findNode(n.children, id);
+                    if (found)
+                        return found;
+                }
+            }
+            return null;
+        };
         let startOfRange;
         let endOfRange;
         if (body.orderStartDate && body.orderEndDate) {
@@ -320,6 +345,11 @@ let MpsController = class MpsController {
         };
         const configRow = await this.filletConfigRepo.findOne({ where: { configKey: 'fillet_yield' } });
         const filletYield = configRow ? Number(configRow.configValue) : 0.04;
+        let partYield = filletYield;
+        if (partType === 'bil') {
+            const bilNode = await this.masterYieldRepo.findOne({ where: { type: 'CATEGORY', name: 'BIL L/C' } });
+            partYield = bilNode?.yieldPercentage ? Number(bilNode.yieldPercentage) : 0.25;
+        }
         const allIntakesRaw = await this.chickenReceivingService.findAll('monthly');
         const prevMonthDate = new Date(targetDate.getFullYear(), targetDate.getMonth() - 1, 1);
         const prevMonth = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
@@ -336,8 +366,10 @@ let MpsController = class MpsController {
             const d = parseLocalDate(intake.receive_date);
             if (d) {
                 const intakeKg = Number(intake.chicken_weight || 0);
-                const rmFlAvailKg = intakeKg * 0.9575 * 0.95 * filletYield * 0.907;
-                supplyMap.set(d, (supplyMap.get(d) || 0) + rmFlAvailKg);
+                const rmAvailKg = partType === 'fillet'
+                    ? intakeKg * 0.9575 * 0.95 * filletYield * 0.907
+                    : intakeKg * 0.9575 * 0.95 * partYield;
+                supplyMap.set(d, (supplyMap.get(d) || 0) + rmAvailKg);
             }
         });
         const chillOrders = [];
@@ -399,13 +431,16 @@ let MpsController = class MpsController {
         };
         chillOrders.sort(prioritySort);
         freezeOrders.sort(prioritySort);
-        const weightMatrix = await this.weightDistRepo.find();
+        const isBil = partType === 'bil';
+        const weightMatrix = isBil ? await this.bilWeightDistRepo.find() : await this.weightDistRepo.find();
         const filletCalcs = await this.filletSizeRepo.find();
         const filletMap = new Map();
-        filletCalcs.forEach(c => {
-            if (c.groupName)
-                filletMap.set(c.colLabel, c.groupName);
-        });
+        if (!isBil) {
+            filletCalcs.forEach(c => {
+                if (c.groupName)
+                    filletMap.set(c.colLabel, c.groupName);
+            });
+        }
         const uniqueRowLabels = [...new Set(weightMatrix.map(r => r.rowLabel))];
         const uniqueColLabels = [...new Set(weightMatrix.map(r => r.colLabel))];
         console.log(`[MPS DEBUG] weightMatrix total rows: ${weightMatrix.length}`);
@@ -450,45 +485,22 @@ let MpsController = class MpsController {
             });
             const existing = sizeSupplyMap.get(d) || {
                 total: 0,
-                bins: { '40Down': 0, '40_45': 0, '45_50': 0, '50_55': 0, '55_60': 0, '60_65': 0, '65_70': 0, '70Up': 0 }
+                bins: {}
             };
             matchingRows.forEach(row => {
                 const pct = Number(row.distValue || 0);
                 if (pct <= 0)
                     return;
-                const kg = Math.round(slaughteredWeight * filletYield * (pct / 100) * 0.907);
-                const groupName = filletMap.get(row.colLabel);
+                const kg = isBil
+                    ? Math.round(slaughteredWeight * partYield * pct)
+                    : Math.round(slaughteredWeight * filletYield * pct * 0.907);
+                const groupName = isBil ? row.colLabel : filletMap.get(row.colLabel);
                 if (groupName) {
-                    const binKey = groupName.replace(/\s+/g, '').replace(/-/g, '_');
-                    let key = binKey;
-                    if (key === '40Down')
-                        key = '40Down';
-                    else if (key === '70Up')
-                        key = '70Up';
-                    else if (key.includes('_')) { }
-                    else { }
-                    if (existing.bins[key] !== undefined) {
-                        existing.bins[key] += kg;
-                    }
-                    else if (key === '40Down')
-                        existing.bins['40Down'] += kg;
-                    else if (key === '40_45')
-                        existing.bins['40_45'] += kg;
-                    else if (key === '45_50')
-                        existing.bins['45_50'] += kg;
-                    else if (key === '50_55')
-                        existing.bins['50_55'] += kg;
-                    else if (key === '55_60')
-                        existing.bins['55_60'] += kg;
-                    else if (key === '60_65')
-                        existing.bins['60_65'] += kg;
-                    else if (key === '65_70')
-                        existing.bins['65_70'] += kg;
-                    else if (key === '70Up')
-                        existing.bins['70Up'] += kg;
+                    const key = isBil ? groupName : groupName.replace(/\s+/g, '').replace(/-/g, '_');
+                    existing.bins[key] = (existing.bins[key] || 0) + kg;
                 }
-                existing.total += kg;
             });
+            existing.total += Object.values(existing.bins).reduce((a, b) => a + b, 0);
             sizeSupplyMap.set(d, existing);
         });
         const originalSizeTotalMap = new Map();
@@ -505,6 +517,9 @@ let MpsController = class MpsController {
             const s = productSize.toLowerCase().trim();
             if (s === 'unsize' || s === '')
                 return [];
+            if (isBil) {
+                return [productSize];
+            }
             if (s.includes('40 down') || s === '40down')
                 return ['40Down'];
             if (s.includes('70 up') || s === '70up' || s.includes('60 up') || s === '60up')
@@ -773,6 +788,41 @@ let MpsController = class MpsController {
             if (dailyIntakeBirds > 0) {
                 const avgWeightDaily = parseFloat((dailyTotalWeight / dailyIntakeBirds).toFixed(2));
                 const slaughteredWeightDaily = dailyTotalWeight * 0.9575 * 0.95;
+                const dailyOrders = mpsOrdersToSave.filter(o => {
+                    const offset = o.plannedProductionDate.getTimezoneOffset();
+                    const localDate = new Date(o.plannedProductionDate.getTime() - (offset * 60 * 1000));
+                    return localDate.toISOString().split('T')[0] === dayStr;
+                });
+                const nodeRMs = {};
+                for (const order of dailyOrders) {
+                    const spec = specs.find(s => s.erpItemCode === order.itemCode);
+                    if (spec && spec.masterYieldIds) {
+                        const yieldPct = spec.productYield || 1;
+                        const rm = order.quantityKg / yieldPct;
+                        const processIds = spec.masterYieldIds.split(',').map(id => id.trim());
+                        const pId = processIds[0];
+                        if (pId) {
+                            nodeRMs[pId] = (nodeRMs[pId] || 0) + rm;
+                        }
+                    }
+                }
+                const byProducts = {};
+                Object.keys(nodeRMs).forEach(pId => {
+                    const rm = nodeRMs[pId];
+                    const processNode = findNode(allYieldNodes, pId);
+                    if (processNode && processNode.children) {
+                        processNode.children.forEach((child) => {
+                            const byProdQty = rm * (child.yieldPercentage || 0);
+                            if (byProdQty > 0) {
+                                if (!byProducts[child.id]) {
+                                    byProducts[child.id] = { name: child.name, qty: 0 };
+                                }
+                                byProducts[child.id].qty += byProdQty;
+                            }
+                        });
+                    }
+                });
+                const byProductsStr = Object.keys(byProducts).length > 0 ? JSON.stringify(byProducts) : null;
                 const supplyEntry = this.mpsSupplyRepo.create({
                     mpsPlan: plan,
                     productionDate: new Date(dayStr),
@@ -780,6 +830,7 @@ let MpsController = class MpsController {
                     totalWeight: dailyTotalWeight,
                     avgWeight: parseFloat(avgWeightDaily.toFixed(2)),
                     slaughteredWeight: slaughteredWeightDaily,
+                    byProducts: byProductsStr,
                 });
                 const sizeBins = {};
                 dayIntakes.forEach((intake) => {
@@ -801,8 +852,10 @@ let MpsController = class MpsController {
                         const pct = Number(row.distValue || 0);
                         if (pct <= 0)
                             return;
-                        const kg = Math.round(slaughteredWeight * filletYield * (pct / 100) * 0.907);
-                        const groupName = filletMap.get(row.colLabel);
+                        const kg = isBil
+                            ? Math.round(slaughteredWeight * partYield * pct)
+                            : Math.round(slaughteredWeight * filletYield * pct * 0.907);
+                        const groupName = isBil ? row.colLabel : filletMap.get(row.colLabel);
                         if (groupName) {
                             sizeBins[groupName] = (sizeBins[groupName] || 0) + kg;
                         }
@@ -915,15 +968,23 @@ let MpsController = class MpsController {
             const d = typeof intake.receive_date === 'string' ? intake.receive_date.split('T')[0] : intake.receive_date.toISOString().split('T')[0];
             return d.startsWith(targetMonth);
         });
-        const weightMatrix = await this.weightDistRepo.find();
+        const isBil = partType === 'bil';
+        const weightMatrix = isBil ? await this.bilWeightDistRepo.find() : await this.weightDistRepo.find();
         const filletCalcs = await this.filletSizeRepo.find();
         const filletMap = new Map();
-        filletCalcs.forEach(c => {
-            if (c.groupName)
-                filletMap.set(c.colLabel, c.groupName);
-        });
+        if (!isBil) {
+            filletCalcs.forEach(c => {
+                if (c.groupName)
+                    filletMap.set(c.colLabel, c.groupName);
+            });
+        }
         const configRow = await this.filletConfigRepo.findOne({ where: { configKey: 'fillet_yield' } });
         const filletYield = configRow ? Number(configRow.configValue) : 0.04;
+        let partYield = filletYield;
+        if (partType === 'bil') {
+            const bilNode = await this.masterYieldRepo.findOne({ where: { type: 'CATEGORY', name: 'BIL L/C' } });
+            partYield = bilNode?.yieldPercentage ? Number(bilNode.yieldPercentage) : 0.25;
+        }
         const partNameMap = { 'fillet': 'สันใน', 'bil': 'BIL L/C' };
         const currentPartName = partNameMap[partType] || partType;
         const existingSizes = await this.weeklySizeRepo.find({ where: { partName: currentPartName } });
@@ -964,8 +1025,10 @@ let MpsController = class MpsController {
                     const pct = Number(row.distValue || 0);
                     if (pct <= 0)
                         return;
-                    const kg = Math.round(slaughteredWeight * filletYield * (pct / 100) * 0.907);
-                    const groupName = filletMap.get(row.colLabel);
+                    const kg = isBil
+                        ? Math.round(slaughteredWeight * partYield * pct)
+                        : Math.round(slaughteredWeight * filletYield * pct * 0.907);
+                    const groupName = isBil ? row.colLabel : filletMap.get(row.colLabel);
                     if (groupName) {
                         sizeBins[groupName] = (sizeBins[groupName] || 0) + kg;
                     }
@@ -1461,15 +1524,17 @@ exports.MpsController = MpsController = __decorate([
     __param(5, (0, typeorm_1.InjectRepository)(mps_plan_entity_1.MpsPlanOrder)),
     __param(6, (0, typeorm_1.InjectRepository)(mps_plan_supply_entity_1.MpsPlanSupply)),
     __param(7, (0, typeorm_1.InjectRepository)(weight_distribution_entity_1.WeightDistribution)),
-    __param(8, (0, typeorm_1.InjectRepository)(mps_exception_entity_1.MpsExceptionReport)),
-    __param(9, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletSizeCalc)),
-    __param(10, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletConfig)),
-    __param(11, (0, typeorm_1.InjectRepository)(manual_operation_entity_1.ManualOperation)),
-    __param(12, (0, typeorm_1.InjectRepository)(stg_erp_item_entity_1.StgErpItem)),
-    __param(13, (0, typeorm_1.InjectRepository)(master_yield_entity_1.MasterYield)),
-    __param(14, (0, typeorm_1.InjectRepository)(mps_plan_supply_size_entity_1.MpsPlanSupplySize)),
-    __param(15, (0, typeorm_1.InjectRepository)(weekly_size_entity_1.ChickenReceivingWeeklySize)),
+    __param(8, (0, typeorm_1.InjectRepository)(bil_weight_distribution_entity_1.BilWeightDistribution)),
+    __param(9, (0, typeorm_1.InjectRepository)(mps_exception_entity_1.MpsExceptionReport)),
+    __param(10, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletSizeCalc)),
+    __param(11, (0, typeorm_1.InjectRepository)(fillet_size_entity_1.FilletConfig)),
+    __param(12, (0, typeorm_1.InjectRepository)(manual_operation_entity_1.ManualOperation)),
+    __param(13, (0, typeorm_1.InjectRepository)(stg_erp_item_entity_1.StgErpItem)),
+    __param(14, (0, typeorm_1.InjectRepository)(master_yield_entity_1.MasterYield)),
+    __param(15, (0, typeorm_1.InjectRepository)(mps_plan_supply_size_entity_1.MpsPlanSupplySize)),
+    __param(16, (0, typeorm_1.InjectRepository)(weekly_size_entity_1.ChickenReceivingWeeklySize)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

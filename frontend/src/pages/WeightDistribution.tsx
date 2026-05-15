@@ -10,6 +10,7 @@ const API = import.meta.env.VITE_API_URL;
 const TABS = [
   { key: 'weight', label: 'Weight Distribution', icon: Scale },
   { key: 'fillet', label: 'Fillet Size', icon: Scissors },
+  { key: 'bil', label: 'Bone-In Leg', icon: Layers },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
@@ -17,6 +18,8 @@ interface FilletGroup {
   id: string;
   name: string;
 }
+
+
 
 const WeightDistributionPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('weight');
@@ -39,14 +42,23 @@ const WeightDistributionPage: React.FC = () => {
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [filletAssignments, setFilletAssignments] = useState<Record<string, string>>({});
 
+  // ─── BIL state ───
+  const [bilRowLabels, setBilRowLabels] = useState<string[]>([]);
+  const [bilColLabels, setBilColLabels] = useState<string[]>([]);
+  const [bilMatrix, setBilMatrix] = useState<Record<string, Record<string, number>>>({});
+  const [bilDirty, setBilDirty] = useState(false);
+  const [newBilRowInput, setNewBilRowInput] = useState('');
+  const [newBilColInput, setNewBilColInput] = useState('');
+
   useEffect(() => { fetchData(); }, []);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [wdRes, filletRes] = await Promise.all([
+      const [wdRes, filletRes, bilRes] = await Promise.all([
         fetch(`${API}/api/weight-distribution`),
         fetch(`${API}/api/fillet-size`),
+        fetch(`${API}/api/bil-weight-distribution`),
       ]);
       if (wdRes.ok) {
         const d = await wdRes.json();
@@ -54,6 +66,13 @@ const WeightDistributionPage: React.FC = () => {
         setColLabels(d.colLabels || []);
         setMatrix(d.matrix || {});
         setDirty(false);
+      }
+      if (bilRes.ok) {
+        const d = await bilRes.json();
+        setBilRowLabels(d.rowLabels || []);
+        setBilColLabels(d.colLabels || []);
+        setBilMatrix(d.matrix || {});
+        setBilDirty(false);
       }
       if (filletRes.ok) {
         const f = await filletRes.json();
@@ -132,7 +151,6 @@ const WeightDistributionPage: React.FC = () => {
     setDirty(true);
   };
 
-  // ─── Bulk Save ───
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -145,6 +163,79 @@ const WeightDistributionPage: React.FC = () => {
       if (d.success) {
         showToast(`บันทึกสำเร็จ (${d.count} cells)`, 'success');
         setDirty(false);
+      } else {
+        showToast('เกิดข้อผิดพลาด', 'error');
+      }
+    } catch { showToast('เกิดข้อผิดพลาด', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  // ─── BIL Matrix helpers ───
+  const setBilCellValue = useCallback((row: string, col: string, val: number) => {
+    setBilMatrix(prev => ({
+      ...prev,
+      [row]: { ...(prev[row] || {}), [col]: val }
+    }));
+    setBilDirty(true);
+  }, []);
+
+  const getBilCell = useCallback((row: string, col: string) => {
+    return bilMatrix[row]?.[col] ?? 0;
+  }, [bilMatrix]);
+
+  const getBilRowTotal = useCallback((row: string) => {
+    return bilColLabels.reduce((sum, col) => sum + (bilMatrix[row]?.[col] ?? 0), 0);
+  }, [bilMatrix, bilColLabels]);
+
+  const addBilRow = () => {
+    const label = newBilRowInput.trim();
+    if (!label || bilRowLabels.includes(label)) return;
+    setBilRowLabels(prev => [...prev, label].sort((a, b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b)));
+    setBilMatrix(prev => ({ ...prev, [label]: {} }));
+    setNewBilRowInput('');
+    setBilDirty(true);
+  };
+
+  const addBilCol = () => {
+    const label = newBilColInput.trim();
+    if (!label || bilColLabels.includes(label)) return;
+    setBilColLabels(prev => [...prev, label]);
+    setNewBilColInput('');
+    setBilDirty(true);
+  };
+
+  const removeBilRow = (label: string) => {
+    setBilRowLabels(prev => prev.filter(r => r !== label));
+    setBilMatrix(prev => { const n = { ...prev }; delete n[label]; return n; });
+    setBilDirty(true);
+  };
+
+  const removeBilCol = (label: string) => {
+    setBilColLabels(prev => prev.filter(c => c !== label));
+    setBilMatrix(prev => {
+      const n: Record<string, Record<string, number>> = {};
+      for (const row of Object.keys(prev)) {
+        const rowData = { ...prev[row] };
+        delete rowData[label];
+        n[row] = rowData;
+      }
+      return n;
+    });
+    setBilDirty(true);
+  };
+
+  const handleBilSave = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch(`${API}/api/bil-weight-distribution/bulk-save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rowLabels: bilRowLabels, colLabels: bilColLabels, matrix: bilMatrix }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showToast(`บันทึกสำเร็จ (${d.count} cells)`, 'success');
+        setBilDirty(false);
       } else {
         showToast('เกิดข้อผิดพลาด', 'error');
       }
@@ -705,6 +796,154 @@ const WeightDistributionPage: React.FC = () => {
           </div>
         );
       })()}
+      {/* ═══ TAB: Bone-In Leg (BIL) ═══ */}
+      {/* ═══ TAB: Bone-In Leg (BIL) ═══ */}
+      {activeTab === 'bil' && (
+        <>
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                <Layers className="text-orange-500 w-6 h-6" />
+                Bone-In Leg Matrix
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">ตั้งค่าเมทริกซ์การกระจายน้ำหนักสำหรับ Bone-In Leg (Live Weight → BIL Size)</p>
+            </div>
+            <button onClick={handleBilSave} disabled={saving || !bilDirty}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg transition-all ${bilDirty && !saving
+                ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white shadow-orange-500/30'
+                : 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'}`}
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {saving ? 'กำลังบันทึก...' : bilDirty ? 'บันทึกการเปลี่ยนแปลง' : 'ข้อมูลล่าสุดแล้ว'}
+            </button>
+          </div>
+
+          {/* ═══ STATS ═══ */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <StatCard label="Rows (Live Weight)" value={bilRowLabels.length} icon={Scale} color="blue" />
+            <StatCard label="Columns (BIL Size)" value={bilColLabels.length} icon={Grid3X3} color="orange" />
+            <StatCard label="Total Cells" value={bilRowLabels.length * bilColLabels.length} icon={Grid3X3} color="purple" />
+            <StatCard label="Filled Cells" value={`${bilRowLabels.reduce((acc, row) => acc + bilColLabels.filter(col => (bilMatrix[row]?.[col] ?? 0) > 0).length, 0)} / ${bilRowLabels.length * bilColLabels.length}`} icon={CheckCircle2} color="green" />
+          </div>
+
+          {/* ═══ ADD ROW / COL ═══ */}
+          <div className="flex flex-wrap gap-4 mb-6">
+            <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-2.5">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Row:</span>
+              <input type="text" placeholder="เช่น 1.10-1.39, 1.40-1.49 ..." value={newBilRowInput}
+                onChange={e => setNewBilRowInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addBilRow()}
+                className="w-40 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:ring-2 focus:ring-orange-300 focus:border-orange-400 outline-none" />
+              <button onClick={addBilRow} className="flex items-center gap-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-medium transition-colors">
+                <Plus className="w-3.5 h-3.5" /> เพิ่มแถว
+              </button>
+            </div>
+            <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-2.5">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Col:</span>
+              <input type="text" placeholder="เช่น 180 g down, 180-210 ..." value={newBilColInput}
+                onChange={e => setNewBilColInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addBilCol()}
+                className="w-40 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:ring-2 focus:ring-orange-300 focus:border-orange-400 outline-none" />
+              <button onClick={addBilCol} className="flex items-center gap-1 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-medium transition-colors">
+                <Plus className="w-3.5 h-3.5" /> เพิ่มคอลัมน์
+              </button>
+            </div>
+          </div>
+
+          {/* ═══ MATRIX TABLE ═══ */}
+          {bilRowLabels.length === 0 && bilColLabels.length === 0 ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-16 text-center mb-6">
+              <Grid3X3 className="w-16 h-16 mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-500 font-medium text-lg">ยังไม่มีข้อมูลเมทริกซ์ BIL</p>
+              <p className="text-gray-400 text-sm mt-1">เพิ่ม Row (Live Weight) และ Column (BIL Size) ด้านบนเพื่อเริ่มต้น</p>
+            </div>
+          ) : (
+            <div ref={tableRef} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-auto max-h-[65vh] mb-6">
+              <table className="text-sm border-collapse min-w-full">
+                <thead className="sticky top-0 z-20">
+                  <tr className="bg-gradient-to-r from-orange-50 to-amber-50">
+                    <th className="sticky left-0 z-30 bg-orange-100 px-4 py-3 text-xs font-bold text-orange-800 uppercase tracking-wider border-b border-r border-orange-200 min-w-[120px]">
+                      Live Weight ↓
+                    </th>
+                    {bilColLabels.map(col => (
+                      <th key={col} className="px-2 py-3 text-center border-b border-orange-200 min-w-[90px]">
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-xs font-bold text-orange-900">{col}</span>
+                          <button onClick={() => removeBilCol(col)} className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-red-400 hover:text-red-600 transition-all" title="ลบคอลัมน์">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </th>
+                    ))}
+                    <th className="px-3 py-3 text-center border-b border-l-2 border-orange-300 bg-amber-100 min-w-[80px]">
+                      <span className="text-xs font-bold text-amber-800 uppercase">Total</span>
+                    </th>
+                    <th className="px-2 py-3 border-b border-orange-200 bg-orange-50 w-10"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bilRowLabels.map((row, rowIdx) => {
+                    const total = getBilRowTotal(row);
+                    const totalOk = Math.abs(total - 1) < 0.001;
+                    const totalOver = total > 1.001;
+                    return (
+                      <tr key={row} className={`group transition-colors ${rowIdx % 2 === 0 ? 'bg-white' : 'bg-orange-50/20'} hover:bg-orange-50/60`}>
+                        <td className={`sticky left-0 z-10 px-4 py-2 font-bold text-sm border-r border-gray-200 ${rowIdx % 2 === 0 ? 'bg-white' : 'bg-orange-50/20'} group-hover:bg-orange-50`}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-blue-800">{row}</span>
+                            <button onClick={() => removeBilRow(row)} className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-red-400 hover:text-red-600 transition-all" title="ลบแถว">
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </td>
+                        {bilColLabels.map(col => {
+                          const val = getBilCell(row, col);
+                          const hasValue = val > 0;
+                          return (
+                            <td key={col} className="px-1 py-1 text-center border-gray-100">
+                              <input
+                                type="number" step="0.000001" min="0" max="1"
+                                value={val || ''}
+                                placeholder="0"
+                                onChange={e => {
+                                  const v = parseFloat(e.target.value);
+                                  setBilCellValue(row, col, isNaN(v) ? 0 : v);
+                                }}
+                                onFocus={e => e.target.select()}
+                                className={`w-full text-center rounded-lg px-1 py-1.5 text-xs font-mono outline-none transition-all border
+                                ${hasValue
+                                    ? 'bg-orange-50 border-orange-200 text-orange-900 font-semibold focus:ring-2 focus:ring-orange-300 focus:border-orange-400'
+                                    : 'bg-white border-gray-200 text-gray-400 focus:ring-2 focus:ring-orange-300 focus:border-orange-400'
+                                  }`}
+                              />
+                            </td>
+                          );
+                        })}
+                        <td className={`px-3 py-2 text-center font-bold text-xs font-mono border-l-2 border-orange-200
+                        ${totalOk ? 'bg-green-50 text-green-700' : totalOver ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700'}`}>
+                          <div className="flex items-center justify-center gap-1">
+                            {totalOk ? <CheckCircle2 className="w-3 h-3 text-green-500" /> : totalOver ? <AlertTriangle className="w-3 h-3 text-red-500" /> : null}
+                            {total.toFixed(6)}
+                          </div>
+                        </td>
+                        <td className="w-10"></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ═══ LEGEND ═══ */}
+          <div className="flex flex-wrap items-center gap-4 text-xs text-gray-500">
+            <div className="flex items-center gap-1.5"><div className="w-4 h-4 rounded bg-orange-50 border border-orange-200"></div> มีค่า (&gt; 0)</div>
+            <div className="flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 text-green-500" /> Total = 1.0000 ✓</div>
+            <div className="flex items-center gap-1.5"><AlertTriangle className="w-4 h-4 text-red-500" /> Total &gt; 1.0000 (เกิน)</div>
+            <div className="flex items-center gap-1.5"><div className="w-4 h-4 rounded bg-amber-50 border border-amber-200"></div> Total &lt; 1.0000 (ยังไม่ครบ)</div>
+          </div>
+        </>
+      )}
 
       {/* ═══ TOAST ═══ */}
       <AnimatePresence>

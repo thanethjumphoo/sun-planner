@@ -18,7 +18,7 @@ export declare class ProductSpecController {
         productWeight: number;
         productSpeed: number;
         productLead: number;
-        masterYieldId: string | null;
+        masterYieldIds: string | null;
         createdAt: Date;
         updatedAt: Date;
     }[]>;
@@ -109,6 +109,12 @@ export declare class ProductSpecController {
     assignMasterYield(body: {
         specIds: number[];
         masterYieldId: string | null;
+    }): Promise<{
+        success: boolean;
+    }>;
+    unassignMasterYield(body: {
+        specIds: number[];
+        masterYieldId: string;
     }): Promise<{
         success: boolean;
     }>;

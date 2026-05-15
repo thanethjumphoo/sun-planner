@@ -17,6 +17,8 @@ import { ProductSpec } from './product-spec.entity';
 import { ProductSpecController } from './product-spec.controller';
 import { WeightDistribution } from './weight-distribution.entity';
 import { WeightDistributionController } from './weight-distribution.controller';
+import { BilWeightDistribution } from './bil-weight-distribution.entity';
+import { BilWeightDistributionController } from './bil-weight-distribution.controller';
 import { MpsController } from './mps.controller';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
@@ -61,12 +63,12 @@ import { MasterYieldController } from './master-yield.controller';
     ChickenReceivingModule,
     TypeOrmModule.forFeature([
       StgErpItem, StgErpOrderHeader, StgErpOrderLine, TargetSyncItem, ProductSpec, 
-      WeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsPlanSupplySize, MpsExceptionReport,
+      WeightDistribution, BilWeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsPlanSupplySize, MpsExceptionReport,
       DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation,
       FilletConfig, FilletGroup, FilletSizeCalc, MasterYield, ChickenReceivingWeeklySize
     ]),
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController],
+  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, BilWeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController],
   providers: [AppService, OracleIntegrationService],
 })
 export class AppModule { }

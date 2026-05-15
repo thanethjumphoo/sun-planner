@@ -37,8 +37,8 @@ export class ProductSpec {
   @Column({ name: 'PRODUCT_LEAD', type: 'int', nullable: true })
   productLead: number; // Default: chilled=1, freeze=5
 
-  @Column({ name: 'MASTER_YIELD_ID', type: 'uuid', nullable: true })
-  masterYieldId: string | null;
+  @Column({ name: 'MASTER_YIELD_IDS', type: 'varchar', length: 1000, nullable: true })
+  masterYieldIds: string | null;
 
   @CreateDateColumn({ name: 'CREATED_AT' })
   createdAt: Date;

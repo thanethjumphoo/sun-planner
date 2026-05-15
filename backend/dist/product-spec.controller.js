@@ -192,7 +192,33 @@ let ProductSpecController = class ProductSpecController {
     async assignMasterYield(body) {
         if (!body.specIds || body.specIds.length === 0)
             return { success: true };
-        await this.productSpecRepo.update(body.specIds, { masterYieldId: body.masterYieldId });
+        const specs = await this.productSpecRepo.findByIds(body.specIds);
+        for (const spec of specs) {
+            if (body.masterYieldId === null) {
+                spec.masterYieldIds = null;
+            }
+            else {
+                const ids = spec.masterYieldIds ? spec.masterYieldIds.split(',').map(id => id.trim()).filter(id => id) : [];
+                if (!ids.includes(body.masterYieldId)) {
+                    ids.push(body.masterYieldId);
+                }
+                spec.masterYieldIds = ids.join(',');
+            }
+        }
+        await this.productSpecRepo.save(specs);
+        return { success: true };
+    }
+    async unassignMasterYield(body) {
+        if (!body.specIds || body.specIds.length === 0 || !body.masterYieldId)
+            return { success: true };
+        const specs = await this.productSpecRepo.findByIds(body.specIds);
+        for (const spec of specs) {
+            if (spec.masterYieldIds) {
+                const ids = spec.masterYieldIds.split(',').map(id => id.trim()).filter(id => id && id !== body.masterYieldId);
+                spec.masterYieldIds = ids.length > 0 ? ids.join(',') : null;
+            }
+        }
+        await this.productSpecRepo.save(specs);
         return { success: true };
     }
 };
@@ -253,6 +279,13 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], ProductSpecController.prototype, "assignMasterYield", null);
+__decorate([
+    (0, common_1.Post)('unassign-yield'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], ProductSpecController.prototype, "unassignMasterYield", null);
 exports.ProductSpecController = ProductSpecController = __decorate([
     (0, common_1.Controller)('api/product-spec'),
     __param(0, (0, typeorm_1.InjectRepository)(product_spec_entity_1.ProductSpec)),

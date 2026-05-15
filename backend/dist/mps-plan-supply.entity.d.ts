@@ -9,5 +9,6 @@ export declare class MpsPlanSupply {
     totalWeight: number;
     avgWeight: number;
     slaughteredWeight: number;
+    byProducts: string | null;
     sizes: MpsPlanSupplySize[];
 }

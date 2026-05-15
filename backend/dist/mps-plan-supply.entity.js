@@ -22,6 +22,7 @@ let MpsPlanSupply = class MpsPlanSupply {
     totalWeight;
     avgWeight;
     slaughteredWeight;
+    byProducts;
     sizes;
 };
 exports.MpsPlanSupply = MpsPlanSupply;
@@ -58,6 +59,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'slaughtered_weight', type: 'decimal', precision: 18, scale: 2, default: 0 }),
     __metadata("design:type", Number)
 ], MpsPlanSupply.prototype, "slaughteredWeight", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'by_products', type: 'nvarchar', length: 'max', nullable: true }),
+    __metadata("design:type", Object)
+], MpsPlanSupply.prototype, "byProducts", void 0);
 __decorate([
     (0, typeorm_1.OneToMany)(() => mps_plan_supply_size_entity_1.MpsPlanSupplySize, size => size.mpsPlanSupply, { cascade: true }),
     __metadata("design:type", Array)

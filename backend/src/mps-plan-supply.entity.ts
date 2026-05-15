@@ -29,6 +29,9 @@ export class MpsPlanSupply {
   @Column({ name: 'slaughtered_weight', type: 'decimal', precision: 18, scale: 2, default: 0 })
   slaughteredWeight: number;
 
+  @Column({ name: 'by_products', type: 'nvarchar', length: 'max', nullable: true })
+  byProducts: string | null;
+
   // Size breakdown is now stored in mps_plan_supply_size table
   @OneToMany(() => MpsPlanSupplySize, size => size.mpsPlanSupply, { cascade: true })
   sizes: MpsPlanSupplySize[];

@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Calendar, Package, Users, Activity, Scale, Move, ChevronLeft, ChevronRight, Filter, FileText, Trash2, CalendarDays, ShoppingCart, X, Info, CheckCircle2, Lock, Unlock, ShieldCheck, Download, FileSpreadsheet, AlertTriangle } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Calendar, Package, Users, Activity, Scale, Move, ChevronLeft, ChevronRight, Filter, FileText, Trash2, CalendarDays, ShoppingCart, X, Info, CheckCircle2, Lock, Unlock, ShieldCheck, Download, FileSpreadsheet, AlertTriangle, Database, BarChart3, Cpu, Layers, Zap } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const API = import.meta.env.VITE_API_URL;
 
@@ -11,6 +11,7 @@ interface Spec {
   productYield: number;
   productSpeed: number;
   productSize: string;
+  masterYieldIds?: string;
 }
 
 // ─── Part Configuration: Controls all part-specific text, labels and calculations ───
@@ -43,6 +44,18 @@ const MPSPlan: React.FC = () => {
   const [currentMonth, setCurrentMonth] = useState(new Date(2026, 4, 1)); // May 2026
   const [specs, setSpecs] = useState<Record<string, Spec>>({});
   const [loading, setLoading] = useState(true);
+  const [loadingPhase, setLoadingPhase] = useState<{ mode: 'loading' | 'generating' | 'importing'; step: number; message: string }>({ mode: 'loading', step: 0, message: 'Initializing...' });
+  const [loadingStartTime, setLoadingStartTime] = useState<number>(0);
+  const [elapsedTime, setElapsedTime] = useState(0);
+
+  // Elapsed time tracker
+  useEffect(() => {
+    if (!loading) { setElapsedTime(0); return; }
+    const interval = setInterval(() => {
+      setElapsedTime(loadingStartTime > 0 ? Math.floor((Date.now() - loadingStartTime) / 1000) : 0);
+    }, 200);
+    return () => clearInterval(interval);
+  }, [loading, loadingStartTime]);
   const [draggedOrderId, setDraggedOrderId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'calendar' | 'drafts' | 'demand'>('calendar');
@@ -108,15 +121,25 @@ const MPSPlan: React.FC = () => {
 
   const initData = async () => {
     setLoading(true);
+    setLoadingStartTime(Date.now());
+    setLoadingPhase({ mode: 'loading', step: 0, message: 'Connecting to server...' });
+
+    setLoadingPhase({ mode: 'loading', step: 1, message: 'Loading product specs & demand orders...' });
     await Promise.all([
       fetchSpecs(),
       fetchDemandOrders(),
       fetchManpowerData(),
       fetchAllowedItems()
     ]);
+
+    setLoadingPhase({ mode: 'loading', step: 2, message: 'Loading plan drafts...' });
     const allPlans = await fetchPlans();
+
+    setLoadingPhase({ mode: 'loading', step: 3, message: 'Loading plan details & supply data...' });
     await loadPlanForMonth(allPlans);
-    setLoading(false);
+
+    setLoadingPhase({ mode: 'loading', step: 4, message: 'Complete!' });
+    setTimeout(() => setLoading(false), 300);
   };
 
   const fetchAllowedItems = async () => {
@@ -433,7 +456,16 @@ const MPSPlan: React.FC = () => {
   const executeGeneratePlan = async () => {
     setShowGenerateModal(false);
     setLoading(true);
+    setLoadingStartTime(Date.now());
+    setLoadingPhase({ mode: 'generating', step: 0, message: 'Preparing generation engine...' });
+
     try {
+      setLoadingPhase({ mode: 'generating', step: 1, message: 'Fetching demand orders & supply data...' });
+
+      // Small delay so user sees the animation start
+      await new Promise(r => setTimeout(r, 400));
+      setLoadingPhase({ mode: 'generating', step: 2, message: 'Running allocation algorithm...' });
+
       const res = await fetch(`${API}/api/mps/generate-range`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -443,7 +475,10 @@ const MPSPlan: React.FC = () => {
           partType: partId || 'fillet'
         })
       });
+
+      setLoadingPhase({ mode: 'generating', step: 3, message: 'Processing results...' });
       const data = await res.json();
+
       if (data.success) {
         const results = data.results || [];
         const successMonths = results.filter((r: any) => r.success).map((r: any) => r.targetMonth);
@@ -452,10 +487,13 @@ const MPSPlan: React.FC = () => {
         if (failedMonths.length > 0) {
           msg += `\n\n⚠️ Skipped:\n${failedMonths.join('\n')}`;
         }
+        setLoadingPhase({ mode: 'generating', step: 4, message: 'Plan generated! Reloading data...' });
         alert(msg);
       } else {
         alert(data.message || 'Failed to generate plans');
       }
+
+      setLoadingPhase({ mode: 'loading', step: 3, message: 'Reloading plan data...' });
       await initData();
     } catch (e) {
       console.error("Failed to generate plan", e);
@@ -471,12 +509,15 @@ const MPSPlan: React.FC = () => {
       return;
     }
     setLoading(true);
+    setLoadingStartTime(Date.now());
+    setLoadingPhase({ mode: 'importing', step: 1, message: 'Importing weekly size data...' });
     try {
       const res = await fetch(`${API}/api/mps/plans/${currentPlan.id}/import-weekly`, { method: 'POST' });
       const data = await res.json();
       if (data.success) {
+        setLoadingPhase({ mode: 'importing', step: 2, message: `Imported ${data.count} records! Reloading...` });
         alert(`✅ Imported ${data.count} weekly size records.`);
-        initData(); // reload
+        await initData(); // reload
       } else {
         alert(data.message || 'Failed to import weekly plan');
       }
@@ -629,8 +670,221 @@ const MPSPlan: React.FC = () => {
   const section2Unfulfilled = processedDemand
     .filter((h: any) => h.unfulfilledLines.length > 0);
 
+  // --- Loading Phase Steps Config ---
+  const LOADING_STEPS = {
+    loading: [
+      { icon: Database, label: 'Connecting to server' },
+      { icon: Package, label: 'Loading specs & orders' },
+      { icon: FileText, label: 'Loading plan drafts' },
+      { icon: BarChart3, label: 'Loading supply data' },
+      { icon: CheckCircle2, label: 'Complete' },
+    ],
+    generating: [
+      { icon: Cpu, label: 'Preparing engine' },
+      { icon: Database, label: 'Fetching demand & supply' },
+      { icon: Zap, label: 'Running allocation' },
+      { icon: Layers, label: 'Processing results' },
+      { icon: CheckCircle2, label: 'Done!' },
+    ],
+    importing: [
+      { icon: Database, label: 'Connecting' },
+      { icon: Download, label: 'Importing weekly data' },
+      { icon: CheckCircle2, label: 'Complete' },
+    ],
+  };
+
   return (
     <div className="p-6 max-w-full mx-auto space-y-6 bg-gray-50 min-h-screen">
+      {/* ═══ PREMIUM LOADING OVERLAY ═══ */}
+      <AnimatePresence>
+        {loading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center"
+          >
+            {/* Backdrop */}
+            <div className="absolute inset-0 bg-gradient-to-br from-slate-900/70 via-slate-800/60 to-orange-900/40 backdrop-blur-md" />
+
+            {/* Animated background particles */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+              {[...Array(6)].map((_, i) => (
+                <motion.div
+                  key={i}
+                  className="absolute rounded-full bg-orange-400/10"
+                  style={{
+                    width: 80 + i * 40,
+                    height: 80 + i * 40,
+                    left: `${10 + i * 15}%`,
+                    top: `${20 + (i % 3) * 25}%`,
+                  }}
+                  animate={{
+                    y: [0, -30, 0],
+                    x: [0, 15, 0],
+                    scale: [1, 1.1, 1],
+                    opacity: [0.3, 0.6, 0.3],
+                  }}
+                  transition={{
+                    duration: 3 + i * 0.5,
+                    repeat: Infinity,
+                    ease: 'easeInOut',
+                    delay: i * 0.3,
+                  }}
+                />
+              ))}
+            </div>
+
+            {/* Main loading card */}
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 10 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              className="relative bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/40 w-full max-w-md mx-4 overflow-hidden"
+            >
+              {/* Top gradient bar - animated */}
+              <div className="h-1.5 w-full bg-gray-100 overflow-hidden">
+                <motion.div
+                  className="h-full bg-gradient-to-r from-orange-400 via-red-500 to-orange-400"
+                  initial={{ width: '0%' }}
+                  animate={{
+                    width: `${Math.min(((loadingPhase.step + 1) / (LOADING_STEPS[loadingPhase.mode]?.length || 5)) * 100, 100)}%`,
+                  }}
+                  transition={{ duration: 0.6, ease: 'easeOut' }}
+                />
+              </div>
+
+              <div className="p-8">
+                {/* Header */}
+                <div className="flex items-center gap-4 mb-7">
+                  <div className="relative">
+                    <motion.div
+                      className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center shadow-lg shadow-orange-300/50"
+                      animate={{ rotate: [0, 5, -5, 0] }}
+                      transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+                    >
+                      {loadingPhase.mode === 'generating' ? (
+                        <Zap className="w-7 h-7 text-white" />
+                      ) : loadingPhase.mode === 'importing' ? (
+                        <Download className="w-7 h-7 text-white" />
+                      ) : (
+                        <Calendar className="w-7 h-7 text-white" />
+                      )}
+                    </motion.div>
+                    {/* Pulse ring */}
+                    <motion.div
+                      className="absolute inset-0 rounded-2xl border-2 border-orange-400"
+                      animate={{ scale: [1, 1.3, 1.3], opacity: [0.6, 0, 0] }}
+                      transition={{ duration: 1.5, repeat: Infinity, ease: 'easeOut' }}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-lg font-black text-gray-900">
+                      {loadingPhase.mode === 'generating' ? 'Generating MPS Plan' : loadingPhase.mode === 'importing' ? 'Importing Weekly Data' : 'Loading MPS Data'}
+                    </h3>
+                    <p className="text-xs text-gray-400 font-medium mt-0.5">
+                      {pc.title} • {currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                    </p>
+                  </div>
+                  {/* Timer */}
+                  <div className="text-right">
+                    <motion.span
+                      className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-red-500 tabular-nums"
+                      key={elapsedTime}
+                      initial={{ y: -5, opacity: 0.5 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      {elapsedTime}s
+                    </motion.span>
+                    <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">elapsed</p>
+                  </div>
+                </div>
+
+                {/* Step indicators */}
+                <div className="space-y-2.5 mb-6">
+                  {(LOADING_STEPS[loadingPhase.mode] || LOADING_STEPS.loading).map((step, i) => {
+                    const StepIcon = step.icon;
+                    const isComplete = i < loadingPhase.step;
+                    const isCurrent = i === loadingPhase.step;
+
+                    return (
+                      <motion.div
+                        key={i}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: i * 0.08, duration: 0.3 }}
+                        className={`flex items-center gap-3 py-2 px-3 rounded-xl transition-all duration-300 ${isCurrent ? 'bg-orange-50 border border-orange-200 shadow-sm' :
+                            isComplete ? 'bg-emerald-50/50' : 'opacity-40'
+                          }`}
+                      >
+                        {/* Step circle */}
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-all duration-300 ${isComplete ? 'bg-emerald-500 shadow-md shadow-emerald-200' :
+                            isCurrent ? 'bg-gradient-to-br from-orange-500 to-red-500 shadow-md shadow-orange-200' :
+                              'bg-gray-200'
+                          }`}>
+                          {isComplete ? (
+                            <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', damping: 15 }}>
+                              <CheckCircle2 className="w-4 h-4 text-white" />
+                            </motion.div>
+                          ) : isCurrent ? (
+                            <motion.div animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}>
+                              <StepIcon className="w-4 h-4 text-white" />
+                            </motion.div>
+                          ) : (
+                            <StepIcon className="w-4 h-4 text-gray-400" />
+                          )}
+                        </div>
+
+                        {/* Step label */}
+                        <span className={`text-sm font-semibold transition-colors duration-300 ${isComplete ? 'text-emerald-700' :
+                            isCurrent ? 'text-orange-700' : 'text-gray-400'
+                          }`}>
+                          {step.label}
+                        </span>
+
+                        {/* Active dot */}
+                        {isCurrent && (
+                          <motion.div
+                            className="ml-auto flex gap-1"
+                            animate={{ opacity: [1, 0.3, 1] }}
+                            transition={{ duration: 1.2, repeat: Infinity }}
+                          >
+                            <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-orange-300" />
+                          </motion.div>
+                        )}
+                      </motion.div>
+                    );
+                  })}
+                </div>
+
+                {/* Current message */}
+                <div className="bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+                  <div className="flex items-center gap-2">
+                    <motion.div
+                      animate={{ opacity: [1, 0.4, 1] }}
+                      transition={{ duration: 1, repeat: Infinity }}
+                      className="w-2 h-2 rounded-full bg-orange-500 flex-shrink-0"
+                    />
+                    <motion.p
+                      key={loadingPhase.message}
+                      initial={{ opacity: 0, y: 5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="text-xs font-medium text-gray-600 truncate"
+                    >
+                      {loadingPhase.message}
+                    </motion.p>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Header */}
       <div className="flex justify-between items-end bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
         <div className="relative">
@@ -738,7 +992,7 @@ const MPSPlan: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button 
+                  <button
                     onClick={() => handleExportExcel(currentPlan.id)}
                     className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm shadow-emerald-200"
                   >
@@ -746,7 +1000,7 @@ const MPSPlan: React.FC = () => {
                     Export MPS Report (Excel)
                   </button>
                   {currentPlan.status === 'DRAFT' && (
-                    <button 
+                    <button
                       onClick={() => handleApprovePlan(currentPlan.id)}
                       className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm shadow-orange-200"
                     >
@@ -1395,221 +1649,291 @@ const MPSPlan: React.FC = () => {
                     <Scale size={16} /> Supply (RM Available)
                   </h4>
 
-              {/* Top Summary Chips */}
-              <div className="grid grid-cols-2 gap-3">
-                {[
-                  { label: 'Intake Birds', val: selectedSupply.intakeBirds, unit: 'Birds', color: 'blue' },
-                  { label: 'Total Weight', val: selectedSupply.totalWeight, unit: 'kg', color: 'slate' },
-                  { label: 'Avg. Weight', val: selectedSupply.avgWeight, unit: 'kg/pc', color: 'emerald', precision: 3 },
-                  { label: 'Slaughtered', val: selectedSupply.slaughteredWeight, unit: 'kg', color: 'orange' },
-                ].map((stat, i) => (
-                  <div key={i} className="bg-gray-50 border border-gray-100 p-4 rounded-xl">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{stat.label}</p>
-                    <div className="flex items-baseline gap-1">
-                      <span className="text-xl font-bold text-gray-800">
-                        {stat.precision ? Number(stat.val).toFixed(stat.precision) : Math.round(Number(stat.val)).toLocaleString()}
-                      </span>
-                      <span className="text-[9px] font-medium text-gray-400 uppercase">{stat.unit}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* RM Calculations Section */}
-              <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
-                <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
-                  <Activity size={16} className="text-orange-500" />
-                  {pc.rmPrefix} Summary ({pc.yieldLabel})
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {(() => {
-                    const slaughtered = Number(selectedSupply.slaughteredWeight || 0);
-                    const rmFlTotal = slaughtered * 0.04;
-                    const rmFlGradeB = rmFlTotal * 0.093;
-                    const rmFlNet = rmFlTotal - rmFlGradeB;
-
-                    return (
-                      <>
-                        <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
-                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Total</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-orange-900">{Math.round(rmFlTotal).toLocaleString()}</span>
-                            <span className="text-xs font-bold text-orange-500">kg</span>
-                          </div>
-                          <p className="text-[9px] text-orange-400 mt-1 italic">Slaughtered * 4%</p>
-                        </div>
-                        <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
-                          <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Grade B</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-orange-900">{Math.round(rmFlGradeB).toLocaleString()}</span>
-                            <span className="text-xs font-bold text-orange-500">kg</span>
-                          </div>
-                          <p className="text-[9px] text-orange-400 mt-1 italic">Total * 9.3%</p>
-                        </div>
-                        <div className="bg-orange-500 p-4 rounded-xl shadow-md">
-                          <p className="text-[10px] font-bold text-white/80 uppercase mb-1">{pc.rmPrefix} หัก Grade B</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-white">{Math.round(rmFlNet).toLocaleString()}</span>
-                            <span className="text-xs font-bold text-white/80">kg</span>
-                          </div>
-                          <p className="text-[9px] text-white/60 mt-1 italic">{pc.netLabel}</p>
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              </div>
-
-              {/* Manpower Breakdown Section */}
-              {selectedManpower && (
-                <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
-                  <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
-                    <Users size={16} className="text-indigo-500" />
-                    Manpower Planning & Actual
-                  </h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
-                      <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Station Workers (Plan)</p>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedStationWorkers}</span>
-                        <span className="text-[9px] font-bold text-indigo-400">Pax</span>
-                      </div>
-                    </div>
-                    <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
-                      <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Cutting Workers (Plan)</p>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedCuttingWorkers}</span>
-                        <span className="text-[9px] font-bold text-indigo-400">Pax</span>
-                      </div>
-                    </div>
-                    <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
-                      <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Station Workers (Actual)</p>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualStationWorkers}</span>
-                        <span className="text-[9px] font-bold text-emerald-500">Pax</span>
-                      </div>
-                    </div>
-                    <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
-                      <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Cutting Workers (Actual)</p>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualCuttingWorkers}</span>
-                        <span className="text-[9px] font-bold text-emerald-500">Pax</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-[10px] text-indigo-400 italic font-medium">
-                    * Cutting Workers (Plan) calculated dynamically via Demand Orders: SUMPRODUCT(Order Qty / Product Speed) / 10
-                  </div>
-                </div>
-              )}
-
-              {/* Size Distribution Grid */}
-              <div className="space-y-4">
-                <h4 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-                  <Package size={16} className="text-orange-500" />
-                  {pc.sizeBreakdownTitle}
-                </h4>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  {(() => {
-                    const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                    const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                    const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
-                    const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
-
-                    const totalAll = getSizeKg('40 Down') + getSizeKg('40-45') + getSizeKg('45-50') + getSizeKg('50-55') + getSizeKg('55-60') + getSizeKg('60-65') + getSizeKg('65-70') + getSizeKg('70 Up');
-                    return [
-                      { label: '40 Down', val: getSizeKg('40 Down'), monthVal: getMonthSizeKg('40 Down'), color: 'bg-slate-500' },
-                      { label: '40-45', val: getSizeKg('40-45'), monthVal: getMonthSizeKg('40-45'), color: 'bg-blue-500' },
-                      { label: '45-50', val: getSizeKg('45-50'), monthVal: getMonthSizeKg('45-50'), color: 'bg-cyan-500' },
-                      { label: '50-55', val: getSizeKg('50-55'), monthVal: getMonthSizeKg('50-55'), color: 'bg-emerald-500' },
-                      { label: '55-60', val: getSizeKg('55-60'), monthVal: getMonthSizeKg('55-60'), color: 'bg-green-500' },
-                      { label: '60-65', val: getSizeKg('60-65'), monthVal: getMonthSizeKg('60-65'), color: 'bg-amber-500' },
-                      { label: '65-70', val: getSizeKg('65-70'), monthVal: getMonthSizeKg('65-70'), color: 'bg-orange-500' },
-                      { label: '70 Up', val: getSizeKg('70 Up'), monthVal: getMonthSizeKg('70 Up'), color: 'bg-red-500' },
-                    ].map((size, idx) => {
-                      const diff = hasWeekly ? size.val - size.monthVal : 0;
-                      return (
-                      <div key={idx} className="bg-white border border-gray-100 p-3 rounded-xl shadow-sm hover:border-orange-200 transition-all">
-                        <div className="flex justify-between items-start mb-1">
-                          <p className="text-[10px] font-bold text-gray-400 uppercase">{size.label}</p>
-                          {hasWeekly && diff !== 0 && (
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${diff > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                              {diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()} kg
-                            </span>
-                          )}
-                        </div>
+                  {/* Top Summary Chips */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { label: 'Intake Birds', val: selectedSupply.intakeBirds, unit: 'Birds', color: 'blue' },
+                      { label: 'Total Weight', val: selectedSupply.totalWeight, unit: 'kg', color: 'slate' },
+                      { label: 'Avg. Weight', val: selectedSupply.avgWeight, unit: 'kg/pc', color: 'emerald', precision: 3 },
+                      { label: 'Slaughtered', val: selectedSupply.slaughteredWeight, unit: 'kg', color: 'orange' },
+                    ].map((stat, i) => (
+                      <div key={i} className="bg-gray-50 border border-gray-100 p-4 rounded-xl">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{stat.label}</p>
                         <div className="flex items-baseline gap-1">
-                          <span className="text-lg font-bold text-gray-800">{Number(size.val || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
-                          <span className="text-[9px] font-bold text-gray-400">kg</span>
-                        </div>
-                        <div className="mt-2 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
-                          <div className={`h-full ${size.color} opacity-80`} style={{ width: `${totalAll > 0 ? (size.val / totalAll) * 100 : 0}%` }}></div>
+                          <span className="text-xl font-bold text-gray-800">
+                            {stat.precision ? Number(stat.val).toFixed(stat.precision) : Math.round(Number(stat.val)).toLocaleString()}
+                          </span>
+                          <span className="text-[9px] font-medium text-gray-400 uppercase">{stat.unit}</span>
                         </div>
                       </div>
-                    )});
-                  })()}
-                </div>
-              </div>
-
-              {/* Final Summary Output */}
-              <div className="bg-gray-900 rounded-2xl p-6 text-white flex flex-col md:flex-row justify-between items-center gap-6">
-                <div>
-                  <p className="text-gray-400 font-bold uppercase text-[10px] mb-1">Estimated Net Output (Aggregate)</p>
-                  {(() => {
-                    const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                    const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                    const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
-                    const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
-
-                    const total = getSizeKg('40 Down') + getSizeKg('40-45') + getSizeKg('45-50') + getSizeKg('50-55') + getSizeKg('55-60') + getSizeKg('60-65') + getSizeKg('65-70') + getSizeKg('70 Up');
-                    const monthTotal = getMonthSizeKg('40 Down') + getMonthSizeKg('40-45') + getMonthSizeKg('45-50') + getMonthSizeKg('50-55') + getMonthSizeKg('55-60') + getMonthSizeKg('60-65') + getMonthSizeKg('65-70') + getMonthSizeKg('70 Up');
-                    const diff = hasWeekly ? total - monthTotal : 0;
-
-                    return (
-                      <>
-                        <h5 className="text-3xl font-bold flex items-baseline gap-2">
-                          {Math.round(total).toLocaleString()}
-                          <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">KG</span>
-                          {hasWeekly && diff !== 0 && (
-                            <span className={`text-sm ml-2 font-bold ${diff > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                              ({diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()})
-                            </span>
-                          )}
-                        </h5>
-                      </>
-                    );
-                  })()}
-                </div>
-                <div className="w-full md:w-64 space-y-2">
-                  <div className="flex justify-between text-[10px] font-bold uppercase text-gray-400">
-                    <span>Distribution Matrix</span>
-                    <span className="text-orange-400">100% Match</span>
+                    ))}
                   </div>
-                  <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden flex">
-                    {(() => {
-                      const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                      const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                      const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
-                      const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
 
-                      const total = getSizeKg('40 Down') + getSizeKg('40-45') + getSizeKg('45-50') + getSizeKg('50-55') + getSizeKg('55-60') + getSizeKg('60-65') + getSizeKg('65-70') + getSizeKg('70 Up');
-                      return [
-                        { val: getSizeKg('40 Down'), color: 'bg-slate-500' },
-                        { val: getSizeKg('40-45'), color: 'bg-blue-500' },
-                        { val: getSizeKg('45-50'), color: 'bg-cyan-500' },
-                        { val: getSizeKg('50-55'), color: 'bg-emerald-500' },
-                        { val: getSizeKg('55-60'), color: 'bg-green-500' },
-                        { val: getSizeKg('60-65'), color: 'bg-amber-500' },
-                        { val: getSizeKg('65-70'), color: 'bg-orange-500' },
-                        { val: getSizeKg('70 Up'), color: 'bg-red-500' },
-                      ].map((s, i) => {
-                        const width = total > 0 ? (s.val / total) * 100 : 0;
-                        return <div key={i} style={{ width: `${width}%` }} className={`${s.color} h-full border-r border-black/20 last:border-0`} />;
-                      });
-                    })()}
+                  {/* RM Calculations Section */}
+                  <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
+                    <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
+                      <Activity size={16} className="text-orange-500" />
+                      {pc.rmPrefix} Summary ({pc.yieldLabel})
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {(() => {
+                        const slaughtered = Number(selectedSupply.slaughteredWeight || 0);
+                        const rmFlTotal = slaughtered * 0.04;
+                        const rmFlGradeB = rmFlTotal * 0.093;
+                        const rmFlNet = rmFlTotal - rmFlGradeB;
+
+                        return (
+                          <>
+                            <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
+                              <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Total</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-black text-orange-900">{Math.round(rmFlTotal).toLocaleString()}</span>
+                                <span className="text-xs font-bold text-orange-500">kg</span>
+                              </div>
+                              <p className="text-[9px] text-orange-400 mt-1 italic">Slaughtered * 4%</p>
+                            </div>
+                            <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
+                              <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Grade B</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-black text-orange-900">{Math.round(rmFlGradeB).toLocaleString()}</span>
+                                <span className="text-xs font-bold text-orange-500">kg</span>
+                              </div>
+                              <p className="text-[9px] text-orange-400 mt-1 italic">Total * 9.3%</p>
+                            </div>
+                            <div className="bg-orange-500 p-4 rounded-xl shadow-md">
+                              <p className="text-[10px] font-bold text-white/80 uppercase mb-1">{pc.rmPrefix} หัก Grade B</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-black text-white">{Math.round(rmFlNet).toLocaleString()}</span>
+                                <span className="text-xs font-bold text-white/80">kg</span>
+                              </div>
+                              <p className="text-[9px] text-white/60 mt-1 italic">{pc.netLabel}</p>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
-                </div>
-              </div>
+
+                  {/* By Product Breakdown Section */}
+                  <div className="bg-amber-50 border border-amber-100 rounded-2xl p-6 space-y-4">
+                    <h4 className="text-sm font-bold text-amber-800 flex items-center gap-2">
+                      <Package size={16} className="text-amber-500" />
+                      By Product Summary
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+                      {(() => {
+                        let byProducts: Record<string, { name: string; qty: number }> = {};
+                        if (selectedSupply.byProducts) {
+                          try {
+                            byProducts = JSON.parse(selectedSupply.byProducts);
+                          } catch (e) {
+                            console.error('Error parsing byProducts', e);
+                          }
+                        }
+
+                        const byProductKeys = Object.keys(byProducts);
+                        if (byProductKeys.length === 0) {
+                          return <div className="text-sm text-amber-600 italic col-span-full">No By Products generated for the selected orders. (Please map items in Master Yield Tree and Regenerate Plan)</div>;
+                        }
+
+                        return byProductKeys.map(key => {
+                          const bp = byProducts[key];
+                          const roundedQty = Math.round(bp.qty);
+                          return (
+                            <div key={key} className="bg-white/80 p-4 rounded-xl border border-amber-200">
+                              <p className="text-[10px] font-bold text-amber-600 uppercase mb-1">{bp.name}</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-black text-amber-900">{roundedQty.toLocaleString()}</span>
+                                <span className="text-xs font-bold text-amber-500">kg</span>
+                              </div>
+                              <p className="text-[9px] text-amber-400 mt-1 italic">Saved in Database</p>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Manpower Breakdown Section */}
+                  {selectedManpower && (
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
+                      <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
+                        <Users size={16} className="text-indigo-500" />
+                        Manpower Planning & Actual
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Station Workers (Plan)</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedStationWorkers}</span>
+                            <span className="text-[9px] font-bold text-indigo-400">Pax</span>
+                          </div>
+                        </div>
+                        <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Cutting Workers (Plan)</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedCuttingWorkers}</span>
+                            <span className="text-[9px] font-bold text-indigo-400">Pax</span>
+                          </div>
+                        </div>
+                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Station Workers (Actual)</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualStationWorkers}</span>
+                            <span className="text-[9px] font-bold text-emerald-500">Pax</span>
+                          </div>
+                        </div>
+                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Cutting Workers (Actual)</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualCuttingWorkers}</span>
+                            <span className="text-[9px] font-bold text-emerald-500">Pax</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-indigo-400 italic font-medium">
+                        * Cutting Workers (Plan) calculated dynamically via Demand Orders: SUMPRODUCT(Order Qty / Product Speed) / 10
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Size Distribution Grid */}
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                      <Package size={16} className="text-orange-500" />
+                      {pc.sizeBreakdownTitle}
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                      {(() => {
+                        const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                        const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                        const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                        const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+
+                        const filletSizeLabels = [
+                          { label: '40 Down', color: 'bg-slate-500' },
+                          { label: '40-45', color: 'bg-blue-500' },
+                          { label: '45-50', color: 'bg-cyan-500' },
+                          { label: '50-55', color: 'bg-emerald-500' },
+                          { label: '55-60', color: 'bg-green-500' },
+                          { label: '60-65', color: 'bg-amber-500' },
+                          { label: '65-70', color: 'bg-orange-500' },
+                          { label: '70 Up', color: 'bg-red-500' },
+                        ];
+
+                        const isBil = currentPlan?.partType === 'bil';
+                        const currentSizeLabels = isBil 
+                          ? Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize)))
+                              .map((label, idx) => ({
+                                label,
+                                color: `bg-${['slate','blue','cyan','emerald','green','amber','orange','red'][idx % 8]}-500`
+                              }))
+                          : filletSizeLabels;
+
+                        const totalAll = currentSizeLabels.reduce((sum, s) => sum + getSizeKg(s.label), 0);
+                        
+                        return currentSizeLabels.map((size, idx) => {
+                          const val = getSizeKg(size.label);
+                          const monthVal = getMonthSizeKg(size.label);
+                          const diff = hasWeekly ? size.val - size.monthVal : 0;
+                          return (
+                            <div key={idx} className="bg-white border border-gray-100 p-3 rounded-xl shadow-sm hover:border-orange-200 transition-all">
+                              <div className="flex justify-between items-start mb-1">
+                                <p className="text-[10px] font-bold text-gray-400 uppercase">{size.label}</p>
+                                {hasWeekly && diff !== 0 && (
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${diff > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                    {diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()} kg
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-lg font-bold text-gray-800">{Number(size.val || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
+                                <span className="text-[9px] font-bold text-gray-400">kg</span>
+                              </div>
+                              <div className="mt-2 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
+                                <div className={`h-full ${size.color} opacity-80`} style={{ width: `${totalAll > 0 ? (size.val / totalAll) * 100 : 0}%` }}></div>
+                              </div>
+                            </div>
+                          )
+                        });
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Final Summary Output */}
+                  <div className="bg-gray-900 rounded-2xl p-6 text-white flex flex-col md:flex-row justify-between items-center gap-6">
+                    <div>
+                      <p className="text-gray-400 font-bold uppercase text-[10px] mb-1">Estimated Net Output (Aggregate)</p>
+                      {(() => {
+                        const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                        const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                        const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                        const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+
+                        const isBil = currentPlan?.partType === 'bil';
+                        const sizeNames = isBil 
+                          ? Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize)))
+                          : ['40 Down', '40-45', '45-50', '50-55', '55-60', '60-65', '65-70', '70 Up'];
+
+                        const total = sizeNames.reduce((sum, name) => sum + getSizeKg(name), 0);
+                        const monthTotal = sizeNames.reduce((sum, name) => sum + getMonthSizeKg(name), 0);
+                        const diff = hasWeekly ? total - monthTotal : 0;
+
+                        return (
+                          <>
+                            <h5 className="text-3xl font-bold flex items-baseline gap-2">
+                              {Math.round(total).toLocaleString()}
+                              <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">KG</span>
+                              {hasWeekly && diff !== 0 && (
+                                <span className={`text-sm ml-2 font-bold ${diff > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                  ({diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()})
+                                </span>
+                              )}
+                            </h5>
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <div className="w-full md:w-64 space-y-2">
+                      <div className="flex justify-between text-[10px] font-bold uppercase text-gray-400">
+                        <span>Distribution Matrix</span>
+                        <span className="text-orange-400">100% Match</span>
+                      </div>
+                      <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden flex">
+                        {(() => {
+                          const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                          const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                          const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                          const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+
+                          const isBil = currentPlan?.partType === 'bil';
+                          const currentSizeLabels = isBil 
+                            ? Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize)))
+                                .map((label, idx) => ({
+                                  label,
+                                  color: `bg-${['slate','blue','cyan','emerald','green','amber','orange','red'][idx % 8]}-500`
+                                }))
+                            : [
+                                { label: '40 Down', color: 'bg-slate-500' },
+                                { label: '40-45', color: 'bg-blue-500' },
+                                { label: '45-50', color: 'bg-cyan-500' },
+                                { label: '50-55', color: 'bg-emerald-500' },
+                                { label: '55-60', color: 'bg-green-500' },
+                                { label: '60-65', color: 'bg-amber-500' },
+                                { label: '65-70', color: 'bg-orange-500' },
+                                { label: '70 Up', color: 'bg-red-500' },
+                              ];
+
+                          const total = currentSizeLabels.reduce((sum, s) => sum + getSizeKg(s.label), 0);
+                          return currentSizeLabels.map((s, i) => {
+                            const val = getSizeKg(s.label);
+                            const width = total > 0 ? (val / total) * 100 : 0;
+                            return <div key={i} style={{ width: `${width}%` }} className={`${s.color} h-full border-r border-black/20 last:border-0`} />;
+                          });
+                        })()}
+                      </div>
+                    </div>
+                  </div>
 
                 </div>{/* END LEFT: SUPPLY PANEL */}
 
@@ -1671,16 +1995,25 @@ const MPSPlan: React.FC = () => {
                       <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 space-y-3">
                         <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
                         {(() => {
-                          const sizeLabels = [
-                            { key: '40Down', label: '40 Down', groupSize: '40 Down', color: 'bg-slate-500' },
-                            { key: '40_45', label: '40-45', groupSize: '40-45', color: 'bg-blue-500' },
-                            { key: '45_50', label: '45-50', groupSize: '45-50', color: 'bg-cyan-500' },
-                            { key: '50_55', label: '50-55', groupSize: '50-55', color: 'bg-emerald-500' },
-                            { key: '55_60', label: '55-60', groupSize: '55-60', color: 'bg-green-500' },
-                            { key: '60_65', label: '60-65', groupSize: '60-65', color: 'bg-amber-500' },
-                            { key: '65_70', label: '65-70', groupSize: '65-70', color: 'bg-orange-500' },
-                            { key: '70Up', label: '70 Up', groupSize: '70 Up', color: 'bg-red-500' },
-                          ];
+                          const isBil = currentPlan?.partType === 'bil';
+                          const sizeLabels = isBil 
+                            ? Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize)))
+                                .map((label, idx) => ({
+                                  key: label,
+                                  label,
+                                  groupSize: label,
+                                  color: `bg-${['slate','blue','cyan','emerald','green','amber','orange','red'][idx % 8]}-500`
+                                }))
+                            : [
+                                { key: '40Down', label: '40 Down', groupSize: '40 Down', color: 'bg-slate-500' },
+                                { key: '40_45', label: '40-45', groupSize: '40-45', color: 'bg-blue-500' },
+                                { key: '45_50', label: '45-50', groupSize: '45-50', color: 'bg-cyan-500' },
+                                { key: '50_55', label: '50-55', groupSize: '50-55', color: 'bg-emerald-500' },
+                                { key: '55_60', label: '55-60', groupSize: '55-60', color: 'bg-green-500' },
+                                { key: '60_65', label: '60-65', groupSize: '60-65', color: 'bg-amber-500' },
+                                { key: '65_70', label: '65-70', groupSize: '65-70', color: 'bg-orange-500' },
+                                { key: '70Up', label: '70 Up', groupSize: '70 Up', color: 'bg-red-500' },
+                              ];
                           // Helper: get supply kg from normalized sizes array
                           const getSupplySizeKg = (groupSize: string): number => {
                             return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
@@ -1699,6 +2032,13 @@ const MPSPlan: React.FC = () => {
                             if (!productSize) return [];
                             const s = productSize.toLowerCase().trim();
                             if (s === 'unsize' || s === '') return [];
+                            
+                            if (isBil) {
+                               // For BIL, match directly to one of our labels
+                               const match = sizeLabels.find(sl => sl.label.toLowerCase() === s);
+                               return match ? [match.key] : [productSize]; // Fallback to raw size if no direct label match
+                            }
+
                             if (s.includes('40 down') || s === '40down') return ['40Down'];
                             if (s.includes('70 up') || s === '70up' || s.includes('60 up') || s === '60up') return ['60_65', '65_70', '70Up'];
                             const rangeMatch = s.match(/(\d+)\s*[-–]\s*(\d+)/);

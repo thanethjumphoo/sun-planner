@@ -81,13 +81,13 @@ const normalizeSize = (sz: string | undefined | null) => {
 
 const getMatchingBins = (size: string): string[] => {
   if (!size || size === 'unsize' || size === 'Grade B') return [];
-  
+
   // If exact match with a label, return its key
   if (Object.values(sizeLabelMap).includes(size)) {
     const key = Object.keys(sizeLabelMap).find(k => sizeLabelMap[k] === size);
     if (key) return [key];
   }
-  
+
   const binRanges = [
     { label: '40 Down', min: 0, max: 40 },
     { label: '40-45', min: 40, max: 45 },
@@ -103,7 +103,7 @@ const getMatchingBins = (size: string): string[] => {
   let oMax = -1;
   const nums = size.match(/\d+(\.\d+)?/g);
   const lower = size.toLowerCase();
-  
+
   if (nums && nums.length >= 2) {
     oMin = parseFloat(nums[0]);
     oMax = parseFloat(nums[1]);
@@ -144,7 +144,7 @@ const DPSPlan: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [sublots, setSublots] = useState<Sublot[]>([]);
-  
+
   const [isGenerated, setIsGenerated] = useState(false);
   const [showRunModal, setShowRunModal] = useState(false);
   const [, setPlanId] = useState<number | null>(null);
@@ -178,35 +178,35 @@ const DPSPlan: React.FC = () => {
     if (sublotIndex === -1) return;
     const sublot = { ...newSublots[sublotIndex] };
 
-    let allocSize = sizeModalData.sizeLabel === 'Grade B (Co-Product)' ? 'Grade B' : 
-                    sizeModalData.sizeLabel === 'Unsize / Other Grade A' ? 'unsize' : 
-                    Object.keys(sizeLabelMap).find(k => sizeLabelMap[k] === sizeModalData.sizeLabel) || 'unsize';
+    let allocSize = sizeModalData.sizeLabel === 'Grade B (Co-Product)' ? 'Grade B' :
+      sizeModalData.sizeLabel === 'Unsize / Other Grade A' ? 'unsize' :
+        Object.keys(sizeLabelMap).find(k => sizeLabelMap[k] === sizeModalData.sizeLabel) || 'unsize';
 
     const existingIndex = sublot.allocations.findIndex(a => a.orderId === orderId && a.size === allocSize);
     if (existingIndex > -1) {
-       setEditingAlloc({ id: sublot.id, orderId, val: sublot.allocations[existingIndex].qty.toString() });
-       return;
+      setEditingAlloc({ id: sublot.id, orderId, val: sublot.allocations[existingIndex].qty.toString() });
+      return;
     }
 
     sublot.allocations.push({
-       orderId,
-       itemDesc: order.itemDesc,
-       size: allocSize,
-       qty: 0
+      orderId,
+      itemDesc: order.itemDesc,
+      size: allocSize,
+      qty: 0
     });
-    
+
     newSublots[sublotIndex] = sublot;
     setSublots(newSublots);
 
     const relatedAllocations = sublot.allocations.filter(a => {
-        const aLabel = getSizeLabel(a.size);
-        if (sizeModalData.sizeLabel === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
-        if (sizeModalData.sizeLabel === 'Grade B (Co-Product)') return aLabel === 'Grade B';
-        return aLabel === sizeModalData.sizeLabel;
+      const aLabel = getSizeLabel(a.size);
+      if (sizeModalData.sizeLabel === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
+      if (sizeModalData.sizeLabel === 'Grade B (Co-Product)') return aLabel === 'Grade B';
+      return aLabel === sizeModalData.sizeLabel;
     });
     setSizeModalData({
-        ...sizeModalData,
-        allocations: relatedAllocations
+      ...sizeModalData,
+      allocations: relatedAllocations
     });
 
     setEditingAlloc({ id: sublot.id, orderId, val: "0" });
@@ -214,10 +214,10 @@ const DPSPlan: React.FC = () => {
 
   const openSizeModal = (sl: Sublot, label: string, remaining: number) => {
     const relatedAllocations = sl.allocations.filter(a => {
-        const aLabel = getSizeLabel(a.size);
-        if (label === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
-        if (label === 'Grade B (Co-Product)') return aLabel === 'Grade B';
-        return aLabel === label;
+      const aLabel = getSizeLabel(a.size);
+      if (label === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
+      if (label === 'Grade B (Co-Product)') return aLabel === 'Grade B';
+      return aLabel === label;
     });
 
     setSizeModalData({
@@ -239,21 +239,21 @@ const DPSPlan: React.FC = () => {
   const handlePullLeftoverAndOpenModal = (fromId: string, toId: string, binKey: string, qty: number) => {
     const newSublots = [...sublots];
     const toSl = newSublots.find(s => s.id === toId);
-    
-    if (toSl) {
-        const label = sizeLabelMap[binKey];
-        const allocSize = binKey === 'Grade B (Co-Product)' ? 'Grade B' : 
-                          binKey === 'Unsize / Other Grade A' ? 'unsize' : binKey;
-        const relatedAllocations = toSl.allocations.filter(a => a.size === allocSize);
 
-        setSizeModalData({
-          isOpen: true,
-          sublotId: fromId,
-          targetSublotId: toId,
-          sizeLabel: label,
-          allocations: relatedAllocations,
-          totalRemaining: qty
-        });
+    if (toSl) {
+      const label = sizeLabelMap[binKey];
+      const allocSize = binKey === 'Grade B (Co-Product)' ? 'Grade B' :
+        binKey === 'Unsize / Other Grade A' ? 'unsize' : binKey;
+      const relatedAllocations = toSl.allocations.filter(a => a.size === allocSize);
+
+      setSizeModalData({
+        isOpen: true,
+        sublotId: fromId,
+        targetSublotId: toId,
+        sizeLabel: label,
+        allocations: relatedAllocations,
+        totalRemaining: qty
+      });
     }
   };
 
@@ -277,25 +277,25 @@ const DPSPlan: React.FC = () => {
     const diff = Number((newQty - oldQty).toFixed(1));
 
     if (alloc.size === 'Grade B') {
-        if (diff > 0 && sourceSl.coProductKg < diff) return;
-        sourceSl.coProductKg = Number((sourceSl.coProductKg - diff).toFixed(1));
+      if (diff > 0 && sourceSl.coProductKg < diff) return;
+      sourceSl.coProductKg = Number((sourceSl.coProductKg - diff).toFixed(1));
     } else {
-        if (diff > 0 && (sourceSl.bins[alloc.size] || 0) < diff) return;
-        sourceSl.bins = { ...sourceSl.bins, [alloc.size]: Number(((sourceSl.bins[alloc.size] || 0) - diff).toFixed(1)) };
+      if (diff > 0 && (sourceSl.bins[alloc.size] || 0) < diff) return;
+      sourceSl.bins = { ...sourceSl.bins, [alloc.size]: Number(((sourceSl.bins[alloc.size] || 0) - diff).toFixed(1)) };
     }
 
     const newAllocations = [...targetSl.allocations];
     if (newQty === 0) {
-        newAllocations.splice(allocIndex, 1);
+      newAllocations.splice(allocIndex, 1);
     } else {
-        alloc.qty = newQty;
-        newAllocations[allocIndex] = alloc;
+      alloc.qty = newQty;
+      newAllocations[allocIndex] = alloc;
     }
     targetSl.allocations = newAllocations;
 
     newSublots[sourceSlIndex] = sourceSl;
     if (sourceSublotId !== targetSublotId) {
-        newSublots[targetSlIndex] = targetSl;
+      newSublots[targetSlIndex] = targetSl;
     }
 
     setSublots(newSublots);
@@ -303,61 +303,61 @@ const DPSPlan: React.FC = () => {
     const newOrders = [...orders];
     const orderIndex = newOrders.findIndex(o => o.id === orderId);
     if (orderIndex > -1) {
-        const order = { ...newOrders[orderIndex] };
-        order.fulfilledKg = Number((order.fulfilledKg + diff).toFixed(1));
-        order.unfulfilledKg = Number((order.unfulfilledKg - diff).toFixed(1));
-        newOrders[orderIndex] = order;
-        setOrders(newOrders);
+      const order = { ...newOrders[orderIndex] };
+      order.fulfilledKg = Number((order.fulfilledKg + diff).toFixed(1));
+      order.unfulfilledKg = Number((order.unfulfilledKg - diff).toFixed(1));
+      newOrders[orderIndex] = order;
+      setOrders(newOrders);
     }
 
     if (sizeModalData) {
-        const relatedAllocations = targetSl.allocations.filter(a => {
-          const aLabel = getSizeLabel(a.size);
-          if (sizeModalData.sizeLabel === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
-          if (sizeModalData.sizeLabel === 'Grade B (Co-Product)') return aLabel === 'Grade B';
-          return aLabel === sizeModalData.sizeLabel;
-        });
-        setSizeModalData({
-          ...sizeModalData,
-          allocations: relatedAllocations,
-          totalRemaining: (sizeModalData.totalRemaining - diff)
-        });
+      const relatedAllocations = targetSl.allocations.filter(a => {
+        const aLabel = getSizeLabel(a.size);
+        if (sizeModalData.sizeLabel === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
+        if (sizeModalData.sizeLabel === 'Grade B (Co-Product)') return aLabel === 'Grade B';
+        return aLabel === sizeModalData.sizeLabel;
+      });
+      setSizeModalData({
+        ...sizeModalData,
+        allocations: relatedAllocations,
+        totalRemaining: (sizeModalData.totalRemaining - diff)
+      });
     }
     setEditingAlloc(null);
     saveDbUpdate(newSublots, newOrders);
   };
 
   const saveDbUpdate = async (currentSublots: Sublot[], currentOrders: Order[]) => {
-      const totalSupplyKg = currentSublots.reduce((sum, s) => sum + s.totalWeightKg, 0);
-      const totalDemandKg = currentOrders.reduce((sum, o) => sum + o.qty, 0);
-      const totalFulfilled = currentOrders.reduce((sum, o) => sum + o.fulfilledKg, 0);
-      const fulfillmentRate = totalDemandKg > 0 ? (totalFulfilled / totalDemandKg) * 100 : 0;
+    const totalSupplyKg = currentSublots.reduce((sum, s) => sum + s.totalWeightKg, 0);
+    const totalDemandKg = currentOrders.reduce((sum, o) => sum + o.qty, 0);
+    const totalFulfilled = currentOrders.reduce((sum, o) => sum + o.fulfilledKg, 0);
+    const fulfillmentRate = totalDemandKg > 0 ? (totalFulfilled / totalDemandKg) * 100 : 0;
 
-      const allAllocs: any[] = [];
-      currentSublots.forEach(sl => {
-        sl.allocations.forEach(a => {
-          allAllocs.push({
-            sublotId: sl.id,
-            itemDesc: a.itemDesc,
-            orderId: a.orderId,
-            size: a.size,
-            qty: a.qty
-          });
+    const allAllocs: any[] = [];
+    currentSublots.forEach(sl => {
+      sl.allocations.forEach(a => {
+        allAllocs.push({
+          sublotId: sl.id,
+          itemDesc: a.itemDesc,
+          orderId: a.orderId,
+          size: a.size,
+          qty: a.qty
         });
       });
+    });
 
-      const payload = {
-        totalSupplyKg, totalDemandKg, fulfillmentRate,
-        sublots: currentSublots,
-        orders: currentOrders,
-        allocations: allAllocs
-      };
+    const payload = {
+      totalSupplyKg, totalDemandKg, fulfillmentRate,
+      sublots: currentSublots,
+      orders: currentOrders,
+      allocations: allAllocs
+    };
 
-      await fetch(`${API}/api/dps/${targetDate}/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, partType: partId || 'fillet' })
-      });
+    await fetch(`${API}/api/dps/${targetDate}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, partType: partId || 'fillet' })
+    });
   };
 
   useEffect(() => {
@@ -373,64 +373,64 @@ const DPSPlan: React.FC = () => {
       if (dpsRes.ok) {
         const dbPlan = await dpsRes.json();
         if (dbPlan.exists && dbPlan.data) {
-             const mappedOrders = dbPlan.data.orders.map((o:any) => ({
-                 id: `L-${o.erpOrderLineId}`,
-                 itemCode: o.itemCode,
-                 itemDesc: o.itemDesc,
-                 qty: o.requiredKg,
-                 type: o.productType,
-                 size: normalizeSize(o.productSize),
-                 unfulfilledKg: o.unfulfilledKg,
-                 fulfilledKg: o.fulfilledKg,
-                 priority: o.priority ?? null
-             }));
-             const mappedSublots = dbPlan.data.sublots.map((s:any) => {
-                 const binsObj: Record<string, number> = {};
-                 s.bins.forEach((b:any) => { binsObj[b.sizeLabel] = b.availableKg; });
-                 
-                 const slAllocs = dbPlan.data.allocations.filter((a:any) => a.sourceBin?.sublot?.id === s.id).map((a:any) => ({
-                     orderId: `L-${a.targetOrder.erpOrderLineId}`,
-                     itemDesc: a.targetOrder.itemDesc,
-                     size: a.sourceBin.sizeLabel,
-                     qty: a.allocatedKg
-                 }));
+          const mappedOrders = dbPlan.data.orders.map((o: any) => ({
+            id: `L-${o.erpOrderLineId}`,
+            itemCode: o.itemCode,
+            itemDesc: o.itemDesc,
+            qty: o.requiredKg,
+            type: o.productType,
+            size: normalizeSize(o.productSize),
+            unfulfilledKg: o.unfulfilledKg,
+            fulfilledKg: o.fulfilledKg,
+            priority: o.priority ?? null
+          }));
+          const mappedSublots = dbPlan.data.sublots.map((s: any) => {
+            const binsObj: Record<string, number> = {};
+            s.bins.forEach((b: any) => { binsObj[b.sizeLabel] = b.availableKg; });
 
-                 const avgLiveWeight = s.avgLiveWeight || (s.totalBirds ? s.totalWeightKg / s.totalBirds : 0);
-                 const slaughteredWeight = (s.totalWeightKg * 0.9575) * 0.95;
-                 const rmFlTotal = slaughteredWeight * 0.04;
-                 const rmFlGradeB = rmFlTotal * 0.093;
-                 const netFillet = rmFlTotal - rmFlGradeB;
+            const slAllocs = dbPlan.data.allocations.filter((a: any) => a.sourceBin?.sublot?.id === s.id).map((a: any) => ({
+              orderId: `L-${a.targetOrder.erpOrderLineId}`,
+              itemDesc: a.targetOrder.itemDesc,
+              size: a.sourceBin.sizeLabel,
+              qty: a.allocatedKg
+            }));
 
-                 const initialBinsObj: Record<string, number> = { ...binsObj };
-                 slAllocs.forEach((a:any) => {
-                     if (a.size !== 'Grade B') {
-                         initialBinsObj[a.size] = (initialBinsObj[a.size] || 0) + a.qty;
-                     }
-                 });
+            const avgLiveWeight = s.avgLiveWeight || (s.totalBirds ? s.totalWeightKg / s.totalBirds : 0);
+            const slaughteredWeight = (s.totalWeightKg * 0.9575) * 0.95;
+            const rmFlTotal = slaughteredWeight * 0.04;
+            const rmFlGradeB = rmFlTotal * 0.093;
+            const netFillet = rmFlTotal - rmFlGradeB;
 
-                 return {
-                     id: s.sublotNumber,
-                     farmName: s.farmName,
-                     totalBirds: s.totalBirds,
-                     totalWeightKg: s.totalWeightKg,
-                     avgLiveWeight,
-                     coProductKg: s.coProductKg,
-                     bins: binsObj,
-                     allocations: slAllocs,
-                     initialTotalFg: netFillet,
-                     initialBins: initialBinsObj,
-                     initialCoProductKg: rmFlGradeB,
-                     slaughteredWeight,
-                     rmFlTotal,
-                     shift: s.shift || 'A'
-                 };
-             });
+            const initialBinsObj: Record<string, number> = { ...binsObj };
+            slAllocs.forEach((a: any) => {
+              if (a.size !== 'Grade B') {
+                initialBinsObj[a.size] = (initialBinsObj[a.size] || 0) + a.qty;
+              }
+            });
 
-             setOrders(mappedOrders);
-             setSublots(mappedSublots);
-             setPlanId(dbPlan.data.id);
-             setIsGenerated(true);
-             hasDbPlan = true;
+            return {
+              id: s.sublotNumber,
+              farmName: s.farmName,
+              totalBirds: s.totalBirds,
+              totalWeightKg: s.totalWeightKg,
+              avgLiveWeight,
+              coProductKg: s.coProductKg,
+              bins: binsObj,
+              allocations: slAllocs,
+              initialTotalFg: netFillet,
+              initialBins: initialBinsObj,
+              initialCoProductKg: rmFlGradeB,
+              slaughteredWeight,
+              rmFlTotal,
+              shift: s.shift || 'A'
+            };
+          });
+
+          setOrders(mappedOrders);
+          setSublots(mappedSublots);
+          setPlanId(dbPlan.data.id);
+          setIsGenerated(true);
+          hasDbPlan = true;
         }
       }
 
@@ -569,7 +569,7 @@ const DPSPlan: React.FC = () => {
               // Map to one of the 8 size bins
               const binKey = getBinKey(pieceSizeGrams);
 
-              const weightForThisBin = Number((netFillet * (pct / 100)).toFixed(1));
+              const weightForThisBin = Number((netFillet * pct).toFixed(1));
               bins[binKey] = Number(((bins[binKey] || 0) + weightForThisBin).toFixed(1));
               allocatedSum += weightForThisBin;
             });
@@ -623,7 +623,7 @@ const DPSPlan: React.FC = () => {
       setUnprocessedOrders(initialOrders);
       setRawSupplyCount(loadedSublots.length);
       setRawDemandCount(initialOrders.length);
-      
+
       if (!hasDbPlan) {
         setOrders([]);
         setSublots([]);
@@ -647,12 +647,12 @@ const DPSPlan: React.FC = () => {
         const bIsSized = b.size !== 'unsize';
         if (aIsSized && !bIsSized) return -1;
         if (!aIsSized && bIsSized) return 1;
-        
+
         // 2. Sort by Priority (1 = highest, null = lowest)
         const pA = a.priority === null || a.priority === undefined ? 999 : a.priority;
         const pB = b.priority === null || b.priority === undefined ? 999 : b.priority;
         if (pA !== pB) return pA - pB;
-        
+
         return a.itemCode.localeCompare(b.itemCode);
       });
 
@@ -756,23 +756,23 @@ const DPSPlan: React.FC = () => {
     if (!confirm('Are you sure you want to delete this schedule from the database? This action cannot be undone.')) return;
     setLoading(true);
     try {
-        const res = await fetch(`${API}/api/dps/${targetDate}?partType=${partId || 'fillet'}`, { method: 'DELETE' });
-        if (res.ok) {
-            setOrders([]);
-            setSublots([]);
-            setIsGenerated(false);
-            fetchData();
-        }
+      const res = await fetch(`${API}/api/dps/${targetDate}?partType=${partId || 'fillet'}`, { method: 'DELETE' });
+      if (res.ok) {
+        setOrders([]);
+        setSublots([]);
+        setIsGenerated(false);
+        fetchData();
+      }
     } catch (e) {
-        console.error(e);
+      console.error(e);
     } finally {
-        setLoading(false);
+      setLoading(false);
     }
   };
 
   const handleReallocate = async () => {
     if (!confirm('Re-allocating will overwrite all current manual adjustments and recalculate from scratch. Proceed?')) return;
-    
+
     setLoading(true);
     try {
       const freshSublots = unprocessedSublots.map(sl => ({
@@ -792,12 +792,12 @@ const DPSPlan: React.FC = () => {
         const bIsSized = b.size !== 'unsize';
         if (aIsSized && !bIsSized) return -1;
         if (!aIsSized && bIsSized) return 1;
-        
+
         // 2. Sort by Priority
         const pA = a.priority === null || a.priority === undefined ? 999 : a.priority;
         const pB = b.priority === null || b.priority === undefined ? 999 : b.priority;
         if (pA !== pB) return pA - pB;
-        
+
         return a.itemCode.localeCompare(b.itemCode);
       });
 
@@ -880,7 +880,7 @@ const DPSPlan: React.FC = () => {
         const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
         const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
         const speed = spec?.productSpeed;
-        
+
         if (speed && speed > 0) {
           const hours = alloc.qty / speed;
           if (shift === 'A') shiftA_Hours += hours;
@@ -920,13 +920,13 @@ const DPSPlan: React.FC = () => {
               className="bg-transparent border-none text-sm font-bold text-gray-700 focus:ring-0 outline-none cursor-pointer" />
           </div>
           {!isGenerated ? (
-          <button onClick={() => setShowRunModal(true)} className="px-5 py-2.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
-            <Activity className="w-4 h-4" /> Run Schedule
-          </button>
+            <button onClick={() => setShowRunModal(true)} className="px-5 py-2.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
+              <Activity className="w-4 h-4" /> Run Schedule
+            </button>
           ) : (
-          <button onClick={handleDeletePlan} className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
-            <Trash2 className="w-4 h-4" /> Delete Schedule
-          </button>
+            <button onClick={handleDeletePlan} className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
+              <Trash2 className="w-4 h-4" /> Delete Schedule
+            </button>
           )}
         </div>
       </div>
@@ -937,15 +937,15 @@ const DPSPlan: React.FC = () => {
         </div>
       ) : !isGenerated ? (
         <div className="flex flex-col items-center justify-center h-[50vh] bg-white rounded-3xl shadow-sm border border-gray-100 p-8 text-center">
-            <div className="w-20 h-20 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mb-6">
-                <Calendar size={40} />
-            </div>
-            <h2 className="text-2xl font-black text-gray-800 mb-2">No Schedule Generated</h2>
-            <p className="text-gray-500 mb-8 max-w-md">Click the button below to analyze daily demand and supply, and generate the optimal production schedule.</p>
-            <button onClick={() => setShowRunModal(true)} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-200 transition-all flex items-center gap-3">
-                <Activity size={20} />
-                Run Schedule
-            </button>
+          <div className="w-20 h-20 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mb-6">
+            <Calendar size={40} />
+          </div>
+          <h2 className="text-2xl font-black text-gray-800 mb-2">No Schedule Generated</h2>
+          <p className="text-gray-500 mb-8 max-w-md">Click the button below to analyze daily demand and supply, and generate the optimal production schedule.</p>
+          <button onClick={() => setShowRunModal(true)} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-200 transition-all flex items-center gap-3">
+            <Activity size={20} />
+            Run Schedule
+          </button>
         </div>
       ) : (
         <div className="space-y-6">
@@ -961,10 +961,10 @@ const DPSPlan: React.FC = () => {
               </h2>
               <div className="flex items-center gap-4 text-sm">
                 <button onClick={() => setShowAddOrderModal(true)} className="px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 font-bold text-sm rounded-xl transition-colors flex items-center gap-2">
-                   <Plus size={16} /> Add Order
+                  <Plus size={16} /> Add Order
                 </button>
                 <button onClick={handleReallocate} className="px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold text-sm rounded-xl transition-colors flex items-center gap-2">
-                   <RefreshCw size={16} /> Re-Allocate
+                  <RefreshCw size={16} /> Re-Allocate
                 </button>
 
                 <div className="h-8 w-px bg-gray-200"></div>
@@ -1039,21 +1039,21 @@ const DPSPlan: React.FC = () => {
           {/* MANPOWER BOX */}
           <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden p-6 flex flex-col md:flex-row items-center gap-6">
             <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center flex-shrink-0">
-               <Users size={24} />
+              <Users size={24} />
             </div>
             <div className="flex-1">
-               <h3 className="text-lg font-bold text-gray-800 mb-1">Manpower Planning</h3>
-               <p className="text-sm text-gray-500">Calculated automatically based on Item Product Speed and 9.58 hrs/shift.</p>
+              <h3 className="text-lg font-bold text-gray-800 mb-1">Manpower Planning</h3>
+              <p className="text-sm text-gray-500">Calculated automatically based on Item Product Speed and 9.58 hrs/shift.</p>
             </div>
             <div className="flex items-center gap-8">
-               <div className="text-center px-4 border-r border-gray-100">
-                  <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift A</div>
-                  <div className="text-2xl font-black text-gray-900">{manpower.shiftA.toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span></div>
-               </div>
-               <div className="text-center px-4">
-                  <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift B</div>
-                  <div className="text-2xl font-black text-gray-900">{manpower.shiftB.toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span></div>
-               </div>
+              <div className="text-center px-4 border-r border-gray-100">
+                <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift A</div>
+                <div className="text-2xl font-black text-gray-900">{manpower.shiftA.toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span></div>
+              </div>
+              <div className="text-center px-4">
+                <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift B</div>
+                <div className="text-2xl font-black text-gray-900">{manpower.shiftB.toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span></div>
+              </div>
             </div>
           </div>
 
@@ -1147,14 +1147,14 @@ const DPSPlan: React.FC = () => {
                           {/* Part 3: Sublot Manpower */}
                           <div className="bg-purple-50/50 p-3 rounded-xl border border-purple-100 flex items-center justify-between mb-2">
                             <div>
-                               <p className="text-[10px] font-bold text-purple-500 uppercase">Sublot Manpower</p>
-                               <p className="text-lg font-black text-purple-700">{slManpower.toLocaleString()} <span className="text-[10px]">Head</span></p>
+                              <p className="text-[10px] font-bold text-purple-500 uppercase">Sublot Manpower</p>
+                              <p className="text-lg font-black text-purple-700">{slManpower.toLocaleString()} <span className="text-[10px]">Head</span></p>
                             </div>
                             <div className="text-right">
-                               <p className="text-[10px] font-bold text-purple-400 uppercase">Variance (Shift {sl.shift || 'A'} - Sublot)</p>
-                               <p className={`text-base font-black ${variance > 0 ? 'text-blue-500' : variance < 0 ? 'text-red-500' : 'text-gray-500'}`}>
-                                 {variance > 0 ? `+${variance}` : variance} <span className="text-[10px]">Head</span>
-                               </p>
+                              <p className="text-[10px] font-bold text-purple-400 uppercase">Variance (Shift {sl.shift || 'A'} - Sublot)</p>
+                              <p className={`text-base font-black ${variance > 0 ? 'text-blue-500' : variance < 0 ? 'text-red-500' : 'text-gray-500'}`}>
+                                {variance > 0 ? `+${variance}` : variance} <span className="text-[10px]">Head</span>
+                              </p>
                             </div>
                           </div>
 
@@ -1252,13 +1252,13 @@ const DPSPlan: React.FC = () => {
                                 </div>
                               )}
                             </div>
-                            
+
                             {/* NEW LEFTOVERS SECTION */}
                             {(() => {
                               const targetIdx = index;
                               const prevSublots = sublots.slice(0, targetIdx);
                               const availableLeftovers: { fromId: string, shift: string, binKey: string, qty: number }[] = [];
-                              
+
                               prevSublots.forEach(prevSl => {
                                 Object.entries(prevSl.bins).forEach(([k, v]) => {
                                   if (v > 0) {
@@ -1279,14 +1279,14 @@ const DPSPlan: React.FC = () => {
                                       const label = sizeLabelMap[leftover.binKey];
                                       return (
                                         <div key={idx} onClick={() => handlePullLeftoverAndOpenModal(leftover.fromId, sl.id, leftover.binKey, leftover.qty)} className="bg-indigo-50/30 border border-indigo-100 shadow-sm p-3 rounded-2xl transition-all cursor-pointer hover:border-indigo-300 hover:shadow-md hover:bg-indigo-50 relative overflow-hidden group">
-                                           <div className="absolute top-0 right-0 bg-indigo-100 text-indigo-600 text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
-                                             {leftover.fromId} (Shift {leftover.shift || 'A'})
-                                           </div>
-                                           <p className="text-[9px] font-bold text-indigo-400 uppercase mb-1 tracking-wider mt-2">{label}</p>
-                                           <div className="flex items-baseline gap-1">
-                                             <span className="text-base font-black text-indigo-900">{leftover.qty.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
-                                             <span className="text-[9px] font-bold text-indigo-400">kg</span>
-                                           </div>
+                                          <div className="absolute top-0 right-0 bg-indigo-100 text-indigo-600 text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
+                                            {leftover.fromId} (Shift {leftover.shift || 'A'})
+                                          </div>
+                                          <p className="text-[9px] font-bold text-indigo-400 uppercase mb-1 tracking-wider mt-2">{label}</p>
+                                          <div className="flex items-baseline gap-1">
+                                            <span className="text-base font-black text-indigo-900">{leftover.qty.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
+                                            <span className="text-[9px] font-bold text-indigo-400">kg</span>
+                                          </div>
                                         </div>
                                       );
                                     })}
@@ -1308,12 +1308,12 @@ const DPSPlan: React.FC = () => {
         </div>
       )}
 
-            {showRunModal && (
+      {showRunModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-md overflow-hidden flex flex-col p-6">
             <h3 className="text-xl font-black text-gray-900 mb-2">Ready to Generate Schedule</h3>
             <p className="text-sm text-gray-500 mb-6">The system has prepared the raw data for {targetDate}. Are you sure you want to proceed with the waterfall allocation?</p>
-            
+
             <div className="space-y-3 mb-8">
               <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-100">
                 <span className="font-bold text-gray-700 text-sm">Demand (Orders)</span>
@@ -1335,45 +1335,45 @@ const DPSPlan: React.FC = () => {
         </div>
       )}
 
-            {/* ADD ORDER MODAL */}
+      {/* ADD ORDER MODAL */}
       {showAddOrderModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
           <div className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-md overflow-hidden flex flex-col p-6">
             <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-black text-gray-900">Add Custom Order</h3>
-                <button onClick={() => setShowAddOrderModal(false)} className="text-gray-400 hover:text-gray-600"><X size={20}/></button>
+              <h3 className="text-xl font-black text-gray-900">Add Custom Order</h3>
+              <button onClick={() => setShowAddOrderModal(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
             </div>
-            
+
             <div className="space-y-4 mb-8">
               <div>
-                  <label className="block text-xs font-bold text-gray-500 mb-1">Select Product Spec</label>
-                  <select 
-                      value={newOrderForm.itemCode}
-                      onChange={e => setNewOrderForm({...newOrderForm, itemCode: e.target.value})}
-                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-semibold focus:outline-none focus:border-blue-500"
-                  >
-                      <option value="">-- Choose Product --</option>
-                      {availableSpecs.map(s => (
-                          <option key={s.erpItemCode} value={s.erpItemCode}>{s.erpItemCode} - {s.erpItemDesc}</option>
-                      ))}
-                  </select>
+                <label className="block text-xs font-bold text-gray-500 mb-1">Select Product Spec</label>
+                <select
+                  value={newOrderForm.itemCode}
+                  onChange={e => setNewOrderForm({ ...newOrderForm, itemCode: e.target.value })}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-semibold focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">-- Choose Product --</option>
+                  {availableSpecs.map(s => (
+                    <option key={s.erpItemCode} value={s.erpItemCode}>{s.erpItemCode} - {s.erpItemDesc}</option>
+                  ))}
+                </select>
               </div>
               <div>
-                  <label className="block text-xs font-bold text-gray-500 mb-1">Quantity (Kg)</label>
-                  <input 
-                      type="number"
-                      value={newOrderForm.qty}
-                      onChange={e => setNewOrderForm({...newOrderForm, qty: e.target.value})}
-                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-semibold focus:outline-none focus:border-blue-500"
-                      placeholder="e.g. 500"
-                  />
+                <label className="block text-xs font-bold text-gray-500 mb-1">Quantity (Kg)</label>
+                <input
+                  type="number"
+                  value={newOrderForm.qty}
+                  onChange={e => setNewOrderForm({ ...newOrderForm, qty: e.target.value })}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-semibold focus:outline-none focus:border-blue-500"
+                  placeholder="e.g. 500"
+                />
               </div>
             </div>
 
             <div className="flex gap-3">
               <button onClick={() => setShowAddOrderModal(false)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-all">Cancel</button>
               <button onClick={handleAddOrder} disabled={!newOrderForm.itemCode || !newOrderForm.qty} className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-blue-200 transition-all flex justify-center items-center gap-2">
-                 Add Order
+                Add Order
               </button>
             </div>
           </div>
@@ -1397,10 +1397,10 @@ const DPSPlan: React.FC = () => {
                 <X size={20} />
               </button>
             </div>
-            
+
             {/* Content */}
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6">
-              
+
               {/* Summary Box */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
@@ -1421,59 +1421,59 @@ const DPSPlan: React.FC = () => {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Items Using This Size</h4>
-                  <select 
-                     onChange={(e) => {
-                         if(e.target.value) {
-                             handleAddAllocationToSublot(e.target.value);
-                             e.target.value = ''; // reset
-                         }
-                     }}
-                     className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-500 bg-white shadow-sm"
+                  <select
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        handleAddAllocationToSublot(e.target.value);
+                        e.target.value = ''; // reset
+                      }
+                    }}
+                    className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-500 bg-white shadow-sm"
                   >
-                     <option value="">+ Add Order to Allocate</option>
-                     {(() => {
-                         const isMatch = (o: Order) => {
-                             const modalSize = sizeModalData.sizeLabel;
-                             if (modalSize === 'Grade B (Co-Product)') return o.size === 'Grade B' || o.type === 'co-product';
-                             if (modalSize === 'Unsize / Other Grade A') return o.size === 'unsize' || !o.size;
-                             return o.size === modalSize;
-                         };
-                         const matchingUnfulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg > 0);
-                         const otherUnfulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg > 0);
-                         const fulfilled = orders.filter(o => o.unfulfilledKg <= 0);
+                    <option value="">+ Add Order to Allocate</option>
+                    {(() => {
+                      const isMatch = (o: Order) => {
+                        const modalSize = sizeModalData.sizeLabel;
+                        if (modalSize === 'Grade B (Co-Product)') return o.size === 'Grade B' || o.type === 'co-product';
+                        if (modalSize === 'Unsize / Other Grade A') return o.size === 'unsize' || !o.size;
+                        return o.size === modalSize;
+                      };
+                      const matchingUnfulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg > 0);
+                      const otherUnfulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg > 0);
+                      const fulfilled = orders.filter(o => o.unfulfilledKg <= 0);
 
-                         return (
-                             <>
-                                 {matchingUnfulfilled.length > 0 && (
-                                     <optgroup label="Requires This Size (Unfulfilled)">
-                                         {matchingUnfulfilled.map(o => (
-                                             <option key={o.id} value={o.id}>
-                                                {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
-                                             </option>
-                                         ))}
-                                     </optgroup>
-                                 )}
-                                 {otherUnfulfilled.length > 0 && (
-                                     <optgroup label="Other Unfulfilled Orders">
-                                         {otherUnfulfilled.map(o => (
-                                             <option key={o.id} value={o.id}>
-                                                {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
-                                             </option>
-                                         ))}
-                                     </optgroup>
-                                 )}
-                                 {fulfilled.length > 0 && (
-                                     <optgroup label="Fully Fulfilled Orders">
-                                         {fulfilled.map(o => (
-                                             <option key={o.id} value={o.id}>
-                                                {o.id} - {o.itemDesc}
-                                             </option>
-                                         ))}
-                                     </optgroup>
-                                 )}
-                             </>
-                         );
-                     })()}
+                      return (
+                        <>
+                          {matchingUnfulfilled.length > 0 && (
+                            <optgroup label="Requires This Size (Unfulfilled)">
+                              {matchingUnfulfilled.map(o => (
+                                <option key={o.id} value={o.id}>
+                                  {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {otherUnfulfilled.length > 0 && (
+                            <optgroup label="Other Unfulfilled Orders">
+                              {otherUnfulfilled.map(o => (
+                                <option key={o.id} value={o.id}>
+                                  {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {fulfilled.length > 0 && (
+                            <optgroup label="Fully Fulfilled Orders">
+                              {fulfilled.map(o => (
+                                <option key={o.id} value={o.id}>
+                                  {o.id} - {o.itemDesc}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                        </>
+                      );
+                    })()}
                   </select>
                 </div>
                 {sizeModalData.allocations.length === 0 ? (
@@ -1486,39 +1486,40 @@ const DPSPlan: React.FC = () => {
                     {sizeModalData.allocations.map((a, i) => {
                       const isEditing = editingAlloc?.id === sizeModalData.sublotId && editingAlloc?.orderId === a.orderId;
                       return (
-                      <div key={i} className="flex justify-between items-center p-3 bg-white border border-gray-100 shadow-sm rounded-xl hover:border-blue-200 transition-colors">
-                        <div className="flex-1 min-w-0 pr-4">
-                          <p className="font-bold text-gray-900 text-sm truncate" title={a.itemDesc}>{a.itemDesc}</p>
-                          <p className="text-[10px] font-medium text-gray-500">Order ID: {a.orderId}</p>
-                        </div>
-                        <div className="text-right flex items-center gap-3 shrink-0">
-                          {isEditing ? (
-                            <div className="flex items-center gap-1">
-                                <input 
-                                  type="number" 
+                        <div key={i} className="flex justify-between items-center p-3 bg-white border border-gray-100 shadow-sm rounded-xl hover:border-blue-200 transition-colors">
+                          <div className="flex-1 min-w-0 pr-4">
+                            <p className="font-bold text-gray-900 text-sm truncate" title={a.itemDesc}>{a.itemDesc}</p>
+                            <p className="text-[10px] font-medium text-gray-500">Order ID: {a.orderId}</p>
+                          </div>
+                          <div className="text-right flex items-center gap-3 shrink-0">
+                            {isEditing ? (
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
                                   className="w-24 text-sm font-black text-blue-600 border border-blue-300 rounded px-2 py-1 text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
                                   value={editingAlloc.val}
-                                  onChange={(e) => setEditingAlloc({...editingAlloc, val: e.target.value})}
+                                  onChange={(e) => setEditingAlloc({ ...editingAlloc, val: e.target.value })}
                                   autoFocus
                                 />
                                 <button onClick={() => handleUpdateAllocation(sizeModalData.sublotId, sizeModalData.targetSublotId || sizeModalData.sublotId, a.orderId, a.itemDesc, sizeModalData.sizeLabel, editingAlloc.val)} className="p-1.5 bg-green-100 text-green-600 rounded-md hover:bg-green-200">
-                                    <Check size={14} />
+                                  <Check size={14} />
                                 </button>
                                 <button onClick={() => setEditingAlloc(null)} className="p-1.5 bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200">
-                                    <X size={14} />
+                                  <X size={14} />
                                 </button>
-                            </div>
-                          ) : (
-                            <>
+                              </div>
+                            ) : (
+                              <>
                                 <p className="text-sm font-black text-blue-600">+{a.qty.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</p>
                                 <button onClick={() => setEditingAlloc({ id: sizeModalData.sublotId, orderId: a.orderId, val: Number(a.qty.toFixed(1)).toString() })} className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors">
-                                    <Edit2 size={14} />
+                                  <Edit2 size={14} />
                                 </button>
-                            </>
-                          )}
+                              </>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )})}
+                      )
+                    })}
                   </div>
                 )}
               </div>

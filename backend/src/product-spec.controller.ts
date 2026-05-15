@@ -248,7 +248,42 @@ export class ProductSpecController {
   @Post('assign-yield')
   async assignMasterYield(@Body() body: { specIds: number[], masterYieldId: string | null }) {
     if (!body.specIds || body.specIds.length === 0) return { success: true };
-    await this.productSpecRepo.update(body.specIds, { masterYieldId: body.masterYieldId as any });
+    
+    // Fetch all specs to update
+    const specs = await this.productSpecRepo.findByIds(body.specIds);
+    
+    for (const spec of specs) {
+      if (body.masterYieldId === null) {
+        // If masterYieldId is null, the UI wants to clear ALL yield mappings for these specs?
+        // Wait, the UI passes `masterYieldId: null` when deleting a spec from the UI.
+        // Actually, the UI passes `{ specIds: [specId], masterYieldId: null }` but we need to know WHICH masterYieldId to remove!
+        // Right now it clears everything. Let's keep it clearing everything unless we change the UI.
+        spec.masterYieldIds = null;
+      } else {
+        const ids = spec.masterYieldIds ? spec.masterYieldIds.split(',').map(id => id.trim()).filter(id => id) : [];
+        if (!ids.includes(body.masterYieldId)) {
+          ids.push(body.masterYieldId);
+        }
+        spec.masterYieldIds = ids.join(',');
+      }
+    }
+    
+    await this.productSpecRepo.save(specs);
+    return { success: true };
+  }
+
+  @Post('unassign-yield')
+  async unassignMasterYield(@Body() body: { specIds: number[], masterYieldId: string }) {
+    if (!body.specIds || body.specIds.length === 0 || !body.masterYieldId) return { success: true };
+    
+    const specs = await this.productSpecRepo.findByIds(body.specIds);
+    for (const spec of specs) {
+      if (spec.masterYieldIds) {
+        const ids = spec.masterYieldIds.split(',').map(id => id.trim()).filter(id => id && id !== body.masterYieldId);
+        spec.masterYieldIds = ids.length > 0 ? ids.join(',') : null;
+      }
+    }
+    await this.productSpecRepo.save(specs);
     return { success: true };
   }
 }

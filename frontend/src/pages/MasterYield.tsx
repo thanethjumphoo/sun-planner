@@ -116,10 +116,10 @@ export default function MasterYield() {
     }
   };
 
-  const handleDeleteSpec = async (specId: number) => {
+  const handleDeleteSpec = async (specId: number, masterYieldId: string) => {
     if (confirm('คุณต้องการนำรายการนี้ออกจาก Yield นี้หรือไม่?')) {
       try {
-        await axios.post(`${API}/api/product-spec/assign-yield`, { specIds: [specId], masterYieldId: null });
+        await axios.post(`${API}/api/product-spec/unassign-yield`, { specIds: [specId], masterYieldId });
         fetchSpecs();
       } catch (err) {
         console.error(err);
@@ -219,9 +219,6 @@ export default function MasterYield() {
                   const isSpecType = ['PRODUCT', 'CO-PRODUCT', 'BY-PRODUCT'].includes(formData.type);
                   
                   if (!editMode && isSpecType) {
-                    // Specs that are already assigned to ANY masterYield node
-                    const usedSpecIds = specs.filter(s => s.masterYieldId).map(s => s.id);
-                    
                     // Filter by search only
                     const displayedSpecs = specs.filter(s => 
                       s.erpItemCode.toLowerCase().includes(searchSpec.toLowerCase()) || 
@@ -244,20 +241,23 @@ export default function MasterYield() {
                           {displayedSpecs.length === 0 ? (
                             <div className="p-4 text-center text-gray-500 text-sm">ไม่พบรายการ</div>
                           ) : displayedSpecs.map(spec => {
-                            const isAdded = usedSpecIds.includes(spec.id);
+                            // Check if this spec is already added to THIS specific node
+                            const isAddedToCurrentNode = spec.masterYieldIds && spec.masterYieldIds.includes(formData.parentId || '');
+                            // Check if it's added anywhere else
+                            const isAddedElsewhere = spec.masterYieldIds && spec.masterYieldIds.length > 0;
                             const isSelected = selectedSpecs.some(s => s.id === spec.id);
                             
                             return (
                               <label key={spec.id} className={`flex items-start gap-3 p-3 transition-colors ${
-                                isAdded ? 'bg-gray-50 opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-emerald-50'
-                              } ${isSelected && !isAdded ? 'bg-emerald-50/50' : ''}`}>
+                                isAddedToCurrentNode ? 'bg-gray-50 opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-emerald-50'
+                              } ${isSelected && !isAddedToCurrentNode ? 'bg-emerald-50/50' : ''}`}>
                                 <input 
                                   type="checkbox" 
-                                  disabled={isAdded}
+                                  disabled={isAddedToCurrentNode}
                                   className="mt-1 border-gray-300 rounded text-emerald-500 focus:ring-emerald-500 disabled:opacity-50"
-                                  checked={isAdded ? true : isSelected}
+                                  checked={isAddedToCurrentNode ? true : isSelected}
                                   onChange={(e) => {
-                                    if (isAdded) return;
+                                    if (isAddedToCurrentNode) return;
                                     if (e.target.checked) {
                                       setSelectedSpecs([...selectedSpecs, spec]);
                                     } else {
@@ -268,8 +268,11 @@ export default function MasterYield() {
                                 <div className="flex-1">
                                   <div className="flex items-center gap-2">
                                     <div className="font-semibold text-sm text-gray-800">{spec.erpItemCode}</div>
-                                    {isAdded && (
-                                      <span className="px-2 py-0.5 bg-gray-200 text-gray-600 rounded-md text-[10px] font-bold tracking-wide">ADDED</span>
+                                    {isAddedToCurrentNode && (
+                                      <span className="px-2 py-0.5 bg-gray-200 text-gray-600 rounded-md text-[10px] font-bold tracking-wide">ADDED HERE</span>
+                                    )}
+                                    {!isAddedToCurrentNode && isAddedElsewhere && (
+                                      <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-md text-[10px] font-bold tracking-wide">ADDED ELSEWHERE</span>
                                     )}
                                   </div>
                                   <div className="text-xs text-gray-500">{spec.erpItemDesc}</div>
@@ -343,11 +346,11 @@ const TreeNode = ({ node, level, specs, onAdd, onEdit, onDelete, onDeleteSpec }:
   onAdd: (parentId: string, type: string) => void;
   onEdit: (node: MasterYieldNode) => void;
   onDelete: (id: string) => void;
-  onDeleteSpec: (id: number) => void;
+  onDeleteSpec: (id: number, masterYieldId: string) => void;
 }) => {
   const [expanded, setExpanded] = useState(true);
   
-  const nodeSpecs = specs.filter(s => s.masterYieldId === node.id);
+  const nodeSpecs = specs.filter(s => s.masterYieldIds && s.masterYieldIds.includes(node.id));
   const hasChildren = (node.children && node.children.length > 0) || nodeSpecs.length > 0;
   
   const colors = [
@@ -440,7 +443,7 @@ const TreeNode = ({ node, level, specs, onAdd, onEdit, onDelete, onDeleteSpec }:
                   </div>
                   <div className="flex items-center gap-4">
                     <button 
-                      onClick={() => onDeleteSpec(spec.id)} 
+                      onClick={() => onDeleteSpec(spec.id, node.id)} 
                       className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors" 
                       title="นำออกจากกลุ่ม"
                     >
