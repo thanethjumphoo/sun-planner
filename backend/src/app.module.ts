@@ -50,7 +50,7 @@ import { MasterYieldController } from './master-yield.controller';
         password: configService.get<string>('DB_PASS') || configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_NAME') || configService.get<string>('DB_DATABASE'),
         autoLoadEntities: true,
-        synchronize: configService.get<string>('NODE_ENV') !== 'production',
+        synchronize: configService.get<string>('NODE_ENV') !== 'production' || configService.get<string>('FORCE_DB_SYNC') === 'true',
         options: {
           encrypt: true,
           trustServerCertificate: true,

@@ -295,6 +295,15 @@ export class MpsController {
       return null;
     };
 
+    const isByproductSpec = (spec: ProductSpec): boolean => {
+      if (!spec || !spec.masterYieldIds) return false;
+      const ids = spec.masterYieldIds.split(',').map(id => id.trim());
+      return ids.some(id => {
+        const node = findNode(allYieldNodes, id);
+        return node && (node.type === 'BY-PRODUCT' || node.type === 'CO-PRODUCT');
+      });
+    };
+
     // Use custom date range if provided, otherwise fall back to targetMonth
     let startOfRange: Date;
     let endOfRange: Date;
@@ -405,8 +414,10 @@ export class MpsController {
       }
     });
 
-    const chillOrders: any[] = [];
-    const freezeOrders: any[] = [];
+    const mainChillOrders: any[] = [];
+    const mainFreezeOrders: any[] = [];
+    const byprodChillOrders: any[] = [];
+    const byprodFreezeOrders: any[] = [];
 
     for (const order of orders) {
       const spec = specMap.get(order.erpOrderItemCode);
@@ -429,10 +440,20 @@ export class MpsController {
         shipDate: new Date(order.erpOrderShipDate)
       };
 
+      const isByprod = isByproductSpec(spec);
+
       if (orderObj.productType === 'chilled') {
-        chillOrders.push(orderObj);
+        if (isByprod) {
+          byprodChillOrders.push(orderObj);
+        } else {
+          mainChillOrders.push(orderObj);
+        }
       } else {
-        freezeOrders.push(orderObj);
+        if (isByprod) {
+          byprodFreezeOrders.push(orderObj);
+        } else {
+          mainFreezeOrders.push(orderObj);
+        }
       }
     }
 
@@ -474,8 +495,8 @@ export class MpsController {
       const bPri = b.priority ?? 9999;
       return aPri - bPri;
     };
-    chillOrders.sort(prioritySort);
-    freezeOrders.sort(prioritySort);
+    mainChillOrders.sort(prioritySort);
+    mainFreezeOrders.sort(prioritySort);
 
     // Step 3b: Build per-date SIZE supply map (shared by Chill & Freeze allocation)
     // ─────────────────────────────────────────────────────────────────────────────
@@ -548,10 +569,10 @@ export class MpsController {
       };
 
       matchingRows.forEach(row => {
-        const pct = Number(row.distValue || 0) / 100;
+        const pct = Number(row.distValue || 0);
         if (pct <= 0) return;
 
-        // distValue is stored as percentage points (e.g. 2.16 = 2.16%), divide by 100 to get decimal fraction
+        // distValue is already stored as a decimal fraction (e.g. 0.0216 = 2.16%)
         const kg = isBil 
           ? Math.round(slaughteredWeight * partYield * pct)
           : Math.round(slaughteredWeight * filletYield * pct * 0.907);
@@ -588,7 +609,39 @@ export class MpsController {
       if (s === 'unsize' || s === '') return []; // unsize matches all — handled separately
       
       if (isBil) {
-        // Return exactly the product size to map to BIL column labels
+        // 1. Try exact match first
+        const exactMatch = uniqueColLabels.find(label => label.toLowerCase().trim() === s);
+        if (exactMatch) return [exactMatch];
+
+        // 2. Parse productSize as range (e.g. "280-300")
+        const rangeMatch = s.match(/(\d+)\s*[-–]\s*(\d+)/);
+        if (rangeMatch) {
+          const lo = parseInt(rangeMatch[1]);
+          const hi = parseInt(rangeMatch[2]);
+
+          const allBilBins = uniqueColLabels.map(label => {
+            const lblLower = label.toLowerCase().trim();
+            if (lblLower.includes('down')) {
+              const val = parseInt(lblLower.replace(/[^\d]/g, ''));
+              return { label, lo: 0, hi: val };
+            }
+            if (lblLower.includes('up')) {
+              const val = parseInt(lblLower.replace(/[^\d]/g, ''));
+              return { label, lo: val, hi: 9999 };
+            }
+            const bounds = lblLower.split('-').map(str => parseInt(str.trim()));
+            if (bounds.length === 2 && !isNaN(bounds[0]) && !isNaN(bounds[1])) {
+              return { label, lo: bounds[0], hi: bounds[1] };
+            }
+            return null;
+          }).filter((b): b is { label: string; lo: number; hi: number } => b !== null);
+
+          // Find overlapping bins
+          const matched = allBilBins.filter(b => b.hi > lo && b.lo < hi).map(b => b.label);
+          if (matched.length > 0) return matched;
+        }
+
+        // Fallback: return productSize as-is if no range could be parsed
         return [productSize];
       }
 
@@ -622,7 +675,7 @@ export class MpsController {
     today.setHours(0, 0, 0, 0);
 
     // Step 4: Map CHILL Orders First (Flexible Lead Time: Ship Date -1 to -3 Days) — WITH Size Matching
-    for (const order of chillOrders) {
+    for (const order of mainChillOrders) {
       totalDemandKg += order.qty;
       let remainingQty = order.qty;
 
@@ -707,7 +760,7 @@ export class MpsController {
     // (sizeSupplyMap, getSizeBinKeys already built in Step 3b above)
 
     // 5c. Sort freeze orders: Ship Date ASC → Grade ASC → SO Number ASC → Priority ASC
-    freezeOrders.sort((a, b) => {
+    mainFreezeOrders.sort((a: any, b: any) => {
       // 1. Ship Date
       const dateDiff = a.shipDate.getTime() - b.shipDate.getTime();
       if (dateDiff !== 0) return dateDiff;
@@ -835,7 +888,170 @@ export class MpsController {
     };
 
     // 5g. Run allocation: Follow Priority Sort (Absolute)
-    allocateFreeze(freezeOrders, true);
+    allocateFreeze(mainFreezeOrders, true);
+
+    // --- Allocate By-Products Orders ---
+    // 1. Calculate generated byproduct supply from main product allocations
+    const dailyByproductSupply = new Map<string, Record<string, { name: string; qty: number; processName: string }>>();
+
+    const getOrInitByproductSupply = (dateStr: string) => {
+      if (!dailyByproductSupply.has(dateStr)) {
+        dailyByproductSupply.set(dateStr, {});
+      }
+      return dailyByproductSupply.get(dateStr)!;
+    };
+
+    mpsOrdersToSave.forEach(order => {
+      const spec = specMap.get(order.itemCode);
+      if (spec && !isByproductSpec(spec) && spec.masterYieldIds) {
+        const yieldPct = spec.productYield || 1;
+        const rm = order.quantityKg / yieldPct;
+        const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
+        const pId = processIds[0];
+        if (pId) {
+          const node = findNode(allYieldNodes, pId);
+          if (node) {
+            const processNode = node.parentId ? findNode(allYieldNodes, node.parentId) : node;
+            if (processNode && processNode.children) {
+              const daySupply = getOrInitByproductSupply(formatDate(order.plannedProductionDate));
+              processNode.children.forEach((child: any) => {
+                if (child.id === pId) return;
+                if (child.type === 'BY-PRODUCT' || child.type === 'CO-PRODUCT') {
+                  const byProdQty = rm * (child.yieldPercentage || 0);
+                  if (byProdQty > 0) {
+                    if (!daySupply[child.id]) {
+                      daySupply[child.id] = {
+                        name: child.name,
+                        qty: 0,
+                        processName: processNode.name || 'Other Process'
+                      };
+                    }
+                    daySupply[child.id].qty += byProdQty;
+                  }
+                }
+              });
+            }
+          }
+        }
+      }
+    });
+
+    // 2. Allocate Byproduct CHILL Orders
+    for (const order of byprodChillOrders) {
+      totalDemandKg += order.qty;
+      let remainingQty = order.qty;
+
+      const spec = specMap.get(order.erpOrderItemCode);
+      const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
+
+      if (bpId) {
+        for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
+          if (remainingQty <= 0) break;
+
+          const dateStr = formatDate(d);
+          const daySupply = dailyByproductSupply.get(dateStr);
+          const bpSupply = daySupply && daySupply[bpId] ? daySupply[bpId].qty : 0;
+
+          if (bpSupply <= 0) continue;
+
+          const allocQty = Math.round(Math.min(bpSupply, remainingQty));
+          if (allocQty <= 0) continue;
+
+          mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
+            mpsPlan: plan,
+            erpOrderLineId: order.erpOrderLineId,
+            soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+            itemCode: order.erpOrderItemCode,
+            itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+            productType: order.productType,
+            quantityKg: allocQty,
+            shipDate: order.shipDate,
+            plannedProductionDate: d,
+            finishedProductionDate: d,
+            isManualOverride: false
+          }));
+
+          daySupply![bpId].qty -= allocQty;
+          remainingQty -= allocQty;
+        }
+      }
+
+      if (remainingQty > 0) {
+        exceptionsToSave.push(manager.create(MpsExceptionReport, {
+          mpsPlan: plan,
+          erpOrderLineId: order.erpOrderLineId,
+          soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
+          itemCode: order.erpOrderItemCode,
+          shipDate: order.shipDate,
+          requiredKg: order.qty,
+          shortageKg: remainingQty,
+          reason: `Insufficient byproduct supply for Chill byproduct order on or before ${formatDate(order.shipDate)}`
+        }));
+      }
+    }
+
+    // 3. Allocate Byproduct FREEZE Orders
+    const allocateByprodFreeze = (orderList: any[]) => {
+      for (const order of orderList) {
+        totalDemandKg += order.qty;
+        let remainingQty = order.qty;
+
+        const spec = specMap.get(order.erpOrderItemCode);
+        const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
+
+        if (bpId) {
+          const latestProdDate = subtractDays(order.shipDate, 5);
+          const earliestProdDate = subtractDays(order.shipDate, 30);
+
+          for (const dateStr of allDateStrs) {
+            if (remainingQty <= 0) break;
+            const dateObj = new Date(dateStr + 'T00:00:00');
+            if (dateObj < earliestProdDate || dateObj > latestProdDate) continue;
+
+            const daySupply = dailyByproductSupply.get(dateStr);
+            const bpSupply = daySupply && daySupply[bpId] ? daySupply[bpId].qty : 0;
+
+            if (bpSupply <= 0) continue;
+
+            const allocQty = Math.round(Math.min(bpSupply, remainingQty));
+            if (allocQty <= 0) continue;
+
+            mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
+              mpsPlan: plan,
+              erpOrderLineId: order.erpOrderLineId,
+              soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+              itemCode: order.erpOrderItemCode,
+              itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+              productType: order.productType,
+              quantityKg: allocQty,
+              shipDate: order.shipDate,
+              plannedProductionDate: dateObj,
+              finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
+              isManualOverride: false
+            }));
+
+            daySupply![bpId].qty -= allocQty;
+            remainingQty -= allocQty;
+          }
+        }
+
+        if (remainingQty > 0) {
+          exceptionsToSave.push(manager.create(MpsExceptionReport, {
+            mpsPlan: plan,
+            erpOrderLineId: order.erpOrderLineId,
+            soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
+            itemCode: order.erpOrderItemCode,
+            shipDate: order.shipDate,
+            requiredKg: order.qty,
+            shortageKg: remainingQty,
+            reason: `Insufficient byproduct supply for Freeze byproduct order (Ship: ${formatDate(order.shipDate)})`
+          }));
+        }
+      }
+    };
+
+    byprodFreezeOrders.sort(prioritySort);
+    allocateByprodFreeze(byprodFreezeOrders);
 
     await manager.save(mpsOrdersToSave, { chunk: 100 });
     if (exceptionsToSave.length > 0) {
@@ -855,8 +1071,10 @@ export class MpsController {
       dailyDemand.set(d, (dailyDemand.get(d) || 0) + Number(o.quantityKg));
 
       const spec = specMap.get(o.itemCode);
-      const speed = Number(spec?.productSpeed || 45);
-      dailyStaff.set(d, (dailyStaff.get(d) || 0) + (Number(o.quantityKg) / speed));
+      if (spec && !isByproductSpec(spec)) {
+        const speed = Number(spec.productSpeed || 45);
+        dailyStaff.set(d, (dailyStaff.get(d) || 0) + (Number(o.quantityKg) / speed));
+      }
     });
 
     const daysInMonth = new Date(startOfMonth.getFullYear(), startOfMonth.getMonth() + 1, 0).getDate();
@@ -930,55 +1148,9 @@ export class MpsController {
         const avgWeightDaily = parseFloat((dailyTotalWeight / dailyIntakeBirds).toFixed(2));
         const slaughteredWeightDaily = dailyTotalWeight * 0.9575 * 0.95;
 
-        // --- Calculate By Products ---
-        const dailyOrders = mpsOrdersToSave.filter(o => {
-          // Use the same timezone-safe string conversion used elsewhere in the controller
-          const offset = o.plannedProductionDate.getTimezoneOffset();
-          const localDate = new Date(o.plannedProductionDate.getTime() - (offset * 60 * 1000));
-          return localDate.toISOString().split('T')[0] === dayStr;
-        });
-
-        const nodeRMs: Record<string, number> = {};
-        for (const order of dailyOrders) {
-          const spec = specs.find(s => s.erpItemCode === order.itemCode);
-          if (spec && spec.masterYieldIds) {
-            const yieldPct = spec.productYield || 1;
-            const rm = order.quantityKg / yieldPct;
-            const processIds = spec.masterYieldIds.split(',').map(id => id.trim());
-            const pId = processIds[0];
-            if (pId) {
-              nodeRMs[pId] = (nodeRMs[pId] || 0) + rm;
-            }
-          }
-        }
-
-        const byProducts: Record<string, { name: string; qty: number }> = {};
-        Object.keys(nodeRMs).forEach(pId => {
-          const rm = nodeRMs[pId];
-          const node = findNode(allYieldNodes, pId);
-          if (node) {
-            // If the mapped node is a leaf node, traverse to its parent process node
-            const processNode = node.parentId ? findNode(allYieldNodes, node.parentId) : node;
-            if (processNode && processNode.children) {
-              processNode.children.forEach((child: any) => {
-                // Skip the main product itself
-                if (child.id === pId) return;
-                
-                // Only include BY-PRODUCT or CO-PRODUCT types in the summary
-                if (child.type === 'BY-PRODUCT' || child.type === 'CO-PRODUCT') {
-                  const byProdQty = rm * (child.yieldPercentage || 0);
-                  if (byProdQty > 0) {
-                    if (!byProducts[child.id]) {
-                      byProducts[child.id] = { name: child.name, qty: 0 };
-                    }
-                    byProducts[child.id].qty += byProdQty;
-                  }
-                }
-              });
-            }
-          }
-        });
-        const byProductsStr = Object.keys(byProducts).length > 0 ? JSON.stringify(byProducts) : null;
+        // --- Retrieve Remaining By Products ---
+        const daySupply = dailyByproductSupply.get(dayStr) || {};
+        const byProductsStr = Object.keys(daySupply).length > 0 ? JSON.stringify(daySupply) : null;
         // -----------------------------
 
         const supplyEntry = manager.create(MpsPlanSupply, {
@@ -1012,10 +1184,10 @@ export class MpsController {
             return Math.abs(Number(label) - avgWeight) < 0.05;
           });
           matchingRows.forEach(row => {
-            const pct = Number(row.distValue || 0) / 100;
+            const pct = Number(row.distValue || 0);
             if (pct <= 0) return;
 
-            // distValue is stored as percentage points (e.g. 2.16 = 2.16%), divide by 100 to get decimal fraction
+            // distValue is already stored as a decimal fraction (e.g. 0.0216 = 2.16%)
             const kg = isBil 
               ? Math.round(slaughteredWeight * partYield * pct)
               : Math.round(slaughteredWeight * filletYield * pct * 0.907);
@@ -1245,10 +1417,10 @@ export class MpsController {
         });
 
         matchingRows.forEach(row => {
-          const pct = Number(row.distValue || 0) / 100;
+          const pct = Number(row.distValue || 0);
           if (pct <= 0) return;
 
-          // distValue is stored as percentage points (e.g. 2.16 = 2.16%), divide by 100 to get decimal fraction
+          // distValue is already stored as a decimal fraction (e.g. 0.0216 = 2.16%)
           const kg = isBil 
             ? Math.round(slaughteredWeight * partYield * pct)
             : Math.round(slaughteredWeight * filletYield * pct * 0.907);

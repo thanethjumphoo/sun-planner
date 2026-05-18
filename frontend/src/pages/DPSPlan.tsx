@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users } from 'lucide-react';
+import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users, ChevronDown } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL;
 
@@ -79,8 +79,9 @@ const normalizeSize = (sz: string | undefined | null) => {
   return match || sz.trim();
 };
 
-const getMatchingBins = (size: string): string[] => {
+const getMatchingBins = (size: string, isBil: boolean): string[] => {
   if (!size || size === 'unsize' || size === 'Grade B') return [];
+  if (isBil) return [size];
 
   // If exact match with a label, return its key
   if (Object.values(sizeLabelMap).includes(size)) {
@@ -133,6 +134,7 @@ const getMatchingBins = (size: string): string[] => {
 
 const DPSPlan: React.FC = () => {
   const { partId } = useParams<{ partId: string }>();
+  const isBil = partId === 'bil';
   // Use local date to avoid UTC timezone shift
   const formatLocalDate = (d: Date) => {
     const y = d.getFullYear();
@@ -156,6 +158,168 @@ const DPSPlan: React.FC = () => {
   const [showAddOrderModal, setShowAddOrderModal] = useState(false);
   const [newOrderForm, setNewOrderForm] = useState({ itemCode: '', qty: '' });
 
+  const [yieldNodeTypeMap, setYieldNodeTypeMap] = useState<Map<string, string>>(new Map());
+  const [yieldTree, setYieldTree] = useState<any[]>([]);
+  const [specsMap, setSpecsMap] = useState<Record<string, any>>({});
+  const [sizeColumns, setSizeColumns] = useState<string[]>([]);
+
+  const getProductType = (itemCode: string): 'main' | 'coproduct' | 'byproduct' => {
+    const spec = specsMap[itemCode];
+    if (!spec) return 'main';
+
+    if (spec.type) {
+      const type = spec.type.toLowerCase().trim();
+      if (type === 'co-product' || type === 'coproduct') return 'coproduct';
+      if (type === 'by-product' || type === 'byproduct') return 'byproduct';
+    }
+
+    if (spec.masterYieldIds) {
+      const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
+      for (const id of processIds) {
+        const nodeType = yieldNodeTypeMap.get(id);
+        if (nodeType === 'CO-PRODUCT') return 'coproduct';
+        if (nodeType === 'BY-PRODUCT') return 'byproduct';
+      }
+    }
+
+    return 'main';
+  };
+
+
+
+  const getDisplayLabel = (key: string) => {
+    if (key === 'Grade B' || key === 'Grade B (Co-Product)') return 'Grade B (Co-Product)';
+    if (key === 'unsize' || key === 'Unsize / Other Grade A') return 'Unsize / Other Grade A';
+    if (sizeLabelMap[key]) return sizeLabelMap[key];
+    
+    const findNodeName = (nodes: any[]): string | null => {
+      for (const n of nodes) {
+        if (n.id === key) return n.name;
+        if (n.children) {
+          const found = findNodeName(n.children);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    
+    const nodeName = findNodeName(yieldTree);
+    if (nodeName) return nodeName;
+
+    const spec = Object.values(specsMap).find((s: any) => s.masterYieldIds?.split(',').map((id: any) => id.trim()).includes(key));
+    if (spec) return spec.erpItemDesc || spec.erpItemCode;
+    
+    return key;
+  };
+
+  const findNode = (nodes: any[], id: string): any | null => {
+    for (const n of nodes) {
+      if (n.id === id) return n;
+      if (n.children) {
+        const found = findNode(n.children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  const findParentNode = (nodes: any[], childId: string, parent: any | null = null): any | null => {
+    for (const n of nodes) {
+      if (n.id === childId) return parent;
+      if (n.children) {
+        const found = findParentNode(n.children, childId, n);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  const computeYieldTreeSubproducts = (sl: Sublot) => {
+    if (isBil) return; // BIL does not have co-products or by-products in the yield tree
+
+    const categoryNode = yieldTree.find(n => n.name === 'สันใน');
+    const categorySubproducts: any[] = [];
+    const traverseSubproducts = (node: any) => {
+      if (node.type === 'BY-PRODUCT' || node.type === 'CO-PRODUCT') {
+        categorySubproducts.push(node);
+      }
+      if (node.children) {
+        node.children.forEach(traverseSubproducts);
+      }
+    };
+    if (categoryNode && categoryNode.children) {
+      categoryNode.children.forEach(traverseSubproducts);
+    }
+
+    // 1. Reset all co-product / by-product bins and coProductKg to 0
+    categorySubproducts.forEach(subprod => {
+      sl.bins[subprod.id] = 0;
+    });
+    sl.coProductKg = 0;
+
+    // 2. Loop through all allocations of MAIN products in this sublot
+    let totalMainAllocatedQty = 0;
+    sl.allocations.forEach(alloc => {
+      const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
+      if (getProductType(itemCodeMatch) !== 'main') return;
+      totalMainAllocatedQty += alloc.qty;
+
+      const spec = specsMap[itemCodeMatch];
+      if (spec && spec.masterYieldIds) {
+        const yieldPct = Number(spec.productYield || 1);
+        const rm = alloc.qty / yieldPct;
+        const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
+        const pId = processIds[0];
+        
+        if (pId) {
+          const node = findNode(yieldTree, pId);
+          if (node) {
+            const processNode = findParentNode(yieldTree, pId) || node;
+            if (processNode && processNode.children) {
+              processNode.children.forEach((child: any) => {
+                if (child.id === pId) return;
+                if (child.type === 'BY-PRODUCT' || child.type === 'CO-PRODUCT') {
+                  const byProdQty = Number((rm * (child.yieldPercentage || 0)).toFixed(1));
+                  if (byProdQty > 0) {
+                    sl.bins[child.id] = Number(((sl.bins[child.id] || 0) + byProdQty).toFixed(1));
+                    
+                    const isGradeB = child.name === 'สันในเกรด B' || child.name.includes('เกรด B') || child.name.toLowerCase().includes('grade b');
+                    if (isGradeB) {
+                      sl.coProductKg = Number((sl.coProductKg + byProdQty).toFixed(1));
+                    }
+                  }
+                }
+              });
+            }
+          }
+        }
+      }
+    });
+
+    // 3. Fallback for Grade B if no yield tree calculation was made
+    const hasYieldTreeGradeB = categorySubproducts.some(subprod => {
+      const name = subprod.name;
+      return (name === 'สันในเกรด B' || name.includes('เกรด B') || name.toLowerCase().includes('grade b')) && (sl.bins[subprod.id] || 0) > 0;
+    });
+
+    if (!hasYieldTreeGradeB && totalMainAllocatedQty > 0) {
+      sl.coProductKg = Number((totalMainAllocatedQty * 0.093).toFixed(1));
+    }
+
+    // 4. Deduct already allocated co-product/by-product quantities from the newly generated supplies
+    sl.allocations.forEach(alloc => {
+      const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
+      const prodType = getProductType(itemCodeMatch);
+      if (prodType === 'coproduct' || prodType === 'byproduct') {
+        if (alloc.size === 'Grade B') {
+          sl.coProductKg = Number((sl.coProductKg - alloc.qty).toFixed(1));
+        } else {
+          sl.bins[alloc.size] = Number(((sl.bins[alloc.size] || 0) - alloc.qty).toFixed(1));
+        }
+      }
+    });
+  };
+
   const [sizeModalData, setSizeModalData] = useState<{
     isOpen: boolean;
     sublotId: string;
@@ -178,13 +342,23 @@ const DPSPlan: React.FC = () => {
     if (sublotIndex === -1) return;
     const sublot = { ...newSublots[sublotIndex] };
 
-    let allocSize = sizeModalData.sizeLabel === 'Grade B (Co-Product)' ? 'Grade B' :
-      sizeModalData.sizeLabel === 'Unsize / Other Grade A' ? 'unsize' :
-        Object.keys(sizeLabelMap).find(k => sizeLabelMap[k] === sizeModalData.sizeLabel) || 'unsize';
+    let allocSize = sizeModalData.sizeLabel === 'Grade B (Co-Product)' || sizeModalData.sizeLabel === 'Grade B' ? 'Grade B' :
+      sizeModalData.sizeLabel === 'Unsize / Other Grade A' || sizeModalData.sizeLabel === 'unsize' ? 'unsize' :
+        Object.keys(sizeLabelMap).find(k => sizeLabelMap[k] === sizeModalData.sizeLabel) || sizeModalData.sizeLabel;
+
+    if (sizeModalData.sizeLabel.includes(',')) {
+      const modalSizes = sizeModalData.sizeLabel.split(',').map((s: any) => s.trim());
+      const orderSpec = specsMap[order.itemCode];
+      const orderYieldIds = orderSpec?.masterYieldIds?.split(',').map((id: any) => id.trim()) || [];
+      const matchedId = orderYieldIds.find((id: any) => modalSizes.includes(id));
+      if (matchedId) {
+        allocSize = matchedId;
+      }
+    }
 
     const existingIndex = sublot.allocations.findIndex(a => a.orderId === orderId && a.size === allocSize);
     if (existingIndex > -1) {
-      setEditingAlloc({ id: sublot.id, orderId, val: sublot.allocations[existingIndex].qty.toString() });
+      setEditingAlloc({ id: sublot.id, orderId, size: allocSize, val: sublot.allocations[existingIndex].qty.toString() });
       return;
     }
 
@@ -200,36 +374,48 @@ const DPSPlan: React.FC = () => {
 
     const relatedAllocations = sublot.allocations.filter(a => {
       const aLabel = getSizeLabel(a.size);
-      if (sizeModalData.sizeLabel === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
-      if (sizeModalData.sizeLabel === 'Grade B (Co-Product)') return aLabel === 'Grade B';
-      return aLabel === sizeModalData.sizeLabel;
+      if (sizeModalData.sizeLabel === 'Unsize / Other Grade A' || sizeModalData.sizeLabel === 'unsize') return a.size === 'unsize' || !a.size;
+      if (sizeModalData.sizeLabel === 'Grade B (Co-Product)' || sizeModalData.sizeLabel === 'Grade B') return a.size === 'Grade B';
+      return a.size === sizeModalData.sizeLabel || aLabel === sizeModalData.sizeLabel;
     });
     setSizeModalData({
       ...sizeModalData,
       allocations: relatedAllocations
     });
 
-    setEditingAlloc({ id: sublot.id, orderId, val: "0" });
+    setEditingAlloc({ id: sublot.id, orderId, size: allocSize, val: "0" });
   };
 
-  const openSizeModal = (sl: Sublot, label: string, remaining: number) => {
+  const openSizeModal = (sl: Sublot, labelOrKey: string, remaining: number) => {
     const relatedAllocations = sl.allocations.filter(a => {
-      const aLabel = getSizeLabel(a.size);
-      if (label === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
-      if (label === 'Grade B (Co-Product)') return aLabel === 'Grade B';
-      return aLabel === label;
+      if (labelOrKey === 'Unsize / Other Grade A' || labelOrKey === 'unsize') {
+        return a.size === 'unsize' || !a.size;
+      }
+      if (labelOrKey === 'Grade B (Co-Product)' || labelOrKey === 'Grade B') {
+        return a.size === 'Grade B';
+      }
+      return a.size === labelOrKey || getSizeLabel(a.size) === labelOrKey;
     });
 
     setSizeModalData({
       isOpen: true,
       sublotId: sl.id,
-      sizeLabel: label,
+      sizeLabel: labelOrKey,
       allocations: relatedAllocations,
       totalRemaining: remaining
     });
   };
 
-  const [editingAlloc, setEditingAlloc] = useState<{ id: string, orderId: string, val: string } | null>(null);
+  const [editingAlloc, setEditingAlloc] = useState<{ id: string, orderId: string, size: string, val: string } | null>(null);
+  const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
+
+  const toggleItemExpanded = (sublotId: string, itemDesc: string) => {
+    const key = `${sublotId}_${itemDesc}`;
+    setExpandedItems(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
 
   const closeSizeModal = () => {
     setSizeModalData(null);
@@ -241,7 +427,7 @@ const DPSPlan: React.FC = () => {
     const toSl = newSublots.find(s => s.id === toId);
 
     if (toSl) {
-      const label = sizeLabelMap[binKey];
+      const label = sizeLabelMap[binKey] || binKey;
       const allocSize = binKey === 'Grade B (Co-Product)' ? 'Grade B' :
         binKey === 'Unsize / Other Grade A' ? 'unsize' : binKey;
       const relatedAllocations = toSl.allocations.filter(a => a.size === allocSize);
@@ -269,7 +455,12 @@ const DPSPlan: React.FC = () => {
     const sourceSl = { ...newSublots[sourceSlIndex] };
     const targetSl = sourceSublotId === targetSublotId ? sourceSl : { ...newSublots[targetSlIndex] };
 
-    const allocIndex = targetSl.allocations.findIndex(a => a.orderId === orderId && a.itemDesc === itemDesc && getSizeLabel(a.size) === sizeLabel);
+    const allocIndex = targetSl.allocations.findIndex(a => {
+      if (a.orderId !== orderId || a.itemDesc !== itemDesc) return false;
+      const sizeKey = sizeLabel === 'Grade B (Co-Product)' || sizeLabel === 'Grade B' ? 'Grade B' :
+        sizeLabel === 'Unsize / Other Grade A' || sizeLabel === 'unsize' ? 'unsize' : sizeLabel;
+      return a.size === sizeKey || getSizeLabel(a.size) === sizeLabel;
+    });
     if (allocIndex === -1) return;
 
     const alloc = { ...targetSl.allocations[allocIndex] };
@@ -293,6 +484,14 @@ const DPSPlan: React.FC = () => {
     }
     targetSl.allocations = newAllocations;
 
+    // Recalculate dynamic co-products/by-products for sourceSl and targetSl if not BIL
+    if (!isBil) {
+      computeYieldTreeSubproducts(sourceSl);
+      if (sourceSublotId !== targetSublotId) {
+        computeYieldTreeSubproducts(targetSl);
+      }
+    }
+
     newSublots[sourceSlIndex] = sourceSl;
     if (sourceSublotId !== targetSublotId) {
       newSublots[targetSlIndex] = targetSl;
@@ -313,9 +512,9 @@ const DPSPlan: React.FC = () => {
     if (sizeModalData) {
       const relatedAllocations = targetSl.allocations.filter(a => {
         const aLabel = getSizeLabel(a.size);
-        if (sizeModalData.sizeLabel === 'Unsize / Other Grade A') return aLabel === 'unsize' || !a.size;
-        if (sizeModalData.sizeLabel === 'Grade B (Co-Product)') return aLabel === 'Grade B';
-        return aLabel === sizeModalData.sizeLabel;
+        if (sizeModalData.sizeLabel === 'Unsize / Other Grade A' || sizeModalData.sizeLabel === 'unsize') return a.size === 'unsize' || !a.size;
+        if (sizeModalData.sizeLabel === 'Grade B (Co-Product)' || sizeModalData.sizeLabel === 'Grade B') return a.size === 'Grade B';
+        return a.size === sizeModalData.sizeLabel || aLabel === sizeModalData.sizeLabel;
       });
       setSizeModalData({
         ...sizeModalData,
@@ -368,6 +567,73 @@ const DPSPlan: React.FC = () => {
     setLoading(true);
     setIsGenerated(false);
     try {
+      // Fetch yield tree first so it's available for mapping
+      let parsedYieldTree: any[] = [];
+      const typeMap = new Map<string, string>();
+      try {
+        const yieldRes = await fetch(`${API}/api/master-yield`);
+        if (yieldRes.ok) {
+          parsedYieldTree = await yieldRes.json();
+          setYieldTree(parsedYieldTree);
+          const traverse = (nodes: any[]) => {
+            nodes.forEach(node => {
+              if (node.type) {
+                typeMap.set(node.id, node.type);
+              }
+              if (node.children) {
+                traverse(node.children);
+              }
+            });
+          };
+          traverse(parsedYieldTree);
+          setYieldNodeTypeMap(typeMap);
+        }
+      } catch (e) {
+        console.error("Error loading yield nodes in fetchData", e);
+      }
+
+      // Fetch specs next
+      const specMap: Record<string, any> = {};
+      try {
+        const specRes = await fetch(`${API}/api/product-spec`);
+        if (specRes.ok) {
+          const rawSpecs = await specRes.json();
+          setAvailableSpecs(rawSpecs);
+          rawSpecs.forEach((s: any) => {
+            specMap[s.erpItemCode] = { 
+              type: s.productType, 
+              size: s.productSize, 
+              productYield: Number(s.productYield || 1), 
+              productSpeed: Number(s.productSpeed || 1),
+              masterYieldIds: s.masterYieldIds,
+              erpItemDesc: s.erpItemDesc
+            };
+          });
+          setSpecsMap(specMap);
+        }
+      } catch (e) {
+        console.error("Error loading specs in fetchData", e);
+      }
+
+      // Determine category yield (e.g. 0.04 for fillet, 0.25 for bil)
+      const categoryName = isBil ? 'BIL L/C' : 'สันใน';
+      const categoryNode = parsedYieldTree.find(n => n.name === categoryName);
+      const categoryYield = categoryNode?.yieldPercentage ? Number(categoryNode.yieldPercentage) : (isBil ? 0.25 : 0.04);
+
+      // Get category subproducts (co-products and by-products under category node)
+      const categorySubproducts: any[] = [];
+      const traverseSubproducts = (node: any) => {
+        if (node.type === 'BY-PRODUCT' || node.type === 'CO-PRODUCT') {
+          categorySubproducts.push(node);
+        }
+        if (node.children) {
+          node.children.forEach(traverseSubproducts);
+        }
+      };
+      if (categoryNode && categoryNode.children) {
+        categoryNode.children.forEach(traverseSubproducts);
+      }
+
       let hasDbPlan = false;
       const dpsRes = await fetch(`${API}/api/dps/${targetDate}?partType=${partId || 'fillet'}`);
       if (dpsRes.ok) {
@@ -391,19 +657,41 @@ const DPSPlan: React.FC = () => {
             const slAllocs = dbPlan.data.allocations.filter((a: any) => a.sourceBin?.sublot?.id === s.id).map((a: any) => ({
               orderId: `L-${a.targetOrder.erpOrderLineId}`,
               itemDesc: a.targetOrder.itemDesc,
-              size: a.sourceBin.sizeLabel,
+              size: a.sourceBin?.sizeLabel || a.sizeLabel || 'Grade B',
               qty: a.allocatedKg
             }));
 
             const avgLiveWeight = s.avgLiveWeight || (s.totalBirds ? s.totalWeightKg / s.totalBirds : 0);
             const slaughteredWeight = (s.totalWeightKg * 0.9575) * 0.95;
-            const rmFlTotal = slaughteredWeight * 0.04;
-            const rmFlGradeB = rmFlTotal * 0.093;
-            const netFillet = rmFlTotal - rmFlGradeB;
+            const rmFlTotal = slaughteredWeight * categoryYield;
+
+            // Sum up subproduct initial quantities
+            let totalSubproductsWeight = 0;
+            let mainCoproductWeight = 0;
+
+            if (!isBil) {
+              categorySubproducts.forEach(subprod => {
+                const pct = Number(subprod.yieldPercentage || 0);
+                const subprodKg = Number((rmFlTotal * pct).toFixed(1));
+                totalSubproductsWeight += subprodKg;
+
+                if (subprod.type === 'CO-PRODUCT' && mainCoproductWeight === 0) {
+                  mainCoproductWeight = subprodKg;
+                }
+              });
+
+              if (mainCoproductWeight === 0) {
+                mainCoproductWeight = rmFlTotal * 0.093; // Fallback
+                totalSubproductsWeight = mainCoproductWeight;
+              }
+            }
+
+            const netFillet = rmFlTotal - totalSubproductsWeight;
 
             const initialBinsObj: Record<string, number> = { ...binsObj };
             slAllocs.forEach((a: any) => {
-              if (a.size !== 'Grade B') {
+              const isCoProductOrByProduct = typeMap.get(a.size) === 'CO-PRODUCT' || typeMap.get(a.size) === 'BY-PRODUCT' || a.size === 'Grade B';
+              if (!isCoProductOrByProduct) {
                 initialBinsObj[a.size] = (initialBinsObj[a.size] || 0) + a.qty;
               }
             });
@@ -419,7 +707,7 @@ const DPSPlan: React.FC = () => {
               allocations: slAllocs,
               initialTotalFg: netFillet,
               initialBins: initialBinsObj,
-              initialCoProductKg: rmFlGradeB,
+              initialCoProductKg: mainCoproductWeight,
               slaughteredWeight,
               rmFlTotal,
               shift: s.shift || 'A'
@@ -434,11 +722,12 @@ const DPSPlan: React.FC = () => {
         }
       }
 
-      const [intakeRes, orderRes, specRes, wdRes, erpItemsRes] = await Promise.all([
+      const matrixUrl = isBil ? `${API}/api/bil-weight-distribution` : `${API}/api/weight-distribution`;
+
+      const [intakeRes, orderRes, wdRes, erpItemsRes] = await Promise.all([
         fetch(`${API}/api/chicken-receiving/daily`),
         fetch(`${API}/api/mps/approved-orders/${targetDate}`),
-        fetch(`${API}/api/product-spec`),
-        fetch(`${API}/api/weight-distribution`),
+        fetch(matrixUrl),
         fetch(`${API}/api/product-spec/erp-items`)
       ]);
 
@@ -447,16 +736,7 @@ const DPSPlan: React.FC = () => {
       if (wdRes.ok) {
         const d = await wdRes.json();
         loadedMatrix = { rows: d.rowLabels, cols: d.colLabels, data: d.matrix };
-      }
-
-      // 2. Load Specs & ERP Items
-      const specMap: Record<string, any> = {};
-      if (specRes.ok) {
-        const rawSpecs = await specRes.json();
-        setAvailableSpecs(rawSpecs);
-        rawSpecs.forEach((s: any) => {
-          specMap[s.erpItemCode] = { type: s.productType, size: s.productSize };
-        });
+        setSizeColumns(d.colLabels || []);
       }
 
       const erpItemsMap: Record<string, string> = {};
@@ -474,18 +754,15 @@ const DPSPlan: React.FC = () => {
         const dailyIntakes = rawIntake.filter((r: any) => {
           if (!r.receive_date) return false;
 
-          // 1. Extract Date components (YYYY-MM-DD)
           const datePart = String(r.receive_date).split('T')[0];
           const dateParts = datePart.split('-');
           let y = parseInt(dateParts[0]);
           let m = parseInt(dateParts[1]);
           let d = parseInt(dateParts[2]);
 
-          // 2. Extract Hour from separate receive_time column (e.g., "00:16:00")
           const timePart = String(r.receive_time || '00:00:00');
           const hh = parseInt(timePart.split(':')[0] || '0');
 
-          // 3. Cutoff logic: If before 03:00 AM, it belongs to the previous production day
           if (hh < 3) {
             const dt = new Date(y, m - 1, d);
             dt.setDate(dt.getDate() - 1);
@@ -500,7 +777,6 @@ const DPSPlan: React.FC = () => {
 
         const groupedBySublot: Record<string, any> = {};
         dailyIntakes.forEach((r: any, idx: number) => {
-          // Normalize sublotId: trim whitespace and ensure string
           const rawSublot = r.sublot !== null && r.sublot !== undefined ? String(r.sublot).trim() : '';
           const sublotId = rawSublot || `SL-${idx + 1}`;
 
@@ -521,21 +797,57 @@ const DPSPlan: React.FC = () => {
           if (grp.totalBirds === 0) return;
 
           const avgLiveWeight = grp.totalWeightKg / grp.totalBirds;
-          // Slaughtered = (Total Weight - 4.25%) * 95% (Align with MPS)
           const slaughteredWeight = (grp.totalWeightKg * 0.9575) * 0.95;
-          const rmFlTotal = slaughteredWeight * 0.04;
-          const rmFlGradeB = rmFlTotal * 0.093;
-          const netFillet = rmFlTotal - rmFlGradeB;
+          const rmFlTotal = slaughteredWeight * categoryYield;
+
+          // Get subproduct node specs
+          const bins: Record<string, number> = {};
+          let totalSubproductsWeight = 0;
+          let mainCoproductWeight = 0;
+
+          if (!isBil) {
+            categorySubproducts.forEach(subprod => {
+              const pct = Number(subprod.yieldPercentage || 0);
+              const subprodKg = Number((rmFlTotal * pct).toFixed(1));
+              bins[subprod.id] = subprodKg;
+              totalSubproductsWeight += subprodKg;
+
+              if (subprod.type === 'CO-PRODUCT' && mainCoproductWeight === 0) {
+                mainCoproductWeight = subprodKg;
+              }
+            });
+
+            if (mainCoproductWeight === 0) {
+              mainCoproductWeight = rmFlTotal * 0.093; // Fallback
+              totalSubproductsWeight += mainCoproductWeight;
+            }
+          }
+
+          const netFillet = rmFlTotal - totalSubproductsWeight;
 
           let matchRow = null;
           if (loadedMatrix && loadedMatrix.rows.length > 0) {
-            matchRow = loadedMatrix.rows.reduce((prev: string, curr: string) =>
-              Math.abs(Number(curr) - avgLiveWeight) < Math.abs(Number(prev) - avgLiveWeight) ? curr : prev
-            );
+            matchRow = loadedMatrix.rows.find((rowLabel: string) => {
+              if (rowLabel.includes('-')) {
+                const parts = rowLabel.split('-').map(s => parseFloat(s.trim()));
+                return avgLiveWeight >= parts[0] && avgLiveWeight <= parts[1];
+              }
+              return Math.abs(Number(rowLabel) - avgLiveWeight) < 0.05;
+            });
+            // Fallback to closest if no exact range match
+            if (!matchRow) {
+              matchRow = loadedMatrix.rows.reduce((prev: string, curr: string) => {
+                const parseVal = (s: string) => {
+                  if (s.includes('-')) {
+                    const parts = s.split('-').map(p => parseFloat(p.trim()));
+                    return (parts[0] + parts[1]) / 2;
+                  }
+                  return Number(s);
+                };
+                return Math.abs(parseVal(curr) - avgLiveWeight) < Math.abs(parseVal(prev) - avgLiveWeight) ? curr : prev;
+              });
+            }
           }
-
-          const bins: Record<string, number> = {};
-          let allocatedSum = 0;
 
           const getBinKey = (grams: number): string => {
             if (grams < 40) return '1';
@@ -549,7 +861,6 @@ const DPSPlan: React.FC = () => {
           };
 
           if (matchRow && loadedMatrix) {
-            // Calculate total row percentage for normalization
             const rowData = loadedMatrix.data[matchRow] || {};
             const totalRowPct = Object.values(rowData).reduce((sum: number, v: any) => sum + Number(v || 0), 0);
 
@@ -557,21 +868,19 @@ const DPSPlan: React.FC = () => {
               let pct = Number(loadedMatrix.data[matchRow]?.[colLabel] || 0);
               if (pct === 0) return;
 
-              // Normalize to 100% so that the sum of bins always matches netFillet
               if (totalRowPct > 0) {
                 pct = (pct / totalRowPct) * 100;
               }
 
-              // Calculate Fillet Piece Size (Grams) = (Bird Weight * 4% * 1000) / 2
-              const birdWeight = Number(colLabel);
-              const pieceSizeGrams = (birdWeight * 0.04 * 1000) / 2;
+              let binKey = colLabel;
+              if (!isBil) {
+                const birdWeight = Number(colLabel);
+                const pieceSizeGrams = (birdWeight * categoryYield * 1000) / 2;
+                binKey = getBinKey(pieceSizeGrams);
+              }
 
-              // Map to one of the 8 size bins
-              const binKey = getBinKey(pieceSizeGrams);
-
-              const weightForThisBin = Number((netFillet * pct).toFixed(1));
+              const weightForThisBin = Number((netFillet * (pct / 100)).toFixed(1));
               bins[binKey] = Number(((bins[binKey] || 0) + weightForThisBin).toFixed(1));
-              allocatedSum += weightForThisBin;
             });
           }
 
@@ -587,8 +896,8 @@ const DPSPlan: React.FC = () => {
             rmFlTotal,
             initialBins: { ...bins },
             bins: { ...bins },
-            initialCoProductKg: rmFlGradeB,
-            coProductKg: Number(rmFlGradeB.toFixed(1)),
+            initialCoProductKg: mainCoproductWeight,
+            coProductKg: Number(mainCoproductWeight.toFixed(1)),
             shift: grp.shift,
             allocations: [],
             initialTotalFg
@@ -656,9 +965,10 @@ const DPSPlan: React.FC = () => {
         return a.itemCode.localeCompare(b.itemCode);
       });
 
+      // Pass 1: Allocate standard sized MAIN product orders
       initialOrders.forEach(order => {
-        if (order.size !== 'unsize' && order.unfulfilledKg > 0) {
-          const targetBins = getMatchingBins(order.size);
+        if (order.size !== 'unsize' && getProductType(order.itemCode) === 'main' && order.unfulfilledKg > 0) {
+          const targetBins = getMatchingBins(order.size, isBil);
           loadedSublots.forEach(sl => {
             targetBins.forEach(binSize => {
               const avail = sl.bins[binSize] || 0;
@@ -675,10 +985,15 @@ const DPSPlan: React.FC = () => {
         }
       });
 
+      // Pass 2: Allocate unsized MAIN product orders
       initialOrders.forEach(order => {
-        if (order.size === 'unsize' && order.unfulfilledKg > 0) {
+        if (order.size === 'unsize' && getProductType(order.itemCode) === 'main' && order.unfulfilledKg > 0) {
           loadedSublots.forEach(sl => {
             Object.keys(sl.bins).forEach(binSize => {
+              // Exclude yield nodes that are co-products or by-products from standard unsize allocation
+              const isYieldSubproduct = yieldNodeTypeMap.has(binSize);
+              if (isYieldSubproduct) return;
+
               const avail = sl.bins[binSize] || 0;
               if (avail > 0 && order.unfulfilledKg > 0) {
                 const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
@@ -693,20 +1008,60 @@ const DPSPlan: React.FC = () => {
         }
       });
 
+      // Calculate dynamic Co-Product and By-Product supply based on main product allocations
+      loadedSublots.forEach(sl => {
+        computeYieldTreeSubproducts(sl);
+      });
+
+      // Pass 3: Allocate Co-Product & By-Product orders from dynamic yield bins or fallback coProductKg
       initialOrders.forEach(order => {
-        // Match dynamically based on Product Spec configuration
-        if ((order.size === 'Grade B' || order.type === 'co-product') && order.unfulfilledKg > 0) {
-          loadedSublots.forEach(sl => {
-            const avail = sl.coProductKg || 0;
-            if (avail > 0 && order.unfulfilledKg > 0) {
-              const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
-              if (take <= 0) return;
-              sl.coProductKg = Number((sl.coProductKg - take).toFixed(1));
-              order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
-              order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
-              sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: 'Grade B', qty: take });
+        const prodType = getProductType(order.itemCode);
+        if ((prodType === 'coproduct' || prodType === 'byproduct') && order.unfulfilledKg > 0) {
+          const spec = specsMap[order.itemCode];
+          const bpIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()).filter((id: any) => id) : [];
+          
+          if (bpIds.length > 0) {
+            loadedSublots.forEach(sl => {
+              bpIds.forEach((bpId: string) => {
+                let avail = sl.bins[bpId] || 0;
+                const isGradeB = order.size === 'Grade B' || order.itemDesc.includes('เกรด B') || order.itemDesc.includes('Grade B');
+                if (isGradeB && avail === 0 && sl.coProductKg > 0) {
+                  avail = sl.coProductKg;
+                }
+                
+                if (avail > 0 && order.unfulfilledKg > 0) {
+                  const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
+                  if (take <= 0) return;
+                  
+                  if (sl.bins[bpId] !== undefined) {
+                    sl.bins[bpId] = Number((sl.bins[bpId] - take).toFixed(1));
+                  } else if (isGradeB) {
+                    sl.coProductKg = Number((sl.coProductKg - take).toFixed(1));
+                  }
+                  
+                  order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
+                  order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
+                  sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: bpId, qty: take });
+                }
+              });
+            });
+          } else {
+            // Fallback for Grade B if no masterYieldIds mapped yet
+            const isGradeB = order.size === 'Grade B' || order.itemDesc.includes('เกรด B') || order.itemDesc.includes('Grade B');
+            if (isGradeB) {
+              loadedSublots.forEach(sl => {
+                const avail = sl.coProductKg || 0;
+                if (avail > 0 && order.unfulfilledKg > 0) {
+                  const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
+                  if (take <= 0) return;
+                  sl.coProductKg = Number((sl.coProductKg - take).toFixed(1));
+                  order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
+                  order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
+                  sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: 'Grade B', qty: take });
+                }
+              });
             }
-          });
+          }
         }
       });
 
@@ -801,9 +1156,10 @@ const DPSPlan: React.FC = () => {
         return a.itemCode.localeCompare(b.itemCode);
       });
 
+      // Pass 1: Allocate standard sized MAIN product orders
       freshOrders.forEach(order => {
-        if (order.size !== 'unsize' && order.unfulfilledKg > 0) {
-          const targetBins = getMatchingBins(order.size);
+        if (order.size !== 'unsize' && getProductType(order.itemCode) === 'main' && order.unfulfilledKg > 0) {
+          const targetBins = getMatchingBins(order.size, isBil);
           freshSublots.forEach(sl => {
             targetBins.forEach(binSize => {
               const avail = sl.bins[binSize] || 0;
@@ -820,10 +1176,14 @@ const DPSPlan: React.FC = () => {
         }
       });
 
+      // Pass 2: Allocate unsized MAIN product orders
       freshOrders.forEach(order => {
-        if (order.size === 'unsize' && order.unfulfilledKg > 0) {
+        if (order.size === 'unsize' && getProductType(order.itemCode) === 'main' && order.unfulfilledKg > 0) {
           freshSublots.forEach(sl => {
             Object.keys(sl.bins).forEach(binSize => {
+              const isYieldSubproduct = yieldNodeTypeMap.has(binSize);
+              if (isYieldSubproduct) return;
+
               const avail = sl.bins[binSize] || 0;
               if (avail > 0 && order.unfulfilledKg > 0) {
                 const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
@@ -838,19 +1198,60 @@ const DPSPlan: React.FC = () => {
         }
       });
 
+      // Calculate dynamic Co-Product and By-Product supply based on main product allocations
+      freshSublots.forEach(sl => {
+        computeYieldTreeSubproducts(sl);
+      });
+
+      // Pass 3: Allocate Co-Product & By-Product orders from dynamic yield bins or fallback coProductKg
       freshOrders.forEach(order => {
-        if ((order.size === 'Grade B' || order.type === 'co-product') && order.unfulfilledKg > 0) {
-          freshSublots.forEach(sl => {
-            const avail = sl.coProductKg || 0;
-            if (avail > 0 && order.unfulfilledKg > 0) {
-              const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
-              if (take <= 0) return;
-              sl.coProductKg = Number((sl.coProductKg - take).toFixed(1));
-              order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
-              order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
-              sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: 'Grade B', qty: take });
+        const prodType = getProductType(order.itemCode);
+        if ((prodType === 'coproduct' || prodType === 'byproduct') && order.unfulfilledKg > 0) {
+          const spec = specsMap[order.itemCode];
+          const bpIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()).filter((id: any) => id) : [];
+          
+          if (bpIds.length > 0) {
+            freshSublots.forEach(sl => {
+              bpIds.forEach((bpId: string) => {
+                let avail = sl.bins[bpId] || 0;
+                const isGradeB = order.size === 'Grade B' || order.itemDesc.includes('เกรด B') || order.itemDesc.includes('Grade B');
+                if (isGradeB && avail === 0 && sl.coProductKg > 0) {
+                  avail = sl.coProductKg;
+                }
+                
+                if (avail > 0 && order.unfulfilledKg > 0) {
+                  const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
+                  if (take <= 0) return;
+                  
+                  if (sl.bins[bpId] !== undefined) {
+                    sl.bins[bpId] = Number((sl.bins[bpId] - take).toFixed(1));
+                  } else if (isGradeB) {
+                    sl.coProductKg = Number((sl.coProductKg - take).toFixed(1));
+                  }
+                  
+                  order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
+                  order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
+                  sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: bpId, qty: take });
+                }
+              });
+            });
+          } else {
+            // Fallback for Grade B
+            const isGradeB = order.size === 'Grade B' || order.itemDesc.includes('เกรด B') || order.itemDesc.includes('Grade B');
+            if (isGradeB) {
+              freshSublots.forEach(sl => {
+                const avail = sl.coProductKg || 0;
+                if (avail > 0 && order.unfulfilledKg > 0) {
+                  const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
+                  if (take <= 0) return;
+                  sl.coProductKg = Number((sl.coProductKg - take).toFixed(1));
+                  order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
+                  order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
+                  sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: 'Grade B', qty: take });
+                }
+              });
             }
-          });
+          }
         }
       });
 
@@ -878,6 +1279,7 @@ const DPSPlan: React.FC = () => {
       const shift = sl.shift || 'A';
       sl.allocations.forEach(alloc => {
         const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
+        if (getProductType(itemCodeMatch) !== 'main') return;
         const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
         const speed = spec?.productSpeed;
 
@@ -896,6 +1298,10 @@ const DPSPlan: React.FC = () => {
   };
 
   const manpower = calculateManpower();
+
+  const activeSizes = isBil
+    ? sizeColumns.map(col => ({ key: col, label: col }))
+    : Object.keys(sizeLabelMap).map(k => ({ key: k, label: sizeLabelMap[k] }));
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-6 bg-[#f8fafc] min-h-screen font-sans">
@@ -1083,6 +1489,7 @@ const DPSPlan: React.FC = () => {
                   let slHours = 0;
                   sl.allocations.forEach(alloc => {
                     const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
+                    if (getProductType(itemCodeMatch) !== 'main') return;
                     const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
                     const speed = spec?.productSpeed;
                     if (speed && speed > 0) {
@@ -1186,19 +1593,148 @@ const DPSPlan: React.FC = () => {
                             </div>
                           ) : (
                             <div className="space-y-3">
-                              {sl.allocations.map((a, i) => (
-                                <div key={i} className="flex items-center p-3 bg-green-50/50 border border-green-100 rounded-xl gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-bold text-gray-800 truncate" title={a.itemDesc}>{a.itemDesc}</p>
-                                    <p className="text-[10px] text-gray-500 mt-0.5">Matched Size: <span className="font-bold text-indigo-600">{getSizeLabel(a.size)}</span></p>
-                                  </div>
-                                  <div className="shrink-0">
-                                    <span className="font-black text-green-600 bg-white px-2 py-1 rounded-md shadow-sm border border-green-50 whitespace-nowrap text-sm">
-                                      +{a.qty.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-[10px]">kg</span>
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
+                              {(() => {
+                                const groupedAllocations: Record<string, {
+                                  itemDesc: string;
+                                  totalQty: number;
+                                  allocations: typeof sl.allocations;
+                                }> = {};
+
+                                sl.allocations.forEach(a => {
+                                  if (!groupedAllocations[a.itemDesc]) {
+                                    groupedAllocations[a.itemDesc] = {
+                                      itemDesc: a.itemDesc,
+                                      totalQty: 0,
+                                      allocations: []
+                                    };
+                                  }
+                                  groupedAllocations[a.itemDesc].totalQty = Number((groupedAllocations[a.itemDesc].totalQty + a.qty).toFixed(1));
+                                  groupedAllocations[a.itemDesc].allocations.push(a);
+                                });
+
+                                const groupedList = Object.values(groupedAllocations);
+
+                                return groupedList.map(({ itemDesc, totalQty, allocations: itemAllocs }) => {
+                                  const isExpanded = !!expandedItems[`${sl.id}_${itemDesc}`];
+                                  return (
+                                    <div key={itemDesc} className="bg-white border border-gray-100 rounded-2xl shadow-sm hover:border-gray-200 transition-all overflow-hidden">
+                                      {/* Accordion Header */}
+                                      <div 
+                                        onClick={() => toggleItemExpanded(sl.id, itemDesc)} 
+                                        className="flex items-center justify-between p-3.5 cursor-pointer hover:bg-gray-50/50 transition-colors"
+                                      >
+                                        <div className="flex-1 min-w-0 pr-4">
+                                          <p className="text-xs font-bold text-gray-800 truncate" title={itemDesc}>{itemDesc}</p>
+                                          <p className="text-[10px] text-gray-400 font-medium mt-0.5">{itemAllocs.length} sizes allocated</p>
+                                        </div>
+                                        <div className="flex items-center gap-3 shrink-0">
+                                          <span className="font-black text-green-700 bg-green-50 px-2.5 py-1 rounded-lg border border-green-100 text-xs shadow-sm whitespace-nowrap">
+                                            +{totalQty.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                                          </span>
+                                          <ChevronDown size={16} className={`text-gray-400 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                                        </div>
+                                      </div>
+
+                                      {/* Accordion Content (Breakdown by Size with CRUD) */}
+                                      {isExpanded && (
+                                        <div className="border-t border-gray-50 bg-gray-50/30 p-3 space-y-2">
+                                          {itemAllocs.map((a, idx) => {
+                                            const isEditing = editingAlloc?.id === sl.id && editingAlloc?.orderId === a.orderId && editingAlloc?.size === a.size;
+                                            return (
+                                              <div key={idx} className="flex justify-between items-center p-2.5 bg-white border border-gray-100 rounded-xl shadow-xs gap-2">
+                                                <div className="flex-1 min-w-0">
+                                                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Matched Size</p>
+                                                  <p className="text-[11px] font-black text-indigo-600 mt-0.5 truncate">{getDisplayLabel(a.size)}</p>
+                                                </div>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                  {isEditing ? (
+                                                    <div className="flex items-center gap-1">
+                                                      <input
+                                                        type="number"
+                                                        step="any"
+                                                        className="w-20 text-xs font-black text-blue-600 border border-blue-300 rounded px-1.5 py-0.5 text-right focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                        value={editingAlloc.val}
+                                                        onChange={(e) => setEditingAlloc({ ...editingAlloc, val: e.target.value })}
+                                                        autoFocus
+                                                      />
+                                                      <button 
+                                                        onClick={() => handleUpdateAllocation(sl.id, sl.id, a.orderId, a.itemDesc, a.size, editingAlloc.val)} 
+                                                        className="p-1 bg-green-100 text-green-600 rounded hover:bg-green-200"
+                                                      >
+                                                        <Check size={12} />
+                                                      </button>
+                                                      <button 
+                                                        onClick={() => setEditingAlloc(null)} 
+                                                        className="p-1 bg-gray-100 text-gray-600 rounded hover:bg-gray-200"
+                                                      >
+                                                        <X size={12} />
+                                                      </button>
+                                                    </div>
+                                                  ) : (
+                                                    <div className="flex items-center gap-2">
+                                                      {/* Qty label */}
+                                                      <span className="font-extrabold text-[11px] text-blue-700 bg-blue-50/50 px-2 py-0.5 rounded border border-blue-100/50 whitespace-nowrap">
+                                                        {a.qty.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                                                      </span>
+
+                                                      {/* Actions */}
+                                                      <div className="flex items-center gap-0.5">
+                                                        {/* Quick +10kg adjust */}
+                                                        <button 
+                                                          onClick={() => {
+                                                            const newQty = Number((a.qty + 10).toFixed(1));
+                                                            handleUpdateAllocation(sl.id, sl.id, a.orderId, a.itemDesc, a.size, newQty.toString());
+                                                          }} 
+                                                          className="px-1 py-0.5 text-[9px] font-bold text-green-600 hover:bg-green-50 rounded transition-colors"
+                                                          title="Quick +10 kg"
+                                                        >
+                                                          +10
+                                                        </button>
+
+                                                        {/* Quick -10kg adjust */}
+                                                        <button 
+                                                          onClick={() => {
+                                                            const newQty = Math.max(0, Number((a.qty - 10).toFixed(1)));
+                                                            handleUpdateAllocation(sl.id, sl.id, a.orderId, a.itemDesc, a.size, newQty.toString());
+                                                          }} 
+                                                          className="px-1 py-0.5 text-[9px] font-bold text-red-500 hover:bg-red-50 rounded transition-colors"
+                                                          title="Quick -10 kg"
+                                                        >
+                                                          -10
+                                                        </button>
+
+                                                        {/* Manual edit */}
+                                                        <button 
+                                                          onClick={() => setEditingAlloc({ id: sl.id, orderId: a.orderId, size: a.size, val: Number(a.qty.toFixed(1)).toString() })} 
+                                                          className="p-1 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors"
+                                                        >
+                                                          <Edit2 size={12} />
+                                                        </button>
+
+                                                        {/* Delete allocation */}
+                                                        <button 
+                                                          onClick={() => {
+                                                            if (window.confirm(`Remove ${a.qty} kg of ${getDisplayLabel(a.size)} allocation for this order?`)) {
+                                                              handleUpdateAllocation(sl.id, sl.id, a.orderId, a.itemDesc, a.size, "0");
+                                                            }
+                                                          }} 
+                                                          className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                                        >
+                                                          <Trash2 size={12} />
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                });
+                              })()}
                             </div>
                           )}
                         </div>
@@ -1206,15 +1742,14 @@ const DPSPlan: React.FC = () => {
                         {/* Far Right: Remaining Yields */}
                         <div className="w-full xl:w-2/3 p-6 bg-gray-50/30">
                           <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2 mb-4">
-                            <Package size={14} /> Remaining Fillet Size
+                            <Package size={14} /> Remaining {isBil ? 'BIL' : 'Fillet'} Size
                           </h4>
 
                           <div className="space-y-4">
                             {/* All Standard Sizes Grid */}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                              {Object.keys(sizeLabelMap).map((szKey) => {
+                              {activeSizes.map(({ key: szKey, label }) => {
                                 const q = sl.bins[szKey] || 0;
-                                const label = sizeLabelMap[szKey];
                                 const color = getSizeColor(szKey);
                                 const totalInBins = Object.values(sl.bins).reduce((a, b) => a + b, 0);
                                 const pct = totalInBins > 0 ? (q / totalInBins) * 100 : 0;
@@ -1236,22 +1771,70 @@ const DPSPlan: React.FC = () => {
                               })}
                             </div>
 
-                            {/* Remaining Unsize & Co-Product */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                            {/* Remaining Co-Products & By-Products */}
+                            {(() => {
+                              const groupedSubproducts: Record<string, { label: string; nodeIds: string[]; q: number; nodeType: string }> = {};
 
+                              Object.entries(sl.bins).forEach(([k, v]) => {
+                                const type = yieldNodeTypeMap.get(k);
+                                if (type === 'CO-PRODUCT' || type === 'BY-PRODUCT') {
+                                  const label = getDisplayLabel(k);
+                                  if (!groupedSubproducts[label]) {
+                                    groupedSubproducts[label] = {
+                                      label,
+                                      nodeIds: [],
+                                      q: 0,
+                                      nodeType: type
+                                    };
+                                  }
+                                  groupedSubproducts[label].nodeIds.push(k);
+                                  groupedSubproducts[label].q = Number((groupedSubproducts[label].q + v).toFixed(1));
+                                }
+                              });
 
-                              {sl.coProductKg > 0 && (
-                                <div onClick={() => openSizeModal(sl, 'Grade B (Co-Product)', sl.coProductKg)} className="p-3 bg-orange-50 border border-orange-100 rounded-2xl flex justify-between items-center shadow-sm cursor-pointer hover:border-orange-300 hover:shadow-md transition-all">
-                                  <div>
-                                    <p className="text-[9px] text-orange-400 font-bold uppercase tracking-wider">Grade B (Co-Product)</p>
-                                    <p className="text-base font-black text-orange-800">{Math.round(sl.coProductKg).toLocaleString()} <span className="text-xs font-medium opacity-60">kg</span></p>
-                                  </div>
-                                  <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-500">
-                                    <Package size={16} />
-                                  </div>
+                              const dynamicSubproductsList = Object.values(groupedSubproducts);
+
+                              const hasGradeB = dynamicSubproductsList.some(({ label }) => label.includes('Grade B') || label.includes('เกรด B'));
+                              if (sl.coProductKg > 0 && !hasGradeB) {
+                                dynamicSubproductsList.push({
+                                  label: 'Grade B (Co-Product)',
+                                  nodeIds: ['Grade B'],
+                                  q: sl.coProductKg,
+                                  nodeType: 'CO-PRODUCT'
+                                });
+                              }
+
+                              // Sort so CO-PRODUCT is first!
+                              dynamicSubproductsList.sort((a, b) => {
+                                if (a.nodeType === 'CO-PRODUCT' && b.nodeType !== 'CO-PRODUCT') return -1;
+                                if (a.nodeType !== 'CO-PRODUCT' && b.nodeType === 'CO-PRODUCT') return 1;
+                                return 0;
+                              });
+
+                              return (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
+                                  {dynamicSubproductsList.map(({ label, nodeIds, q, nodeType }) => {
+                                    const isCoProd = nodeType === 'CO-PRODUCT';
+                                    const bgColor = isCoProd ? 'bg-purple-50/50 border-purple-100 hover:border-purple-300' : 'bg-amber-50/50 border-amber-100 hover:border-amber-300';
+                                    const textColor = isCoProd ? 'text-purple-800' : 'text-amber-800';
+                                    const labelColor = isCoProd ? 'text-purple-400' : 'text-amber-400';
+                                    const iconColor = isCoProd ? 'bg-purple-100 text-purple-500' : 'bg-amber-100 text-amber-500';
+
+                                    return (
+                                      <div key={label} onClick={() => openSizeModal(sl, nodeIds.join(','), q)} className={`p-4 border rounded-2xl flex justify-between items-center shadow-sm cursor-pointer transition-all hover:shadow-md ${bgColor}`}>
+                                        <div>
+                                          <p className={`text-[10px] font-bold uppercase tracking-wider ${labelColor}`}>{label} ({nodeType})</p>
+                                          <p className={`text-base font-black ${textColor}`}>{q.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-xs font-medium opacity-60">kg</span></p>
+                                        </div>
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${iconColor}`}>
+                                          <Package size={16} />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
-                              )}
-                            </div>
+                              );
+                            })()}
 
                             {/* NEW LEFTOVERS SECTION */}
                             {(() => {
@@ -1276,7 +1859,7 @@ const DPSPlan: React.FC = () => {
                                   </h4>
                                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                                     {availableLeftovers.map((leftover, idx) => {
-                                      const label = sizeLabelMap[leftover.binKey];
+                                      const label = getDisplayLabel(leftover.binKey);
                                       return (
                                         <div key={idx} onClick={() => handlePullLeftoverAndOpenModal(leftover.fromId, sl.id, leftover.binKey, leftover.qty)} className="bg-indigo-50/30 border border-indigo-100 shadow-sm p-3 rounded-2xl transition-all cursor-pointer hover:border-indigo-300 hover:shadow-md hover:bg-indigo-50 relative overflow-hidden group">
                                           <div className="absolute top-0 right-0 bg-indigo-100 text-indigo-600 text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
@@ -1389,7 +1972,7 @@ const DPSPlan: React.FC = () => {
               <div>
                 <h3 className="text-xl font-black text-gray-900 flex items-center gap-2">
                   <Package className="text-blue-500" />
-                  {sizeModalData.sizeLabel} Details
+                  {getDisplayLabel(sizeModalData.sizeLabel)} Details
                 </h3>
                 <p className="text-sm font-bold text-gray-500 mt-1">Sublot {sizeModalData.sublotId}</p>
               </div>
@@ -1434,13 +2017,22 @@ const DPSPlan: React.FC = () => {
                     {(() => {
                       const isMatch = (o: Order) => {
                         const modalSize = sizeModalData.sizeLabel;
-                        if (modalSize === 'Grade B (Co-Product)') return o.size === 'Grade B' || o.type === 'co-product';
-                        if (modalSize === 'Unsize / Other Grade A') return o.size === 'unsize' || !o.size;
+                        if (modalSize === 'Grade B (Co-Product)' || modalSize === 'Grade B') {
+                          return o.size === 'Grade B' || o.type === 'co-product' || getProductType(o.itemCode) === 'coproduct';
+                        }
+                        if (modalSize === 'Unsize / Other Grade A' || modalSize === 'unsize') {
+                          return o.size === 'unsize' || !o.size;
+                        }
+                        
+                        // Check if it matches a specific yield node ID
+                        const spec = specsMap[o.itemCode];
+                        const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim()).find((id: any) => id === modalSize);
+                        if (bpId) return true;
+                        
                         return o.size === modalSize;
                       };
                       const matchingUnfulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg > 0);
-                      const otherUnfulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg > 0);
-                      const fulfilled = orders.filter(o => o.unfulfilledKg <= 0);
+                      const matchingFulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg <= 0);
 
                       return (
                         <>
@@ -1453,23 +2045,17 @@ const DPSPlan: React.FC = () => {
                               ))}
                             </optgroup>
                           )}
-                          {otherUnfulfilled.length > 0 && (
-                            <optgroup label="Other Unfulfilled Orders">
-                              {otherUnfulfilled.map(o => (
-                                <option key={o.id} value={o.id}>
-                                  {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {fulfilled.length > 0 && (
-                            <optgroup label="Fully Fulfilled Orders">
-                              {fulfilled.map(o => (
+                          {matchingFulfilled.length > 0 && (
+                            <optgroup label="Requires This Size (Fulfilled)">
+                              {matchingFulfilled.map(o => (
                                 <option key={o.id} value={o.id}>
                                   {o.id} - {o.itemDesc}
                                 </option>
                               ))}
                             </optgroup>
+                          )}
+                          {matchingUnfulfilled.length === 0 && matchingFulfilled.length === 0 && (
+                            <option disabled>No matching orders for this size</option>
                           )}
                         </>
                       );
@@ -1484,7 +2070,7 @@ const DPSPlan: React.FC = () => {
                 ) : (
                   <div className="space-y-2">
                     {sizeModalData.allocations.map((a, i) => {
-                      const isEditing = editingAlloc?.id === sizeModalData.sublotId && editingAlloc?.orderId === a.orderId;
+                      const isEditing = editingAlloc?.id === sizeModalData.sublotId && editingAlloc?.orderId === a.orderId && editingAlloc?.size === a.size;
                       return (
                         <div key={i} className="flex justify-between items-center p-3 bg-white border border-gray-100 shadow-sm rounded-xl hover:border-blue-200 transition-colors">
                           <div className="flex-1 min-w-0 pr-4">
@@ -1511,7 +2097,7 @@ const DPSPlan: React.FC = () => {
                             ) : (
                               <>
                                 <p className="text-sm font-black text-blue-600">+{a.qty.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</p>
-                                <button onClick={() => setEditingAlloc({ id: sizeModalData.sublotId, orderId: a.orderId, val: Number(a.qty.toFixed(1)).toString() })} className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors">
+                                <button onClick={() => setEditingAlloc({ id: sizeModalData.sublotId, orderId: a.orderId, size: a.size, val: Number(a.qty.toFixed(1)).toString() })} className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors">
                                   <Edit2 size={14} />
                                 </button>
                               </>
