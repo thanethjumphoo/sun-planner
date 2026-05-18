@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Put, Body, Param, Query } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like } from 'typeorm';
+import { Repository, Like, In } from 'typeorm';
 import { ProductSpec } from './product-spec.entity';
 import { StgErpItem } from './stg-erp-item.entity';
 
@@ -249,8 +249,8 @@ export class ProductSpecController {
   async assignMasterYield(@Body() body: { specIds: number[], masterYieldId: string | null }) {
     if (!body.specIds || body.specIds.length === 0) return { success: true };
     
-    // Fetch all specs to update
-    const specs = await this.productSpecRepo.findByIds(body.specIds);
+    // Fetch all specs to update (using modern findBy to avoid deprecated findByIds)
+    const specs = await this.productSpecRepo.findBy({ id: In(body.specIds) });
     
     for (const spec of specs) {
       if (body.masterYieldId === null) {

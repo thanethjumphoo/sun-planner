@@ -1,0 +1,42 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build outputs
+backend/dist/
+frontend/dist/
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Environment variables (Crucial for security!)
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Editors/IDEs
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Testing
+coverage/
+.nyc_output
+
+# Mockups / Scratch scripts (optional, if you want to keep them local)
+# mockup.html
+# master_yield_web_app.html
+# frontend/src/pages/rewrite_dps.py

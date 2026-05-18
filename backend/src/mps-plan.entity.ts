@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, OneToMany, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, OneToMany, ManyToOne, JoinColumn, VersionColumn } from 'typeorm';
 
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 
@@ -124,4 +124,7 @@ export class MpsPlanOrder {
 
   @Column({ name: 'is_manual_override', type: 'bit', default: 0 })
   isManualOverride: boolean; // ให้รู้ว่าอันนี้คนลากย้ายเอง ไม่ได้มาจากการ Auto
+
+  @VersionColumn({ name: 'version', default: 1 })
+  version: number;
 }

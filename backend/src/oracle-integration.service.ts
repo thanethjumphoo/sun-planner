@@ -8,7 +8,7 @@ import { StgErpOrderLine } from './stg-erp-order-line.entity';
 
 @Injectable()
 export class OracleIntegrationService implements OnModuleDestroy {
-  private connection: oracledb.Connection | null = null;
+  private pool: oracledb.Pool | null = null;
 
   constructor(
     @InjectRepository(StgErpItem)
@@ -30,26 +30,34 @@ export class OracleIntegrationService implements OnModuleDestroy {
   }
 
   /**
-   * ฟังก์ชันสำหรับเชื่อมต่อฐานข้อมูล Oracle ERP
+   * ฟังก์ชันเปิดใช้งาน Connection Pool
    */
-  async connect(): Promise<oracledb.Connection> {
-    if (this.connection) {
-      return this.connection;
-    }
+  async getPool(): Promise<oracledb.Pool> {
+    if (this.pool) return this.pool;
 
     try {
-      this.connection = await oracledb.getConnection({
+      this.pool = await oracledb.createPool({
         user: process.env.ORACLE_DB_USER || 'apps',
         password: process.env.ORACLE_DB_PASS || 'apps',
-        // รูปแบบการต่อ Connect String: host:port/service_name
         connectString: `${process.env.ORACLE_DB_HOST || '172.25.10.12'}:${process.env.ORACLE_DB_PORT || '1522'}/${process.env.ORACLE_DB_SERVICE || 'PROD'}`,
+        poolMin: 2,
+        poolMax: 10,
+        poolIncrement: 1,
       });
-      console.log('Successfully connected to Oracle Database');
-      return this.connection;
+      console.log('✅ Oracle Connection Pool initialized successfully');
+      return this.pool;
     } catch (err) {
-      console.error('Oracle connection error:', err);
+      console.error('Oracle connection pool initialization error:', err);
       throw err;
     }
+  }
+
+  /**
+   * ฟังก์ชันสำหรับเชื่อมต่อฐานข้อมูล Oracle ERP โดยดึงจาก Pool
+   */
+  async connect(): Promise<oracledb.Connection> {
+    const pool = await this.getPool();
+    return pool.getConnection();
   }
 
   /**
@@ -76,8 +84,15 @@ export class OracleIntegrationService implements OnModuleDestroy {
     } catch (err) {
       console.error('Query execution error:', err);
       throw err;
+    } finally {
+      if (conn) {
+        try {
+          await conn.close();
+        } catch (e) {
+          console.error('Error closing oracle connection:', e);
+        }
+      }
     }
-    // ไม่ควร close connection ในนี้ทันทีถ้ายังต้องการเรียกใช้ซ้ำ
   }
 
   /**
@@ -156,6 +171,14 @@ export class OracleIntegrationService implements OnModuleDestroy {
     } catch (err) {
       console.error('Error syncing items:', err);
       throw err;
+    } finally {
+      if (conn) {
+        try {
+          await conn.close();
+        } catch (e) {
+          console.error('Error closing oracle connection:', e);
+        }
+      }
     }
   }
 
@@ -236,6 +259,14 @@ export class OracleIntegrationService implements OnModuleDestroy {
     } catch (err) {
       console.error('Error syncing order headers:', err);
       throw err;
+    } finally {
+      if (conn) {
+        try {
+          await conn.close();
+        } catch (e) {
+          console.error('Error closing oracle connection:', e);
+        }
+      }
     }
   }
 
@@ -342,6 +373,14 @@ export class OracleIntegrationService implements OnModuleDestroy {
     } catch (err) {
       console.error('Error syncing order lines:', err);
       throw err;
+    } finally {
+      if (conn) {
+        try {
+          await conn.close();
+        } catch (e) {
+          console.error('Error closing oracle connection:', e);
+        }
+      }
     }
   }
 
@@ -499,12 +538,12 @@ export class OracleIntegrationService implements OnModuleDestroy {
    * ปิดการเชื่อมต่อเมื่อ Module ถูกทำลาย (แอปปิดตัว)
    */
   async onModuleDestroy() {
-    if (this.connection) {
+    if (this.pool) {
       try {
-        await this.connection.close();
-        console.log('Oracle Database connection closed');
+        await this.pool.close(10);
+        console.log('Oracle Connection Pool closed successfully');
       } catch (err) {
-        console.error('Error closing Oracle connection:', err);
+        console.error('Error closing Oracle connection pool:', err);
       }
     }
   }

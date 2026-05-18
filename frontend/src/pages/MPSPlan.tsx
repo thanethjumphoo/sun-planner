@@ -2097,7 +2097,8 @@ const MPSPlan: React.FC = () => {
                             }
                             // If still remaining after all bins full, dump into last non-zero or first bin
                             if (remainingQty > 0) {
-                              const fallbackKey = sizeLabels[0].key;
+                              const fallbackKey = sizeLabels.length > 0 ? sizeLabels[0].key : 'unsize';
+                              if (!ordersByBin[fallbackKey]) ordersByBin[fallbackKey] = [];
                               demandByBin[fallbackKey] = (demandByBin[fallbackKey] || 0) + remainingQty;
                               ordersByBin[fallbackKey].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: 'unsize (overflow)', qty: remainingQty, type: o.type });
                             }

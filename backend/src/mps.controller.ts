@@ -2,7 +2,7 @@ import { Controller, Post, Body, Get, Param, Res, Query } from '@nestjs/common';
 import * as express from 'express';
 import * as ExcelJS from 'exceljs';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, DataSource, In } from 'typeorm';
 import { StgErpOrderLine } from './stg-erp-order-line.entity';
 import { StgErpOrderHeader } from './stg-erp-order-header.entity';
 import { ProductSpec } from './product-spec.entity';
@@ -22,6 +22,7 @@ import { MasterYield } from './master-yield.entity';
 @Controller('api/mps')
 export class MpsController {
   constructor(
+    private dataSource: DataSource,
     @InjectRepository(StgErpOrderLine)
     private orderLineRepo: Repository<StgErpOrderLine>,
     @InjectRepository(StgErpOrderHeader)
@@ -250,34 +251,35 @@ export class MpsController {
   // 3. Generate & Snapshot MPS Plan
   @Post('generate')
   async generatePlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string; partType?: string; _allocatedMap?: Map<number, number> }) { // targetMonth format: '2026-05'
-    const targetMonth = body.targetMonth;
-    const partType = body.partType || 'fillet';
+    return await this.dataSource.transaction(async (manager) => {
+      const targetMonth = body.targetMonth;
+      const partType = body.partType || 'fillet';
 
-    // Step 1: Check for existing plans for this month (scoped by partType)
-    // Block if an APPROVED plan already exists
-    const existingApproved = await this.mpsPlanRepo.findOne({ where: { targetMonth, partType, status: 'APPROVED' } });
-    if (existingApproved) {
-      return { success: false, message: `An approved plan already exists for ${targetMonth}. Reject it first to regenerate.` };
-    }
+      // Step 1: Check for existing plans for this month (scoped by partType)
+      // Block if an APPROVED plan already exists
+      const existingApproved = await manager.findOne(MpsPlan, { where: { targetMonth, partType, status: 'APPROVED' } });
+      if (existingApproved) {
+        return { success: false, message: `An approved plan already exists for ${targetMonth}. Reject it first to regenerate.` };
+      }
 
-    let plan = await this.mpsPlanRepo.findOne({ where: { targetMonth, partType, status: 'DRAFT' } });
-    if (plan) {
-      // Clear old details
-      await this.mpsDailyRepo.delete({ mpsPlan: { id: plan.id } });
-      await this.mpsSupplyRepo.delete({ mpsPlan: { id: plan.id } });
-      await this.mpsOrderRepo.delete({ mpsPlan: { id: plan.id } });
-      await this.exceptionRepo.delete({ mpsPlan: { id: plan.id } });
-    } else {
-      plan = this.mpsPlanRepo.create({
-        planName: `MPS ${targetMonth} - Draft`,
-        targetMonth,
-        partType,
-        status: 'DRAFT',
-      });
-      plan = await this.mpsPlanRepo.save(plan);
-    }
+      let plan = await manager.findOne(MpsPlan, { where: { targetMonth, partType, status: 'DRAFT' } });
+      if (plan) {
+        // Clear old details
+        await manager.delete(MpsPlanDaily, { mpsPlan: { id: plan.id } });
+        await manager.delete(MpsPlanSupply, { mpsPlan: { id: plan.id } });
+        await manager.delete(MpsPlanOrder, { mpsPlan: { id: plan.id } });
+        await manager.delete(MpsExceptionReport, { mpsPlan: { id: plan.id } });
+      } else {
+        plan = manager.create(MpsPlan, {
+          planName: `MPS ${targetMonth} - Draft`,
+          targetMonth,
+          partType,
+          status: 'DRAFT',
+        });
+        plan = await manager.save(plan);
+      }
 
-    const allYieldNodes = await this.masterYieldRepo.find({
+      const allYieldNodes = await manager.find(MasterYield, {
       relations: ['children', 'children.children', 'children.children.children']
     });
 
@@ -311,13 +313,17 @@ export class MpsController {
     const startOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1, 0, 0, 0);
     const endOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59);
 
-    // Step 2: Fetch Orders & Specs using the custom date range
-    const orders = await this.orderLineRepo.find({
+    // Step 2: Fetch Orders & Specs using the custom date range (bound to transaction manager)
+    const orders = await manager.find(StgErpOrderLine, {
       where: { erpOrderShipDate: Between(startOfRange, endOfRange) }
     });
 
-    // Fetch order headers to get the actual SO numbers and Customer Grade
-    const orderHeaders = await this.orderHeaderRepo.find();
+    // Fetch order headers (filtered by unique header IDs to prevent Memory Bloat)
+    const headerIds = [...new Set(orders.map(o => o.erpOrderHeaderId).filter(id => id !== null && id !== undefined))];
+    const orderHeaders = headerIds.length > 0
+      ? await manager.find(StgErpOrderHeader, { where: { erpOrderHeaderId: In(headerIds) } })
+      : [];
+
     const headerMap = new Map();
     const gradeMap = new Map();
     orderHeaders.forEach(h => {
@@ -325,7 +331,7 @@ export class MpsController {
       gradeMap.set(h.erpOrderHeaderId, h.erpCustomerGrade);
     });
 
-    const specs = await this.specRepo.find();
+    const specs = await manager.find(ProductSpec);
     const specMap = new Map();
     specs.forEach(s => specMap.set(s.erpItemCode, s));
 
@@ -353,13 +359,13 @@ export class MpsController {
     };
 
     // Step 3: Fetch Supply (Chicken Receiving Month + Previous Month Buffer)
-    // Fetch Fillet Yield Config
-    const configRow = await this.filletConfigRepo.findOne({ where: { configKey: 'fillet_yield' } });
+    // Fetch Fillet Yield Config (bound to transaction manager)
+    const configRow = await manager.findOne(FilletConfig, { where: { configKey: 'fillet_yield' } });
     const filletYield = configRow ? Number(configRow.configValue) : 0.04;
 
     let partYield = filletYield;
     if (partType === 'bil') {
-      const bilNode = await this.masterYieldRepo.findOne({ where: { type: 'CATEGORY', name: 'BIL L/C' } });
+      const bilNode = await manager.findOne(MasterYield, { where: { type: 'CATEGORY', name: 'BIL L/C' } });
       partYield = bilNode?.yieldPercentage ? Number(bilNode.yieldPercentage) : 0.25; // Default fallback if not found
     }
 
@@ -542,10 +548,10 @@ export class MpsController {
       };
 
       matchingRows.forEach(row => {
-        const pct = Number(row.distValue || 0);
+        const pct = Number(row.distValue || 0) / 100;
         if (pct <= 0) return;
 
-        // distValue is stored as decimal fraction (e.g. 0.0216 = 2.16%), use directly
+        // distValue is stored as percentage points (e.g. 2.16 = 2.16%), divide by 100 to get decimal fraction
         const kg = isBil 
           ? Math.round(slaughteredWeight * partYield * pct)
           : Math.round(slaughteredWeight * filletYield * pct * 0.907);
@@ -649,7 +655,7 @@ export class MpsController {
         const allocQty = Math.round(Math.min(availableQty, remainingQty, totalRmForDate));
         if (allocQty <= 0) continue;
 
-        mpsOrdersToSave.push(this.mpsOrderRepo.create({
+        mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
           mpsPlan: plan,
           erpOrderLineId: order.erpOrderLineId,
           soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
@@ -683,7 +689,7 @@ export class MpsController {
 
       if (remainingQty > 0) {
         // Discard unmet demand from calendar, log as exception
-        exceptionsToSave.push(this.exceptionRepo.create({
+        exceptionsToSave.push(manager.create(MpsExceptionReport, {
           mpsPlan: plan,
           erpOrderLineId: order.erpOrderLineId,
           soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
@@ -781,7 +787,7 @@ export class MpsController {
           const allocQty = Math.round(Math.min(availableQty, remainingQty, totalRmForDate));
           if (allocQty <= 0) continue;
 
-          mpsOrdersToSave.push(this.mpsOrderRepo.create({
+          mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
             mpsPlan: plan,
             erpOrderLineId: order.erpOrderLineId,
             soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
@@ -814,7 +820,7 @@ export class MpsController {
         }
 
         if (remainingQty > 0) {
-          exceptionsToSave.push(this.exceptionRepo.create({
+          exceptionsToSave.push(manager.create(MpsExceptionReport, {
             mpsPlan: plan,
             erpOrderLineId: order.erpOrderLineId,
             soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString() || '-',
@@ -831,9 +837,9 @@ export class MpsController {
     // 5g. Run allocation: Follow Priority Sort (Absolute)
     allocateFreeze(freezeOrders, true);
 
-    await this.mpsOrderRepo.save(mpsOrdersToSave, { chunk: 100 });
+    await manager.save(mpsOrdersToSave, { chunk: 100 });
     if (exceptionsToSave.length > 0) {
-      await this.exceptionRepo.save(exceptionsToSave, { chunk: 100 });
+      await manager.save(exceptionsToSave, { chunk: 100 });
     }
 
     // Step 6: Generate Daily Summaries for the Month
@@ -876,7 +882,7 @@ export class MpsController {
       const cuttingStaff = demand > 0 ? (dailyStaff.get(dayStr) || 0) / 10 : 0;
       const supportStaff = demand > 0 ? 28 : 0;
 
-      mpsDailiesToSave.push(this.mpsDailyRepo.create({
+      mpsDailiesToSave.push(manager.create(MpsPlanDaily, {
         mpsPlan: plan,
         productionDate: new Date(dayStr),
         intakeBirds: intakeBirds,
@@ -888,7 +894,7 @@ export class MpsController {
       }));
     }
 
-    await this.mpsDailyRepo.save(mpsDailiesToSave, { chunk: 100 });
+    await manager.save(mpsDailiesToSave, { chunk: 100 });
 
     // Step 7: Generate Detailed Supply Breakdown (Size Distribution)
     // Now uses normalized mps_plan_supply_size table for size breakdown
@@ -949,23 +955,33 @@ export class MpsController {
         const byProducts: Record<string, { name: string; qty: number }> = {};
         Object.keys(nodeRMs).forEach(pId => {
           const rm = nodeRMs[pId];
-          const processNode = findNode(allYieldNodes, pId);
-          if (processNode && processNode.children) {
-            processNode.children.forEach((child: any) => {
-              const byProdQty = rm * (child.yieldPercentage || 0);
-              if (byProdQty > 0) {
-                if (!byProducts[child.id]) {
-                  byProducts[child.id] = { name: child.name, qty: 0 };
+          const node = findNode(allYieldNodes, pId);
+          if (node) {
+            // If the mapped node is a leaf node, traverse to its parent process node
+            const processNode = node.parentId ? findNode(allYieldNodes, node.parentId) : node;
+            if (processNode && processNode.children) {
+              processNode.children.forEach((child: any) => {
+                // Skip the main product itself
+                if (child.id === pId) return;
+                
+                // Only include BY-PRODUCT or CO-PRODUCT types in the summary
+                if (child.type === 'BY-PRODUCT' || child.type === 'CO-PRODUCT') {
+                  const byProdQty = rm * (child.yieldPercentage || 0);
+                  if (byProdQty > 0) {
+                    if (!byProducts[child.id]) {
+                      byProducts[child.id] = { name: child.name, qty: 0 };
+                    }
+                    byProducts[child.id].qty += byProdQty;
+                  }
                 }
-                byProducts[child.id].qty += byProdQty;
-              }
-            });
+              });
+            }
           }
         });
         const byProductsStr = Object.keys(byProducts).length > 0 ? JSON.stringify(byProducts) : null;
         // -----------------------------
 
-        const supplyEntry = this.mpsSupplyRepo.create({
+        const supplyEntry = manager.create(MpsPlanSupply, {
           mpsPlan: plan,
           productionDate: new Date(dayStr),
           intakeBirds: dailyIntakeBirds,
@@ -996,9 +1012,10 @@ export class MpsController {
             return Math.abs(Number(label) - avgWeight) < 0.05;
           });
           matchingRows.forEach(row => {
-            const pct = Number(row.distValue || 0);
+            const pct = Number(row.distValue || 0) / 100;
             if (pct <= 0) return;
 
+            // distValue is stored as percentage points (e.g. 2.16 = 2.16%), divide by 100 to get decimal fraction
             const kg = isBil 
               ? Math.round(slaughteredWeight * partYield * pct)
               : Math.round(slaughteredWeight * filletYield * pct * 0.907);
@@ -1014,7 +1031,7 @@ export class MpsController {
         const sizeEntries: MpsPlanSupplySize[] = [];
         for (const [groupName, kg] of Object.entries(sizeBins)) {
           if (kg <= 0) continue;
-          sizeEntries.push(this.mpsSupplySizeRepo.create({
+          sizeEntries.push(manager.create(MpsPlanSupplySize, {
             groupSize: groupName,
             partName: currentPartName,
             quantityKg: Math.round(kg),
@@ -1028,15 +1045,16 @@ export class MpsController {
     }
 
     if (mpsSuppliesToSave.length > 0) {
-      await this.mpsSupplyRepo.save(mpsSuppliesToSave, { chunk: 100 });
+      await manager.save(mpsSuppliesToSave, { chunk: 100 });
     }
 
     plan.totalIntakeBirds = totalIntakeBirds;
     plan.totalRmFlKg = totalRmFlKg;
     plan.totalDemandKg = totalDemandKg;
-    await this.mpsPlanRepo.save(plan);
+    await manager.save(plan);
 
     return { success: true, planId: plan.id, status: plan.status };
+    });
   }
 
   // 3b. Generate MPS Plans for ALL months in a date range
@@ -1125,9 +1143,16 @@ export class MpsController {
     const currentPartName = partNameMap[partType] || partType;
 
     const allSizes = await this.weeklySizeRepo.find({ where: { partName: currentPartName } });
+    const parseDateStr = (val: any): string => {
+      if (!val) return '';
+      const dateObj = typeof val === 'string' ? new Date(val) : val;
+      const offset = dateObj.getTimezoneOffset();
+      const localDate = new Date(dateObj.getTime() - (offset * 60 * 1000));
+      return localDate.toISOString().split('T')[0];
+    };
+
     const monthSizes = allSizes.filter(s => {
-      const recDate = s.receiveDate as any;
-      const dStr = typeof recDate === 'string' ? recDate.split('T')[0] : recDate.toISOString().split('T')[0];
+      const dStr = parseDateStr(s.receiveDate);
       return dStr.startsWith(targetMonth);
     });
 
@@ -1143,10 +1168,18 @@ export class MpsController {
     const targetMonth = plan.targetMonth;
     const partType = plan.partType;
 
+    const parseDateStr = (val: any): string => {
+      if (!val) return '';
+      const dateObj = typeof val === 'string' ? new Date(val) : val;
+      const offset = dateObj.getTimezoneOffset();
+      const localDate = new Date(dateObj.getTime() - (offset * 60 * 1000));
+      return localDate.toISOString().split('T')[0];
+    };
+
     // Fetch Weekly Intakes
     const allIntakesRaw = await this.chickenReceivingService.findAll('weekly');
     const targetIntakes = allIntakesRaw.filter((intake: any) => {
-      const d = typeof intake.receive_date === 'string' ? intake.receive_date.split('T')[0] : intake.receive_date.toISOString().split('T')[0];
+      const d = parseDateStr(intake.receive_date);
       return d.startsWith(targetMonth);
     });
 
@@ -1175,8 +1208,7 @@ export class MpsController {
     // Remove existing weekly sizes for this month and part
     const existingSizes = await this.weeklySizeRepo.find({ where: { partName: currentPartName } });
     const toRemove = existingSizes.filter(s => {
-      const recDate = s.receiveDate as any;
-      const dStr = typeof recDate === 'string' ? recDate.split('T')[0] : recDate.toISOString().split('T')[0];
+      const dStr = parseDateStr(s.receiveDate);
       return dStr.startsWith(targetMonth);
     });
     if (toRemove.length > 0) {
@@ -1187,7 +1219,7 @@ export class MpsController {
     const sizesToSave: ChickenReceivingWeeklySize[] = [];
     const dailyGroups = new Map<string, any[]>();
     targetIntakes.forEach(intake => {
-      const dStr = typeof intake.receive_date === 'string' ? intake.receive_date.split('T')[0] : intake.receive_date.toISOString().split('T')[0];
+      const dStr = parseDateStr(intake.receive_date);
       if (!dailyGroups.has(dStr)) dailyGroups.set(dStr, []);
       dailyGroups.get(dStr)!.push(intake);
     });
@@ -1213,9 +1245,10 @@ export class MpsController {
         });
 
         matchingRows.forEach(row => {
-          const pct = Number(row.distValue || 0);
+          const pct = Number(row.distValue || 0) / 100;
           if (pct <= 0) return;
 
+          // distValue is stored as percentage points (e.g. 2.16 = 2.16%), divide by 100 to get decimal fraction
           const kg = isBil 
             ? Math.round(slaughteredWeight * partYield * pct)
             : Math.round(slaughteredWeight * filletYield * pct * 0.907);

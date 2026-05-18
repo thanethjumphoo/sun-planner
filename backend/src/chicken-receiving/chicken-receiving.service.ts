@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ChickenReceivingPlanMonthly } from './entities/monthly-plan.entity';
 import { ChickenReceivingPlanWeekly } from './entities/weekly-plan.entity';
 import { ChickenReceivingPlanDaily } from './entities/daily-plan.entity';
@@ -9,6 +9,7 @@ import { ChickenReceivingActualDaily } from './entities/actual-daily.entity';
 @Injectable()
 export class ChickenReceivingService {
   constructor(
+    private dataSource: DataSource,
     @InjectRepository(ChickenReceivingPlanMonthly)
     private monthlyRepo: Repository<ChickenReceivingPlanMonthly>,
 
@@ -78,7 +79,9 @@ export class ChickenReceivingService {
         Object.entries(row).map(([k, v]) => [k, v === '' ? null : v])
       )
     );
-    const entities = repo.create(cleaned);
-    return await repo.save(entities, { chunk: 100 });
+    return await this.dataSource.transaction(async (manager) => {
+      const entities = manager.create(repo.target, cleaned);
+      return await manager.save(entities, { chunk: 100 });
+    });
   }
 }
