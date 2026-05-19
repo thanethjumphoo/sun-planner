@@ -678,6 +678,44 @@ const MPSPlan: React.FC = () => {
   });
   const avgManpower = activeDaysCount > 0 ? Math.round(totalManpowerSum / activeDaysCount) : 0;
 
+  // Calculate Monthly Totals for Grade B and other By-Products
+  let totalGradeB = 0;
+  const byProductTotals: Record<string, number> = {};
+
+  if (currentPlan && currentPlan.supplyBreakdown) {
+    currentPlan.supplyBreakdown.forEach((supply: any) => {
+      // 1. Calculate Grade B
+      const intakeKg = Number(supply.totalWeight || 0);
+      const slaughtered = intakeKg * 0.9575 * 0.95;
+      const rmFlTotal = slaughtered * 0.04;
+
+      let dailyByProducts: Record<string, { name: string; qty: number; processName?: string; type?: string }> = {};
+      if (supply.byProducts) {
+        try {
+          dailyByProducts = JSON.parse(supply.byProducts);
+        } catch (e) {
+          console.error('Error parsing daily byProducts', e);
+        }
+      }
+
+      const yieldTreeGradeB = Object.values(dailyByProducts)
+        .filter((bp: any) => bp.name === 'สันในเกรด B' || bp.name.includes('เกรด B') || bp.name.toLowerCase().includes('grade b'))
+        .reduce((sum: number, bp: any) => sum + Number(bp.qty || 0), 0);
+
+      const rmFlGradeB = yieldTreeGradeB > 0 ? yieldTreeGradeB : rmFlTotal * 0.093;
+      totalGradeB += rmFlGradeB;
+
+      // 2. Aggregate other by-products
+      Object.values(dailyByProducts).forEach((bp: any) => {
+        const isGb = bp.name === 'สันในเกรด B' || bp.name.includes('เกรด B') || bp.name.toLowerCase().includes('grade b');
+        if (isGb) return; // skip Grade B
+
+        const name = bp.name.trim();
+        byProductTotals[name] = (byProductTotals[name] || 0) + Number(bp.qty || 0);
+      });
+    });
+  }
+
   // --- Derived State for Demand Plan Tab ---
   const processedDemand = demandOrders.reduce((acc: any[], header: any) => {
     if (!header.lines) return acc;
@@ -1035,6 +1073,34 @@ const MPSPlan: React.FC = () => {
                 <StatCard label="Total Orders" value={totalOrdersQty.toLocaleString()} unit="kg" icon={Package} color="orange" />
                 <StatCard label="Estimated Total Yield" value={Math.round(totalRmFlAvail).toLocaleString()} unit="kg" icon={Scale} color="green" />
                 <StatCard label="Avg. Daily Manpower" value={avgManpower.toString()} unit="People" icon={Users} color="purple" />
+              </div>
+
+              {/* Monthly Grade B & By-Products Summary Box */}
+              <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm flex flex-col gap-4 mt-2">
+                <div className="flex items-center gap-2 pb-2 border-b border-gray-100">
+                  <Scale className="text-orange-600 w-5 h-5" />
+                  <h3 className="font-bold text-gray-900 text-sm">สรุปยอดผลผลิตพลอยได้ประจำเดือน (Monthly Grade B & By-Products)</h3>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-orange-50/50 p-4 rounded-xl border border-orange-100 flex flex-col justify-between">
+                    <span className="text-xs font-bold text-orange-700 uppercase">Total RM Fillet Grade B</span>
+                    <div className="flex items-baseline gap-1 mt-1">
+                      <span className="text-xl font-black text-orange-950">{Math.round(totalGradeB).toLocaleString()}</span>
+                      <span className="text-xs font-bold text-orange-600">kg</span>
+                    </div>
+                  </div>
+                  {Object.entries(byProductTotals)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([name, qty]) => (
+                      <div key={name} className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col justify-between">
+                        <span className="text-xs font-bold text-slate-600 uppercase truncate" title={name}>{name}</span>
+                        <div className="flex items-baseline gap-1 mt-1">
+                          <span className="text-xl font-black text-slate-800">{Math.round(qty).toLocaleString()}</span>
+                          <span className="text-xs font-bold text-slate-500">kg</span>
+                        </div>
+                      </div>
+                    ))}
+                </div>
               </div>
 
               <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
@@ -2021,7 +2087,7 @@ const MPSPlan: React.FC = () => {
                         const aggregated: Record<string, { name: string; qty: number }> = {};
                         Object.values(byProducts).forEach(bp => {
                           if (isGradeB(bp.name)) return; // Exclude Grade B
-                          
+
                           const name = bp.name.trim();
                           if (!aggregated[name]) {
                             aggregated[name] = { name, qty: 0 };
@@ -2126,10 +2192,10 @@ const MPSPlan: React.FC = () => {
                           const sInfo = byProductsSupply[key];
                           if (sInfo && sInfo.qty > 0) {
                             const nodeType = yieldNodeTypeMap.get(key);
-                            const isMatch = typeFilter === 'coproduct' 
-                              ? nodeType === 'CO-PRODUCT' 
+                            const isMatch = typeFilter === 'coproduct'
+                              ? nodeType === 'CO-PRODUCT'
                               : nodeType === 'BY-PRODUCT';
-                            
+
                             if (isMatch) {
                               const name = resolveByproductName(key);
                               const grp = getOrCreateGroup(name);
@@ -2274,14 +2340,25 @@ const MPSPlan: React.FC = () => {
                             <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
                             {(() => {
                               const isBil = currentPlan?.partType === 'bil';
+                              const supplySizes = (selectedSupply.sizes || []).map((s: any) => s.groupSize as string);
+                              const orderSizes: string[] = [];
+                              if (isBil) {
+                                mainOrders.forEach((o: any) => {
+                                  const spec = specs[o.itemCode];
+                                  const size = spec?.productSize;
+                                  if (size && size.toLowerCase().trim() !== 'unsize' && size.toLowerCase().trim() !== '') {
+                                    orderSizes.push(size.trim());
+                                  }
+                                });
+                              }
+                              const uniqueSizes = Array.from(new Set([...supplySizes, ...orderSizes]));
                               const sizeLabels = isBil
-                                ? (Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string))) as string[])
-                                  .map((label, idx) => ({
-                                    key: label,
-                                    label,
-                                    groupSize: label,
-                                    color: `bg-${['slate', 'blue', 'cyan', 'emerald', 'green', 'amber', 'orange', 'red'][idx % 8]}-500`
-                                  }))
+                                ? uniqueSizes.map((label, idx) => ({
+                                  key: label,
+                                  label,
+                                  groupSize: label,
+                                  color: `bg-${['slate', 'blue', 'cyan', 'emerald', 'green', 'amber', 'orange', 'red'][idx % 8]}-500`
+                                }))
                                 : [
                                   { key: '40Down', label: '40 Down', groupSize: '40 Down', color: 'bg-slate-500' },
                                   { key: '40_45', label: '40-45', groupSize: '40-45', color: 'bg-blue-500' },
@@ -2354,6 +2431,7 @@ const MPSPlan: React.FC = () => {
                               sizedOrders.forEach(o => {
                                 const perBin = o.qty / o.binKeys.length;
                                 o.binKeys.forEach((key: string) => {
+                                  if (!ordersByBin[key]) ordersByBin[key] = [];
                                   demandByBin[key] = (demandByBin[key] || 0) + perBin;
                                   supplyRemaining[key] = (supplyRemaining[key] || 0) - perBin;
                                   ordersByBin[key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: o.size, qty: perBin, type: o.type });

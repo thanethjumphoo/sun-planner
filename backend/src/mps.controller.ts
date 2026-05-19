@@ -329,9 +329,19 @@ export class MpsController {
 
     // Fetch order headers (filtered by unique header IDs to prevent Memory Bloat)
     const headerIds = [...new Set(orders.map(o => o.erpOrderHeaderId).filter(id => id !== null && id !== undefined))];
-    const orderHeaders = headerIds.length > 0
-      ? await manager.find(StgErpOrderHeader, { where: { erpOrderHeaderId: In(headerIds) } })
-      : [];
+    
+    // Fetch order headers in chunks of 1000 to avoid MS SQL 2100 parameter limit
+    const orderHeaders: StgErpOrderHeader[] = [];
+    if (headerIds.length > 0) {
+      const headerChunkSize = 1000;
+      for (let j = 0; j < headerIds.length; j += headerChunkSize) {
+        const chunk = headerIds.slice(j, j + headerChunkSize);
+        const chunkHeaders = await manager.find(StgErpOrderHeader, {
+          where: { erpOrderHeaderId: In(chunk) }
+        });
+        orderHeaders.push(...chunkHeaders);
+      }
+    }
 
     const headerMap = new Map();
     const gradeMap = new Map();
@@ -1053,9 +1063,19 @@ export class MpsController {
     byprodFreezeOrders.sort(prioritySort);
     allocateByprodFreeze(byprodFreezeOrders);
 
-    await manager.save(mpsOrdersToSave, { chunk: 100 });
+    // Chunk manual save in safe batches of 50 to avoid MS SQL 2100 parameter limit
+    if (mpsOrdersToSave.length > 0) {
+      const saveChunkSize = 50;
+      for (let k = 0; k < mpsOrdersToSave.length; k += saveChunkSize) {
+        await manager.save(mpsOrdersToSave.slice(k, k + saveChunkSize));
+      }
+    }
+
     if (exceptionsToSave.length > 0) {
-      await manager.save(exceptionsToSave, { chunk: 100 });
+      const saveChunkSize = 50;
+      for (let k = 0; k < exceptionsToSave.length; k += saveChunkSize) {
+        await manager.save(exceptionsToSave.slice(k, k + saveChunkSize));
+      }
     }
 
     // Step 6: Generate Daily Summaries for the Month
@@ -1112,7 +1132,13 @@ export class MpsController {
       }));
     }
 
-    await manager.save(mpsDailiesToSave, { chunk: 100 });
+    // Chunk manual save in safe batches of 50 to avoid MS SQL 2100 parameter limit
+    if (mpsDailiesToSave.length > 0) {
+      const saveChunkSize = 50;
+      for (let k = 0; k < mpsDailiesToSave.length; k += saveChunkSize) {
+        await manager.save(mpsDailiesToSave.slice(k, k + saveChunkSize));
+      }
+    }
 
     // Step 7: Generate Detailed Supply Breakdown (Size Distribution)
     // Now uses normalized mps_plan_supply_size table for size breakdown
@@ -1216,8 +1242,12 @@ export class MpsController {
       }
     }
 
+    // Chunk manual save in safe batches of 50 to avoid MS SQL 2100 parameter limit
     if (mpsSuppliesToSave.length > 0) {
-      await manager.save(mpsSuppliesToSave, { chunk: 100 });
+      const saveChunkSize = 50;
+      for (let k = 0; k < mpsSuppliesToSave.length; k += saveChunkSize) {
+        await manager.save(mpsSuppliesToSave.slice(k, k + saveChunkSize));
+      }
     }
 
     plan.totalIntakeBirds = totalIntakeBirds;
@@ -1443,8 +1473,12 @@ export class MpsController {
       }
     }
 
+    // Chunk manual save in safe batches of 50 to avoid MS SQL 2100 parameter limit
     if (sizesToSave.length > 0) {
-      await this.weeklySizeRepo.save(sizesToSave, { chunk: 100 });
+      const saveChunkSize = 50;
+      for (let k = 0; k < sizesToSave.length; k += saveChunkSize) {
+        await this.weeklySizeRepo.save(sizesToSave.slice(k, k + saveChunkSize));
+      }
     }
 
     return { success: true, count: sizesToSave.length };

@@ -308,8 +308,27 @@ export class OracleIntegrationService implements OnModuleDestroy {
                  ODL.LINE_NUMBER         AS ERP_ORDER_LINE_NUMBER,
                  ODL.INVENTORY_ITEM_ID   AS ERP_ORDER_ITEM_ID,
                  ODL.ORDERED_ITEM        AS ERP_ORDER_ITEM_CODE,
-                 ODL.ORDERED_QUANTITY    AS ERP_ORDER_ITEM_QTY,
-                 ODL.ORDER_QUANTITY_UOM  AS ERP_ORDER_ITEM_UOM,
+                 NVL(
+                   NULLIF(
+                     INV_CONVERT.inv_um_convert(
+                       ODL.INVENTORY_ITEM_ID,
+                       5,
+                       ODL.ORDERED_QUANTITY,
+                       ODL.ORDER_QUANTITY_UOM,
+                       'KG',
+                       NULL,
+                       NULL
+                     ), 
+                     -99999
+                   ),
+                   ODL.ORDERED_QUANTITY
+                 )                       AS ERP_ORDER_ITEM_QTY,
+                 CASE
+                   WHEN ODL.ORDER_QUANTITY_UOM != 'KG' 
+                        AND NVL(INV_CONVERT.inv_um_convert(ODL.INVENTORY_ITEM_ID, 5, 1, ODL.ORDER_QUANTITY_UOM, 'KG', NULL, NULL), -99999) != -99999
+                     THEN 'KG'
+                   ELSE ODL.ORDER_QUANTITY_UOM
+                 END                     AS ERP_ORDER_ITEM_UOM,
                  ODL.SCHEDULE_SHIP_DATE  AS ERP_ORDER_SHIP_DATE,
                  ODL.CREATION_DATE       AS ERP_CREATION_DATE,
                  ODL.LAST_UPDATE_DATE    AS ERP_LAST_UPDATE_DATE,
@@ -329,13 +348,27 @@ export class OracleIntegrationService implements OnModuleDestroy {
         });
 
         const erpRows: any[] = result.rows || [];
+        if (erpRows.length === 0) {
+          continue;
+        }
         const linesToSave = [];
 
         // 1. Fetch existing lines in one go for this chunk to check existence
-        const erpLineIds = erpRows.map(r => r.ERP_ORDER_LINE_ID);
-        const existingLines = await this.stgErpOrderLineRepository.find({
-          where: erpLineIds.map(id => ({ erpOrderLineId: id, erpOrgId: 82 })) // Assuming Org 82
-        });
+        const erpLineIds = erpRows.map(r => r.ERP_ORDER_LINE_ID).filter(id => id !== undefined && id !== null);
+        if (erpLineIds.length === 0) {
+          continue;
+        }
+
+        // 1b. Fetch existing lines in chunks of 500 to avoid MS SQL 2100 parameter limit
+        const existingLines: StgErpOrderLine[] = [];
+        const mssqlChunkSize = 500;
+        for (let j = 0; j < erpLineIds.length; j += mssqlChunkSize) {
+          const mssqlChunk = erpLineIds.slice(j, j + mssqlChunkSize);
+          const chunkLines = await this.stgErpOrderLineRepository.find({
+            where: mssqlChunk.map(id => ({ erpOrderLineId: id, erpOrgId: 82 }))
+          });
+          existingLines.push(...chunkLines);
+        }
         const lineMap = new Map(existingLines.map(l => [`${l.erpOrderLineId}_${l.erpOrgId}`, l]));
 
         for (const row of erpRows) {
@@ -362,10 +395,14 @@ export class OracleIntegrationService implements OnModuleDestroy {
           linesToSave.push(line);
         }
 
-        // 2. Bulk save for this chunk
+        // 2. Bulk save for this chunk in safe batches of 50 to avoid MS SQL 2100 parameter limit
         if (linesToSave.length > 0) {
-          const saved = await this.stgErpOrderLineRepository.save(linesToSave, { chunk: 100 });
-          savedLines.push(...saved);
+          const saveChunkSize = 50;
+          for (let k = 0; k < linesToSave.length; k += saveChunkSize) {
+            const chunkToSave = linesToSave.slice(k, k + saveChunkSize);
+            const saved = await this.stgErpOrderLineRepository.save(chunkToSave);
+            savedLines.push(...saved);
+          }
         }
       }
 
