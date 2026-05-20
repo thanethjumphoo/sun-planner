@@ -14,19 +14,44 @@ export class StgErpOrderHeader {
   @Column({ name: 'erp_order_date', type: 'datetime', nullable: true })
   erpOrderDate: Date;
 
-  @Column({ name: 'erp_order_number', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'erp_order_number',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   erpOrderNumber: string;
 
-  @Column({ name: 'erp_order_type', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'erp_order_type',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   erpOrderType: string;
 
-  @Column({ name: 'erp_customer_number', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'erp_customer_number',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   erpCustomerNumber: string;
 
-  @Column({ name: 'erp_customer_name', type: 'nvarchar', length: 500, nullable: true })
+  @Column({
+    name: 'erp_customer_name',
+    type: 'nvarchar',
+    length: 500,
+    nullable: true,
+  })
   erpCustomerName: string;
 
-  @Column({ name: 'erp_customer_grade', type: 'varchar', length: 50, nullable: true })
+  @Column({
+    name: 'erp_customer_grade',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
   erpCustomerGrade: string;
 
   @Column({ name: 'erp_creation_date', type: 'datetime', nullable: true })
@@ -35,7 +60,12 @@ export class StgErpOrderHeader {
   @Column({ name: 'erp_last_update_date', type: 'datetime', nullable: true })
   erpLastUpdateDate: Date;
 
-  @Column({ name: 'erp_order_status', type: 'varchar', length: 50, nullable: true })
+  @Column({
+    name: 'erp_order_status',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
   erpOrderStatus: string;
 
   @Column({ name: 'is_manual', type: 'bit', default: false })

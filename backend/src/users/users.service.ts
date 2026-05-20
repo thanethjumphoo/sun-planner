@@ -13,7 +13,9 @@ export class UsersService implements OnModuleInit {
 
   async onModuleInit() {
     // Seed default admin user if none exists
-    const adminExists = await this.usersRepository.findOne({ where: { username: 'admin' } });
+    const adminExists = await this.usersRepository.findOne({
+      where: { username: 'admin' },
+    });
     if (!adminExists) {
       const hashedPassword = await bcrypt.hash('password123', 10);
       const admin = this.usersRepository.create({

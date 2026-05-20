@@ -1,4 +1,10 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 
 @Entity('mps_plan_supply_size')
@@ -6,7 +12,9 @@ export class MpsPlanSupplySize {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => MpsPlanSupply, supply => supply.sizes, { onDelete: 'CASCADE' })
+  @ManyToOne(() => MpsPlanSupply, (supply) => supply.sizes, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'mps_plan_supply_id' })
   mpsPlanSupply: MpsPlanSupply;
 

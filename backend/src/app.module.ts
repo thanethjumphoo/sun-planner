@@ -24,12 +24,22 @@ import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 import { MpsPlanSupplySize } from './mps-plan-supply-size.entity';
 import { MpsExceptionReport } from './mps-exception.entity';
-import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps-plan.entity';
+import {
+  DpsPlan,
+  DpsSublot,
+  DpsSublotBin,
+  DpsOrder,
+  DpsAllocation,
+} from './dps-plan.entity';
 import { ChickenReceivingWeeklySize } from './chicken-receiving/entities/weekly-size.entity';
 import { ManualOperation } from './manual-operation.entity';
 import { ManualOperationController } from './manual-operation.controller';
 import { DpsController } from './dps.controller';
-import { FilletConfig, FilletGroup, FilletSizeCalc } from './fillet-size.entity';
+import {
+  FilletConfig,
+  FilletGroup,
+  FilletSizeCalc,
+} from './fillet-size.entity';
 import { FilletSizeController } from './fillet-size.controller';
 import { MasterYield } from './master-yield.entity';
 import { MasterYieldController } from './master-yield.controller';
@@ -38,7 +48,10 @@ import { MasterYieldController } from './master-yield.controller';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: process.env.NODE_ENV === 'production' ? '.env.production' : ['.env.development', '.env'],
+      envFilePath:
+        process.env.NODE_ENV === 'production'
+          ? '.env.production'
+          : ['.env.development', '.env'],
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
@@ -46,11 +59,19 @@ import { MasterYieldController } from './master-yield.controller';
         type: 'mssql',
         host: configService.get<string>('DB_HOST'),
         port: parseInt(configService.get<string>('DB_PORT') || '1433'),
-        username: configService.get<string>('DB_USER') || configService.get<string>('DB_USERNAME'),
-        password: configService.get<string>('DB_PASS') || configService.get<string>('DB_PASSWORD'),
-        database: configService.get<string>('DB_NAME') || configService.get<string>('DB_DATABASE'),
+        username:
+          configService.get<string>('DB_USER') ||
+          configService.get<string>('DB_USERNAME'),
+        password:
+          configService.get<string>('DB_PASS') ||
+          configService.get<string>('DB_PASSWORD'),
+        database:
+          configService.get<string>('DB_NAME') ||
+          configService.get<string>('DB_DATABASE'),
         autoLoadEntities: true,
-        synchronize: configService.get<string>('NODE_ENV') !== 'production' || configService.get<string>('FORCE_DB_SYNC') === 'true',
+        synchronize:
+          configService.get<string>('NODE_ENV') !== 'production' ||
+          configService.get<string>('FORCE_DB_SYNC') === 'true',
         options: {
           encrypt: true,
           trustServerCertificate: true,
@@ -62,13 +83,44 @@ import { MasterYieldController } from './master-yield.controller';
     UsersModule,
     ChickenReceivingModule,
     TypeOrmModule.forFeature([
-      StgErpItem, StgErpOrderHeader, StgErpOrderLine, TargetSyncItem, ProductSpec, 
-      WeightDistribution, BilWeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsPlanSupplySize, MpsExceptionReport,
-      DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation,
-      FilletConfig, FilletGroup, FilletSizeCalc, MasterYield, ChickenReceivingWeeklySize
+      StgErpItem,
+      StgErpOrderHeader,
+      StgErpOrderLine,
+      TargetSyncItem,
+      ProductSpec,
+      WeightDistribution,
+      BilWeightDistribution,
+      MpsPlan,
+      MpsPlanDaily,
+      MpsPlanOrder,
+      MpsPlanSupply,
+      MpsPlanSupplySize,
+      MpsExceptionReport,
+      DpsPlan,
+      DpsSublot,
+      DpsSublotBin,
+      DpsOrder,
+      DpsAllocation,
+      ManualOperation,
+      FilletConfig,
+      FilletGroup,
+      FilletSizeCalc,
+      MasterYield,
+      ChickenReceivingWeeklySize,
     ]),
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, BilWeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController],
+  controllers: [
+    AppController,
+    ErpIntegrationController,
+    ProductSpecController,
+    WeightDistributionController,
+    BilWeightDistributionController,
+    MpsController,
+    ManualOperationController,
+    DpsController,
+    FilletSizeController,
+    MasterYieldController,
+  ],
   providers: [AppService, OracleIntegrationService],
 })
-export class AppModule { }
+export class AppModule {}

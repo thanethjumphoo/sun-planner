@@ -1,7 +1,23 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, NotFoundException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  Query,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps-plan.entity';
+import {
+  DpsPlan,
+  DpsSublot,
+  DpsSublotBin,
+  DpsOrder,
+  DpsAllocation,
+} from './dps-plan.entity';
 
 @Controller('api/dps')
 export class DpsController {
@@ -10,22 +26,26 @@ export class DpsController {
     @InjectRepository(DpsPlan) private planRepo: Repository<DpsPlan>,
     @InjectRepository(DpsSublot) private sublotRepo: Repository<DpsSublot>,
     @InjectRepository(DpsOrder) private orderRepo: Repository<DpsOrder>,
-    @InjectRepository(DpsAllocation) private allocationRepo: Repository<DpsAllocation>,
+    @InjectRepository(DpsAllocation)
+    private allocationRepo: Repository<DpsAllocation>,
   ) {}
 
   @Get(':date')
-  async getPlanByDate(@Param('date') date: string, @Query('partType') partType: string) {
+  async getPlanByDate(
+    @Param('date') date: string,
+    @Query('partType') partType: string,
+  ) {
     const pt = partType || 'fillet';
     const plan = await this.planRepo.findOne({
       where: { productionDate: new Date(date), partType: pt },
       relations: [
-        'sublots', 
-        'sublots.bins', 
-        'orders', 
-        'allocations', 
-        'allocations.sourceBin', 
+        'sublots',
+        'sublots.bins',
+        'orders',
+        'allocations',
+        'allocations.sourceBin',
         'allocations.sourceBin.sublot',
-        'allocations.targetOrder'
+        'allocations.targetOrder',
       ],
     });
     if (!plan) return { exists: false };
@@ -33,9 +53,14 @@ export class DpsController {
   }
 
   @Delete(':date')
-  async deletePlan(@Param('date') date: string, @Query('partType') partType: string) {
+  async deletePlan(
+    @Param('date') date: string,
+    @Query('partType') partType: string,
+  ) {
     const pt = partType || 'fillet';
-    const existing = await this.planRepo.findOne({ where: { productionDate: new Date(date), partType: pt } });
+    const existing = await this.planRepo.findOne({
+      where: { productionDate: new Date(date), partType: pt },
+    });
     if (existing) {
       await this.planRepo.remove(existing);
     }
@@ -48,7 +73,9 @@ export class DpsController {
       const pt = payload.partType || 'fillet';
 
       // 1. Delete existing if any (to replace) — scoped by partType
-      const existing = await manager.findOne(DpsPlan, { where: { productionDate: new Date(date), partType: pt } });
+      const existing = await manager.findOne(DpsPlan, {
+        where: { productionDate: new Date(date), partType: pt },
+      });
       if (existing) {
         await manager.remove(existing);
       }
@@ -74,7 +101,7 @@ export class DpsController {
         sublot.avgLiveWeight = sl.avgLiveWeight;
         sublot.coProductKg = Number((sl.coProductKg || 0).toFixed(1));
 
-        sublot.bins = Object.keys(sl.bins).map(binKey => {
+        sublot.bins = Object.keys(sl.bins).map((binKey) => {
           const bin = new DpsSublotBin();
           bin.sizeLabel = binKey;
           bin.availableKg = Number((sl.bins[binKey] || 0).toFixed(1));
@@ -107,17 +134,22 @@ export class DpsController {
         relations: ['sublots', 'sublots.bins', 'orders'],
       });
 
-      if (!reloadedPlan) return { success: false, message: 'Plan not found after saving' };
+      if (!reloadedPlan)
+        return { success: false, message: 'Plan not found after saving' };
 
       // Build allocations
       const allocationsToSave = [];
       for (const alloc of payload.allocations) {
-        const dbSublot = reloadedPlan.sublots.find(s => s.sublotNumber === alloc.sublotId);
+        const dbSublot = reloadedPlan.sublots.find(
+          (s) => s.sublotNumber === alloc.sublotId,
+        );
         if (!dbSublot) continue;
-        
-        const dbBin = dbSublot.bins.find(b => b.sizeLabel === alloc.size);
-        const dbOrder = reloadedPlan.orders.find(o => `L-${o.erpOrderLineId}` === alloc.orderId);
-        
+
+        const dbBin = dbSublot.bins.find((b) => b.sizeLabel === alloc.size);
+        const dbOrder = reloadedPlan.orders.find(
+          (o) => `L-${o.erpOrderLineId}` === alloc.orderId,
+        );
+
         if (!dbOrder) continue;
 
         const newAlloc = manager.create(DpsAllocation, {

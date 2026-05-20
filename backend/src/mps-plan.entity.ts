@@ -1,4 +1,14 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, OneToMany, ManyToOne, JoinColumn, VersionColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  OneToMany,
+  ManyToOne,
+  JoinColumn,
+  VersionColumn,
+} from 'typeorm';
 
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 
@@ -24,10 +34,22 @@ export class MpsPlan {
   @Column({ name: 'total_intake_birds', type: 'int', default: 0 })
   totalIntakeBirds: number;
 
-  @Column({ name: 'total_rm_fl_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
+  @Column({
+    name: 'total_rm_fl_kg',
+    type: 'decimal',
+    precision: 18,
+    scale: 2,
+    default: 0,
+  })
   totalRmFlKg: number;
 
-  @Column({ name: 'total_demand_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
+  @Column({
+    name: 'total_demand_kg',
+    type: 'decimal',
+    precision: 18,
+    scale: 2,
+    default: 0,
+  })
   totalDemandKg: number;
 
   @CreateDateColumn({ name: 'created_at' })
@@ -36,13 +58,13 @@ export class MpsPlan {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  @OneToMany(() => MpsPlanDaily, daily => daily.mpsPlan, { cascade: true })
+  @OneToMany(() => MpsPlanDaily, (daily) => daily.mpsPlan, { cascade: true })
   dailySummaries: MpsPlanDaily[];
 
-  @OneToMany(() => MpsPlanSupply, supply => supply.mpsPlan, { cascade: true })
+  @OneToMany(() => MpsPlanSupply, (supply) => supply.mpsPlan, { cascade: true })
   supplyBreakdown: MpsPlanSupply[];
 
-  @OneToMany(() => MpsPlanOrder, order => order.mpsPlan, { cascade: true })
+  @OneToMany(() => MpsPlanOrder, (order) => order.mpsPlan, { cascade: true })
   orders: MpsPlanOrder[];
 
   @OneToMany('MpsExceptionReport', 'mpsPlan', { cascade: true })
@@ -55,7 +77,9 @@ export class MpsPlanDaily {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => MpsPlan, plan => plan.dailySummaries, { onDelete: 'CASCADE' })
+  @ManyToOne(() => MpsPlan, (plan) => plan.dailySummaries, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'mps_plan_id' })
   mpsPlan: MpsPlan;
 
@@ -66,10 +90,22 @@ export class MpsPlanDaily {
   @Column({ name: 'intake_birds', type: 'int', default: 0 })
   intakeBirds: number;
 
-  @Column({ name: 'rm_fl_avail_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
+  @Column({
+    name: 'rm_fl_avail_kg',
+    type: 'decimal',
+    precision: 18,
+    scale: 2,
+    default: 0,
+  })
   rmFlAvailKg: number;
 
-  @Column({ name: 'demand_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
+  @Column({
+    name: 'demand_kg',
+    type: 'decimal',
+    precision: 18,
+    scale: 2,
+    default: 0,
+  })
   demandKg: number;
 
   @Column({ name: 'cutting_staff', type: 'int', default: 0 })
@@ -88,7 +124,7 @@ export class MpsPlanOrder {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => MpsPlan, plan => plan.orders, { onDelete: 'CASCADE' })
+  @ManyToOne(() => MpsPlan, (plan) => plan.orders, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'mps_plan_id' })
   mpsPlan: MpsPlan;
 

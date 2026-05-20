@@ -80,7 +80,6 @@ export class OracleIntegrationService implements OnModuleDestroy {
         outFormat: oracledb.OUT_FORMAT_OBJECT,
       });
       return result.rows; // คืนค่าข้อมูลออกมาเป็น Array ของ Object
-
     } catch (err) {
       console.error('Query execution error:', err);
       throw err;
@@ -143,8 +142,8 @@ export class OracleIntegrationService implements OnModuleDestroy {
         const erpRows: any[] = result.rows || [];
 
         for (const row of erpRows) {
-          let item = await this.stgErpItemRepository.findOne({ 
-            where: { erpItemCode: row.ERP_ITEM_CODE, erpOrgId: row.ERP_ORG_ID } 
+          let item = await this.stgErpItemRepository.findOne({
+            where: { erpItemCode: row.ERP_ITEM_CODE, erpOrgId: row.ERP_ORG_ID },
           });
 
           if (!item) {
@@ -167,7 +166,6 @@ export class OracleIntegrationService implements OnModuleDestroy {
       }
 
       return savedItems;
-
     } catch (err) {
       console.error('Error syncing items:', err);
       throw err;
@@ -232,7 +230,10 @@ export class OracleIntegrationService implements OnModuleDestroy {
       for (const row of erpRows) {
         // Upsert: find existing or create new
         let order = await this.stgErpOrderHeaderRepository.findOne({
-          where: { erpOrderHeaderId: row.ERP_ORDER_HEADER_ID, erpOrgId: row.ERP_ORG_ID },
+          where: {
+            erpOrderHeaderId: row.ERP_ORDER_HEADER_ID,
+            erpOrgId: row.ERP_ORG_ID,
+          },
         });
 
         if (!order) {
@@ -291,10 +292,10 @@ export class OracleIntegrationService implements OnModuleDestroy {
       const headers = await this.stgErpOrderHeaderRepository.find();
       if (headers.length === 0) return [];
 
-      const headerIds = headers.map(h => h.erpOrderHeaderId);
+      const headerIds = headers.map((h) => h.erpOrderHeaderId);
       const savedLines = [];
 
-      // Oracle has a limit of 1000 items in an IN clause. 
+      // Oracle has a limit of 1000 items in an IN clause.
       // We chunk the headerIds into groups of 990 to be safe.
       const chunkSize = 990;
       for (let i = 0; i < headerIds.length; i += chunkSize) {
@@ -354,7 +355,9 @@ export class OracleIntegrationService implements OnModuleDestroy {
         const linesToSave = [];
 
         // 1. Fetch existing lines in one go for this chunk to check existence
-        const erpLineIds = erpRows.map(r => r.ERP_ORDER_LINE_ID).filter(id => id !== undefined && id !== null);
+        const erpLineIds = erpRows
+          .map((r) => r.ERP_ORDER_LINE_ID)
+          .filter((id) => id !== undefined && id !== null);
         if (erpLineIds.length === 0) {
           continue;
         }
@@ -365,11 +368,16 @@ export class OracleIntegrationService implements OnModuleDestroy {
         for (let j = 0; j < erpLineIds.length; j += mssqlChunkSize) {
           const mssqlChunk = erpLineIds.slice(j, j + mssqlChunkSize);
           const chunkLines = await this.stgErpOrderLineRepository.find({
-            where: mssqlChunk.map(id => ({ erpOrderLineId: id, erpOrgId: 82 }))
+            where: mssqlChunk.map((id) => ({
+              erpOrderLineId: id,
+              erpOrgId: 82,
+            })),
           });
           existingLines.push(...chunkLines);
         }
-        const lineMap = new Map(existingLines.map(l => [`${l.erpOrderLineId}_${l.erpOrgId}`, l]));
+        const lineMap = new Map(
+          existingLines.map((l) => [`${l.erpOrderLineId}_${l.erpOrgId}`, l]),
+        );
 
         for (const row of erpRows) {
           const key = `${row.ERP_ORDER_LINE_ID}_${row.ERP_ORG_ID}`;
@@ -400,7 +408,8 @@ export class OracleIntegrationService implements OnModuleDestroy {
           const saveChunkSize = 50;
           for (let k = 0; k < linesToSave.length; k += saveChunkSize) {
             const chunkToSave = linesToSave.slice(k, k + saveChunkSize);
-            const saved = await this.stgErpOrderLineRepository.save(chunkToSave);
+            const saved =
+              await this.stgErpOrderLineRepository.save(chunkToSave);
             savedLines.push(...saved);
           }
         }
@@ -493,7 +502,9 @@ export class OracleIntegrationService implements OnModuleDestroy {
    * แก้ไขรายการ Order แบบ Manual
    */
   async updateManualOrder(id: number, data: any): Promise<any> {
-    const header = await this.stgErpOrderHeaderRepository.findOne({ where: { id, isManual: true } });
+    const header = await this.stgErpOrderHeaderRepository.findOne({
+      where: { id, isManual: true },
+    });
     if (!header) throw new Error('Order not found');
 
     header.erpOrderNumber = data.erpOrderNumber;
@@ -504,7 +515,9 @@ export class OracleIntegrationService implements OnModuleDestroy {
     await this.stgErpOrderHeaderRepository.save(header);
 
     // ลบ Lines เก่าทิ้งแล้วลงใหม่
-    await this.stgErpOrderLineRepository.delete({ erpOrderHeaderId: header.erpOrderHeaderId });
+    await this.stgErpOrderLineRepository.delete({
+      erpOrderHeaderId: header.erpOrderHeaderId,
+    });
 
     const savedLines = [];
     for (let i = 0; i < data.lines.length; i++) {
@@ -535,11 +548,15 @@ export class OracleIntegrationService implements OnModuleDestroy {
    * ลบรายการ Order แบบ Manual
    */
   async deleteManualOrder(headerId: number): Promise<any> {
-    const header = await this.stgErpOrderHeaderRepository.findOne({ where: { id: headerId, isManual: true } });
+    const header = await this.stgErpOrderHeaderRepository.findOne({
+      where: { id: headerId, isManual: true },
+    });
     if (!header) throw new Error('Order not found or not a manual order');
 
     // Delete lines first
-    await this.stgErpOrderLineRepository.delete({ erpOrderHeaderId: header.erpOrderHeaderId });
+    await this.stgErpOrderLineRepository.delete({
+      erpOrderHeaderId: header.erpOrderHeaderId,
+    });
     // Delete header
     await this.stgErpOrderHeaderRepository.delete(header.id);
 
@@ -550,20 +567,24 @@ export class OracleIntegrationService implements OnModuleDestroy {
    * ดึงข้อมูล Orders สำหรับ Demand Management (Header + Lines + Item Desc จาก stg_erp_items)
    */
   async getDemandOrders(): Promise<any[]> {
-    const headers = await this.stgErpOrderHeaderRepository.find({ order: { erpOrderDate: 'DESC' } });
+    const headers = await this.stgErpOrderHeaderRepository.find({
+      order: { erpOrderDate: 'DESC' },
+    });
     const lines = await this.stgErpOrderLineRepository.find();
     const items = await this.stgErpItemRepository.find();
 
     // สร้าง Map ของ Item Code -> Item Description
     const itemMap = new Map<string, string>();
-    items.forEach(i => itemMap.set(i.erpItemCode, i.erpItemDesc));
+    items.forEach((i) => itemMap.set(i.erpItemCode, i.erpItemDesc));
 
-    return headers.map(h => ({
+    return headers.map((h) => ({
       ...h,
       lines: lines
-        .filter(l => l.erpOrderHeaderId === h.erpOrderHeaderId)
-        .sort((a, b) => Number(a.erpOrderLineNumber) - Number(b.erpOrderLineNumber))
-        .map(l => ({
+        .filter((l) => l.erpOrderHeaderId === h.erpOrderHeaderId)
+        .sort(
+          (a, b) => Number(a.erpOrderLineNumber) - Number(b.erpOrderLineNumber),
+        )
+        .map((l) => ({
           ...l,
           erpItemDesc: itemMap.get(l.erpOrderItemCode) || null,
           isItemSynced: itemMap.has(l.erpOrderItemCode),

@@ -1,7 +1,11 @@
 import { Controller, Get, Post, Delete, Body, Param } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { FilletConfig, FilletGroup, FilletSizeCalc } from './fillet-size.entity';
+import {
+  FilletConfig,
+  FilletGroup,
+  FilletSizeCalc,
+} from './fillet-size.entity';
 
 @Controller('api/fillet-size')
 export class FilletSizeController {
@@ -12,7 +16,7 @@ export class FilletSizeController {
     private groupRepo: Repository<FilletGroup>,
     @InjectRepository(FilletSizeCalc)
     private calcRepo: Repository<FilletSizeCalc>,
-  ) { }
+  ) {}
 
   // ─── Get all fillet data (yield + groups + saved calcs) ───
   @Get()
@@ -26,17 +30,17 @@ export class FilletSizeController {
       ]);
 
       // Extract fillet yield from config
-      const yieldConfig = configs.find(c => c.configKey === 'fillet_yield');
+      const yieldConfig = configs.find((c) => c.configKey === 'fillet_yield');
       const filletYield = yieldConfig ? Number(yieldConfig.configValue) : 0.04;
 
       return {
         filletYield,
-        groups: groups.map(g => ({
+        groups: groups.map((g) => ({
           id: g.id,
           name: g.groupName,
           sortOrder: g.sortOrder,
         })),
-        calcs: calcs.map(c => ({
+        calcs: calcs.map((c) => ({
           id: c.id,
           colLabel: c.colLabel,
           lbWeight: Number(c.lbWeight),
@@ -54,11 +58,16 @@ export class FilletSizeController {
   // ─── Save fillet yield ───
   @Post('yield')
   async saveYield(@Body() body: { filletYield: number }) {
-    let config = await this.configRepo.findOne({ where: { configKey: 'fillet_yield' } });
+    let config = await this.configRepo.findOne({
+      where: { configKey: 'fillet_yield' },
+    });
     if (config) {
       config.configValue = body.filletYield;
     } else {
-      config = this.configRepo.create({ configKey: 'fillet_yield', configValue: body.filletYield });
+      config = this.configRepo.create({
+        configKey: 'fillet_yield',
+        configValue: body.filletYield,
+      });
     }
     await this.configRepo.save(config);
     return { success: true, filletYield: Number(config.configValue) };
@@ -66,9 +75,17 @@ export class FilletSizeController {
 
   // ─── Bulk save fillet size calculations ───
   @Post('calc/save')
-  async saveCalc(@Body() body: {
-    items: { colLabel: string; lbWeight: number; filletSize: number; groupName: string | null }[];
-  }) {
+  async saveCalc(
+    @Body()
+    body: {
+      items: {
+        colLabel: string;
+        lbWeight: number;
+        filletSize: number;
+        groupName: string | null;
+      }[];
+    },
+  ) {
     await this.calcRepo.clear();
     const entities = body.items.map((item, idx) =>
       this.calcRepo.create({
@@ -99,7 +116,11 @@ export class FilletSizeController {
     const saved = await this.groupRepo.save(group);
     return {
       success: true,
-      group: { id: saved.id, name: saved.groupName, sortOrder: saved.sortOrder },
+      group: {
+        id: saved.id,
+        name: saved.groupName,
+        sortOrder: saved.sortOrder,
+      },
     };
   }
 

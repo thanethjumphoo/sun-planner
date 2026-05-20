@@ -7,14 +7,14 @@ import { ManualOperation } from './manual-operation.entity';
 export class ManualOperationController {
   constructor(
     @InjectRepository(ManualOperation)
-    private readonly manualOpRepo: Repository<ManualOperation>
+    private readonly manualOpRepo: Repository<ManualOperation>,
   ) {}
 
   @Get()
   async getManualOperations(
     @Query('startDate') startDate: string,
     @Query('endDate') endDate: string,
-    @Query('partType') partType: string
+    @Query('partType') partType: string,
   ) {
     const pt = partType || 'fillet';
     if (!startDate || !endDate) {
@@ -23,13 +23,15 @@ export class ManualOperationController {
     return this.manualOpRepo.find({
       where: {
         productionDate: Between(new Date(startDate), new Date(endDate)),
-        partType: pt
-      }
+        partType: pt,
+      },
     });
   }
 
   @Post('save')
-  async saveManualOperations(@Body() body: { data: any[], partType?: string } | any[]) {
+  async saveManualOperations(
+    @Body() body: { data: any[]; partType?: string } | any[],
+  ) {
     // Support both old format (array) and new format ({ data, partType })
     let data: any[];
     let partType: string;
@@ -43,13 +45,16 @@ export class ManualOperationController {
 
     for (const op of data) {
       const existing = await this.manualOpRepo.findOne({
-        where: { productionDate: new Date(op.date), partType }
+        where: { productionDate: new Date(op.date), partType },
       });
 
       if (existing) {
-        if (op.plannedStationWorkers !== undefined) existing.plannedStationWorkers = op.plannedStationWorkers;
-        if (op.actualStationWorkers !== undefined) existing.actualStationWorkers = op.actualStationWorkers;
-        if (op.actualCuttingWorkers !== undefined) existing.actualCuttingWorkers = op.actualCuttingWorkers;
+        if (op.plannedStationWorkers !== undefined)
+          existing.plannedStationWorkers = op.plannedStationWorkers;
+        if (op.actualStationWorkers !== undefined)
+          existing.actualStationWorkers = op.actualStationWorkers;
+        if (op.actualCuttingWorkers !== undefined)
+          existing.actualCuttingWorkers = op.actualCuttingWorkers;
         await this.manualOpRepo.save(existing);
       } else {
         const newOp = this.manualOpRepo.create({
@@ -57,7 +62,7 @@ export class ManualOperationController {
           partType,
           plannedStationWorkers: op.plannedStationWorkers || 0,
           actualStationWorkers: op.actualStationWorkers || 0,
-          actualCuttingWorkers: op.actualCuttingWorkers || 0
+          actualCuttingWorkers: op.actualCuttingWorkers || 0,
         });
         await this.manualOpRepo.save(newOp);
       }

@@ -21,7 +21,7 @@ export class ChickenReceivingService {
 
     @InjectRepository(ChickenReceivingActualDaily)
     private actualRepo: Repository<ChickenReceivingActualDaily>,
-  ) { }
+  ) {}
 
   private getRepo(type: string): Repository<any> {
     switch (type) {
@@ -42,7 +42,7 @@ export class ChickenReceivingService {
     const repo = this.getRepo(type);
     // Remove empty strings to avoid type issues with numbers/dates
     const cleanData = Object.fromEntries(
-      Object.entries(data).map(([k, v]) => [k, v === '' ? null : v])
+      Object.entries(data).map(([k, v]) => [k, v === '' ? null : v]),
     );
     const newEntry = repo.create(cleanData);
     return await repo.save(newEntry);
@@ -60,7 +60,7 @@ export class ChickenReceivingService {
   async update(type: string, id: string, data: any) {
     const repo = this.getRepo(type);
     const cleanData = Object.fromEntries(
-      Object.entries(data).map(([k, v]) => [k, v === '' ? null : v])
+      Object.entries(data).map(([k, v]) => [k, v === '' ? null : v]),
     );
     await repo.update(id, cleanData);
     return await repo.findOne({ where: { id } });
@@ -74,10 +74,10 @@ export class ChickenReceivingService {
 
   async createBatch(type: string, rows: any[]) {
     const repo = this.getRepo(type);
-    const cleaned = rows.map(row =>
+    const cleaned = rows.map((row) =>
       Object.fromEntries(
-        Object.entries(row).map(([k, v]) => [k, v === '' ? null : v])
-      )
+        Object.entries(row).map(([k, v]) => [k, v === '' ? null : v]),
+      ),
     );
     return await this.dataSource.transaction(async (manager) => {
       const entities = manager.create(repo.target, cleaned);

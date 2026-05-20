@@ -1,4 +1,13 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  OneToMany,
+  JoinColumn,
+} from 'typeorm';
 
 @Entity('master_yield')
 export class MasterYield {
@@ -9,7 +18,7 @@ export class MasterYield {
   name: string;
 
   @Column({ type: 'decimal', precision: 10, scale: 4, nullable: true })
-  yieldPercentage: number; 
+  yieldPercentage: number;
 
   @Column({ type: 'varchar', length: 50, nullable: true })
   type: string;
@@ -17,7 +26,10 @@ export class MasterYield {
   @Column({ type: 'uuid', nullable: true })
   parentId: string;
 
-  @ManyToOne(() => MasterYield, (yieldObj) => yieldObj.children, { nullable: true, onDelete: 'NO ACTION' })
+  @ManyToOne(() => MasterYield, (yieldObj) => yieldObj.children, {
+    nullable: true,
+    onDelete: 'NO ACTION',
+  })
   @JoinColumn({ name: 'parentId' })
   parent: MasterYield;
 

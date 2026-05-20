@@ -1,4 +1,10 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity('fillet_config')
 export class FilletConfig {
@@ -8,7 +14,13 @@ export class FilletConfig {
   @Column({ name: 'CONFIG_KEY', type: 'varchar', length: 50, unique: true })
   configKey: string;
 
-  @Column({ name: 'CONFIG_VALUE', type: 'decimal', precision: 10, scale: 6, default: 0 })
+  @Column({
+    name: 'CONFIG_VALUE',
+    type: 'decimal',
+    precision: 10,
+    scale: 6,
+    default: 0,
+  })
   configValue: number;
 
   @CreateDateColumn({ name: 'CREATED_AT' })
@@ -46,7 +58,13 @@ export class FilletSizeCalc {
   colLabel: string;
 
   // LB Weight = colValue / 80%
-  @Column({ name: 'LB_WEIGHT', type: 'decimal', precision: 10, scale: 4, default: 0 })
+  @Column({
+    name: 'LB_WEIGHT',
+    type: 'decimal',
+    precision: 10,
+    scale: 4,
+    default: 0,
+  })
   lbWeight: number;
 
   // Fillet Size = (yield * lbWeight * 1000) / 2, stored as integer

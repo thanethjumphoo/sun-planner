@@ -20,17 +20,22 @@ export class ErpIntegrationController {
   // Get all target item codes
   @Get('target-items')
   async getTargetItems() {
-    const items = await this.targetItemRepo.find({ order: { createdAt: 'DESC' } });
-    return items.map(item => item.itemCode);
+    const items = await this.targetItemRepo.find({
+      order: { createdAt: 'DESC' },
+    });
+    return items.map((item) => item.itemCode);
   }
 
   // Add new item codes
   @Post('target-items')
   async addTargetItems(@Body() body: { itemCodes: string[] }) {
-    if (!body.itemCodes || !Array.isArray(body.itemCodes)) return { success: false };
-    
+    if (!body.itemCodes || !Array.isArray(body.itemCodes))
+      return { success: false };
+
     for (const code of body.itemCodes) {
-      const exists = await this.targetItemRepo.findOne({ where: { itemCode: code } });
+      const exists = await this.targetItemRepo.findOne({
+        where: { itemCode: code },
+      });
       if (!exists) {
         const newItem = this.targetItemRepo.create({ itemCode: code });
         await this.targetItemRepo.save(newItem);
@@ -50,9 +55,9 @@ export class ErpIntegrationController {
   @Post('sync-items')
   async syncTargetItems() {
     const items = await this.targetItemRepo.find();
-    const codes = items.map(i => i.itemCode);
+    const codes = items.map((i) => i.itemCode);
     if (codes.length === 0) return { message: 'No item codes to sync' };
-    
+
     const syncedItems = await this.oracleService.syncItems(codes);
     return { success: true, count: syncedItems.length, data: syncedItems };
   }

@@ -1,4 +1,10 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity('weight_distributions')
 export class WeightDistribution {
@@ -14,7 +20,13 @@ export class WeightDistribution {
   colLabel: string;
 
   // Distribution value as decimal (e.g. 0.36 = 36%)
-  @Column({ name: 'DIST_VALUE', type: 'decimal', precision: 10, scale: 6, default: 0 })
+  @Column({
+    name: 'DIST_VALUE',
+    type: 'decimal',
+    precision: 10,
+    scale: 6,
+    default: 0,
+  })
   distValue: number;
 
   @CreateDateColumn({ name: 'CREATED_AT' })

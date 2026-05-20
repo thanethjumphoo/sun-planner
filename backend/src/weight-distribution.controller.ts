@@ -13,11 +13,13 @@ export class WeightDistributionController {
   // ─── Get all distribution data (returns matrix-friendly structure) ───
   @Get()
   async getAll() {
-    const rows = await this.wdRepo.find({ order: { rowLabel: 'ASC', colLabel: 'ASC' } });
+    const rows = await this.wdRepo.find({
+      order: { rowLabel: 'ASC', colLabel: 'ASC' },
+    });
 
     // Build matrix structure for frontend
-    const rowLabels = [...new Set(rows.map(r => r.rowLabel))];
-    const colLabels = [...new Set(rows.map(r => r.colLabel))];
+    const rowLabels = [...new Set(rows.map((r) => r.rowLabel))];
+    const colLabels = [...new Set(rows.map((r) => r.colLabel))];
     const matrix: Record<string, Record<string, number>> = {};
 
     for (const r of rows) {
@@ -30,11 +32,14 @@ export class WeightDistributionController {
 
   // ─── Bulk save (Delete all & re-insert) ───
   @Post('bulk-save')
-  async bulkSave(@Body() body: {
-    rowLabels: string[];
-    colLabels: string[];
-    matrix: Record<string, Record<string, number>>;
-  }) {
+  async bulkSave(
+    @Body()
+    body: {
+      rowLabels: string[];
+      colLabels: string[];
+      matrix: Record<string, Record<string, number>>;
+    },
+  ) {
     // 1. Delete all existing records
     await this.wdRepo.clear();
 

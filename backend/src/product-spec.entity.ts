@@ -1,4 +1,10 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity('product_specs')
 export class ProductSpec {
@@ -12,10 +18,20 @@ export class ProductSpec {
   @Column({ name: 'ERP_ITEM_CODE', type: 'varchar', length: 100, unique: true })
   erpItemCode: string;
 
-  @Column({ name: 'ERP_ITEM_DESC', type: 'nvarchar', length: 255, nullable: true })
+  @Column({
+    name: 'ERP_ITEM_DESC',
+    type: 'nvarchar',
+    length: 255,
+    nullable: true,
+  })
   erpItemDesc: string;
 
-  @Column({ name: 'ERP_ITEM_TYPE', type: 'varchar', length: 50, nullable: true })
+  @Column({
+    name: 'ERP_ITEM_TYPE',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
   erpItemType: string;
 
   // ─── Product Spec Data (editable) ───
@@ -25,19 +41,42 @@ export class ProductSpec {
   @Column({ name: 'PRODUCT_SIZE', type: 'varchar', length: 50, nullable: true })
   productSize: string; // '50-65', 'unsize', '40 Down', '60 Up'
 
-  @Column({ name: 'PRODUCT_YIELD', type: 'decimal', precision: 10, scale: 4, nullable: true })
+  @Column({
+    name: 'PRODUCT_YIELD',
+    type: 'decimal',
+    precision: 10,
+    scale: 4,
+    nullable: true,
+  })
   productYield: number;
 
-  @Column({ name: 'PRODUCT_WEIGHT', type: 'decimal', precision: 10, scale: 4, nullable: true })
+  @Column({
+    name: 'PRODUCT_WEIGHT',
+    type: 'decimal',
+    precision: 10,
+    scale: 4,
+    nullable: true,
+  })
   productWeight: number;
 
-  @Column({ name: 'PRODUCT_SPEED', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  @Column({
+    name: 'PRODUCT_SPEED',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+  })
   productSpeed: number;
 
   @Column({ name: 'PRODUCT_LEAD', type: 'int', nullable: true })
   productLead: number; // Default: chilled=1, freeze=5
 
-  @Column({ name: 'MASTER_YIELD_IDS', type: 'varchar', length: 1000, nullable: true })
+  @Column({
+    name: 'MASTER_YIELD_IDS',
+    type: 'varchar',
+    length: 1000,
+    nullable: true,
+  })
   masterYieldIds: string | null;
 
   @CreateDateColumn({ name: 'CREATED_AT' })

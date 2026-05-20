@@ -1,9 +1,19 @@
-import { Controller, Get, Post, Body, Param, Put, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Put,
+  Delete,
+} from '@nestjs/common';
 import { ChickenReceivingService } from './chicken-receiving.service';
 
 @Controller('api/chicken-receiving')
 export class ChickenReceivingController {
-  constructor(private readonly chickenReceivingService: ChickenReceivingService) { }
+  constructor(
+    private readonly chickenReceivingService: ChickenReceivingService,
+  ) {}
 
   @Post(':type/batch')
   createBatch(@Param('type') type: string, @Body() data: { rows: any[] }) {
@@ -21,7 +31,11 @@ export class ChickenReceivingController {
   }
 
   @Put(':type/:id')
-  update(@Param('type') type: string, @Param('id') id: string, @Body() data: any) {
+  update(
+    @Param('type') type: string,
+    @Param('id') id: string,
+    @Body() data: any,
+  ) {
     return this.chickenReceivingService.update(type, id, data);
   }
 

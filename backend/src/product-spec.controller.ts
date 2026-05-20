@@ -11,7 +11,7 @@ export class ProductSpecController {
     private productSpecRepo: Repository<ProductSpec>,
     @InjectRepository(StgErpItem)
     private stgItemRepo: Repository<StgErpItem>,
-  ) { }
+  ) {}
 
   // ─── Get all ERP items from stg_erp_items (for selection) ───
   @Get('erp-items')
@@ -21,7 +21,7 @@ export class ProductSpecController {
       const items = await this.stgItemRepo.find({
         where: [
           { erpItemCode: Like(`%${search}%`) },
-          { erpItemDesc: Like(`%${search}%`) }
+          { erpItemDesc: Like(`%${search}%`) },
         ],
         order: { erpItemCode: 'ASC' },
       });
@@ -44,13 +44,13 @@ export class ProductSpecController {
     // Enrich description from StgErpItem if missing
     const items = await this.stgItemRepo.find();
     const itemMap = new Map<string, string>();
-    items.forEach(i => {
+    items.forEach((i) => {
       if (i.erpItemCode) itemMap.set(i.erpItemCode, i.erpItemDesc);
     });
 
-    return specs.map(spec => ({
+    return specs.map((spec) => ({
       ...spec,
-      erpItemDesc: spec.erpItemDesc || itemMap.get(spec.erpItemCode) || '-'
+      erpItemDesc: spec.erpItemDesc || itemMap.get(spec.erpItemCode) || '-',
     }));
   }
 
@@ -62,30 +62,38 @@ export class ProductSpecController {
 
   // ─── Create a new product spec (from selected ERP item) ───
   @Post()
-  async create(@Body() body: {
-    erpItemId: number;
-    erpItemCode: string;
-    erpItemDesc: string;
-    erpItemType: string;
-    productType: string;
-    productSize: string;
-    productYield: number;
-    productWeight: number;
-    productSpeed: number;
-    productLead: number;
-  }) {
+  async create(
+    @Body()
+    body: {
+      erpItemId: number;
+      erpItemCode: string;
+      erpItemDesc: string;
+      erpItemType: string;
+      productType: string;
+      productSize: string;
+      productYield: number;
+      productWeight: number;
+      productSpeed: number;
+      productLead: number;
+    },
+  ) {
     // Check if spec already exists for this item code
     const existing = await this.productSpecRepo.findOne({
       where: { erpItemCode: body.erpItemCode },
     });
     if (existing) {
-      return { success: false, message: 'Product spec already exists for this item code' };
+      return {
+        success: false,
+        message: 'Product spec already exists for this item code',
+      };
     }
 
     // Fetch description from StgErpItem if body one is missing
     let desc = body.erpItemDesc;
     if (!desc || desc === '-') {
-      const erpItem = await this.stgItemRepo.findOne({ where: { erpItemCode: body.erpItemCode } });
+      const erpItem = await this.stgItemRepo.findOne({
+        where: { erpItemCode: body.erpItemCode },
+      });
       if (erpItem) desc = erpItem.erpItemDesc;
     }
 
@@ -108,14 +116,18 @@ export class ProductSpecController {
 
   // ─── Update an existing product spec ───
   @Put(':id')
-  async update(@Param('id') id: number, @Body() body: {
-    productType?: string;
-    productSize?: string;
-    productYield?: number;
-    productWeight?: number;
-    productSpeed?: number;
-    productLead?: number;
-  }) {
+  async update(
+    @Param('id') id: number,
+    @Body()
+    body: {
+      productType?: string;
+      productSize?: string;
+      productYield?: number;
+      productWeight?: number;
+      productSpeed?: number;
+      productLead?: number;
+    },
+  ) {
     const spec = await this.productSpecRepo.findOne({ where: { id } });
     if (!spec) {
       return { success: false, message: 'Product spec not found' };
@@ -125,7 +137,8 @@ export class ProductSpecController {
     if (body.productType !== undefined) spec.productType = body.productType;
     if (body.productSize !== undefined) spec.productSize = body.productSize;
     if (body.productYield !== undefined) spec.productYield = body.productYield;
-    if (body.productWeight !== undefined) spec.productWeight = body.productWeight;
+    if (body.productWeight !== undefined)
+      spec.productWeight = body.productWeight;
     if (body.productSpeed !== undefined) spec.productSpeed = body.productSpeed;
     if (body.productLead !== undefined) spec.productLead = body.productLead;
 
@@ -135,34 +148,43 @@ export class ProductSpecController {
 
   // ─── Bulk create specs from multiple ERP items ───
   @Post('bulk')
-  async bulkCreate(@Body() body: {
-    items: Array<{
-      erpItemId: number;
-      erpItemCode: string;
-      erpItemDesc: string;
-      erpItemType: string;
-    }>;
-    productType: string;
-    productSize: string;
-    productYield: number;
-    productWeight: number;
-    productSpeed: number;
-    productLead: number;
-  }) {
+  async bulkCreate(
+    @Body()
+    body: {
+      items: Array<{
+        erpItemId: number;
+        erpItemCode: string;
+        erpItemDesc: string;
+        erpItemType: string;
+      }>;
+      productType: string;
+      productSize: string;
+      productYield: number;
+      productWeight: number;
+      productSpeed: number;
+      productLead: number;
+    },
+  ) {
     const results = [];
     for (const item of body.items) {
       const existing = await this.productSpecRepo.findOne({
         where: { erpItemCode: item.erpItemCode },
       });
       if (existing) {
-        results.push({ itemCode: item.erpItemCode, status: 'skipped', message: 'Already exists' });
+        results.push({
+          itemCode: item.erpItemCode,
+          status: 'skipped',
+          message: 'Already exists',
+        });
         continue;
       }
 
       // Fetch description from StgErpItem if missing
       let desc = item.erpItemDesc;
       if (!desc || desc === '-') {
-        const erpItem = await this.stgItemRepo.findOne({ where: { erpItemCode: item.erpItemCode } });
+        const erpItem = await this.stgItemRepo.findOne({
+          where: { erpItemCode: item.erpItemCode },
+        });
         if (erpItem) desc = erpItem.erpItemDesc;
       }
 
@@ -180,28 +202,39 @@ export class ProductSpecController {
       });
 
       const saved = await this.productSpecRepo.save(spec);
-      results.push({ itemCode: item.erpItemCode, status: 'created', data: saved });
+      results.push({
+        itemCode: item.erpItemCode,
+        status: 'created',
+        data: saved,
+      });
     }
     return { success: true, results };
   }
 
   // ─── Import from Excel ───
   @Post('import-excel')
-  async importExcel(@Body() body: {
-    rows: Array<{
-      erpItemCode: string;
-      productType?: string;
-      productSize?: string;
-      productYield?: number;
-      productWeight?: number;
-      productSpeed?: number;
-      productLead?: number;
-    }>
-  }) {
+  async importExcel(
+    @Body()
+    body: {
+      rows: Array<{
+        erpItemCode: string;
+        productType?: string;
+        productSize?: string;
+        productYield?: number;
+        productWeight?: number;
+        productSpeed?: number;
+        productLead?: number;
+      }>;
+    },
+  ) {
     const results: any[] = [];
     for (const row of body.rows) {
       if (!row.erpItemCode) {
-        results.push({ itemCode: '(empty)', status: 'skipped', message: 'No item code' });
+        results.push({
+          itemCode: '(empty)',
+          status: 'skipped',
+          message: 'No item code',
+        });
         continue;
       }
 
@@ -211,17 +244,25 @@ export class ProductSpecController {
 
       if (existing) {
         // Update existing spec
-        if (row.productType !== undefined) existing.productType = row.productType;
-        if (row.productSize !== undefined) existing.productSize = row.productSize;
-        if (row.productYield !== undefined) existing.productYield = row.productYield;
-        if (row.productWeight !== undefined) existing.productWeight = row.productWeight;
-        if (row.productSpeed !== undefined) existing.productSpeed = row.productSpeed;
-        if (row.productLead !== undefined) existing.productLead = row.productLead;
+        if (row.productType !== undefined)
+          existing.productType = row.productType;
+        if (row.productSize !== undefined)
+          existing.productSize = row.productSize;
+        if (row.productYield !== undefined)
+          existing.productYield = row.productYield;
+        if (row.productWeight !== undefined)
+          existing.productWeight = row.productWeight;
+        if (row.productSpeed !== undefined)
+          existing.productSpeed = row.productSpeed;
+        if (row.productLead !== undefined)
+          existing.productLead = row.productLead;
         await this.productSpecRepo.save(existing);
         results.push({ itemCode: row.erpItemCode, status: 'updated' });
       } else {
         // Create new spec — try to get desc from ERP
-        const erpItem = await this.stgItemRepo.findOne({ where: { erpItemCode: row.erpItemCode } });
+        const erpItem = await this.stgItemRepo.findOne({
+          where: { erpItemCode: row.erpItemCode },
+        });
         const spec = this.productSpecRepo.create({
           erpItemId: erpItem?.erpItemId || undefined,
           erpItemCode: row.erpItemCode,
@@ -232,26 +273,33 @@ export class ProductSpecController {
           productYield: row.productYield ?? 0.84,
           productWeight: row.productWeight ?? 2,
           productSpeed: row.productSpeed ?? 45,
-          productLead: row.productLead ?? (row.productType === 'freeze' ? 5 : 1),
+          productLead:
+            row.productLead ?? (row.productType === 'freeze' ? 5 : 1),
         });
         await this.productSpecRepo.save(spec);
         results.push({ itemCode: row.erpItemCode, status: 'created' });
       }
     }
 
-    const created = results.filter(r => r.status === 'created').length;
-    const updated = results.filter(r => r.status === 'updated').length;
-    const skipped = results.filter(r => r.status === 'skipped').length;
-    return { success: true, summary: { created, updated, skipped, total: body.rows.length }, results };
+    const created = results.filter((r) => r.status === 'created').length;
+    const updated = results.filter((r) => r.status === 'updated').length;
+    const skipped = results.filter((r) => r.status === 'skipped').length;
+    return {
+      success: true,
+      summary: { created, updated, skipped, total: body.rows.length },
+      results,
+    };
   }
 
   @Post('assign-yield')
-  async assignMasterYield(@Body() body: { specIds: number[], masterYieldId: string | null }) {
+  async assignMasterYield(
+    @Body() body: { specIds: number[]; masterYieldId: string | null },
+  ) {
     if (!body.specIds || body.specIds.length === 0) return { success: true };
-    
+
     // Fetch all specs to update (using modern findBy to avoid deprecated findByIds)
     const specs = await this.productSpecRepo.findBy({ id: In(body.specIds) });
-    
+
     for (const spec of specs) {
       if (body.masterYieldId === null) {
         // If masterYieldId is null, the UI wants to clear ALL yield mappings for these specs?
@@ -260,26 +308,37 @@ export class ProductSpecController {
         // Right now it clears everything. Let's keep it clearing everything unless we change the UI.
         spec.masterYieldIds = null;
       } else {
-        const ids = spec.masterYieldIds ? spec.masterYieldIds.split(',').map(id => id.trim()).filter(id => id) : [];
+        const ids = spec.masterYieldIds
+          ? spec.masterYieldIds
+              .split(',')
+              .map((id) => id.trim())
+              .filter((id) => id)
+          : [];
         if (!ids.includes(body.masterYieldId)) {
           ids.push(body.masterYieldId);
         }
         spec.masterYieldIds = ids.join(',');
       }
     }
-    
+
     await this.productSpecRepo.save(specs);
     return { success: true };
   }
 
   @Post('unassign-yield')
-  async unassignMasterYield(@Body() body: { specIds: number[], masterYieldId: string }) {
-    if (!body.specIds || body.specIds.length === 0 || !body.masterYieldId) return { success: true };
-    
+  async unassignMasterYield(
+    @Body() body: { specIds: number[]; masterYieldId: string },
+  ) {
+    if (!body.specIds || body.specIds.length === 0 || !body.masterYieldId)
+      return { success: true };
+
     const specs = await this.productSpecRepo.findByIds(body.specIds);
     for (const spec of specs) {
       if (spec.masterYieldIds) {
-        const ids = spec.masterYieldIds.split(',').map(id => id.trim()).filter(id => id && id !== body.masterYieldId);
+        const ids = spec.masterYieldIds
+          .split(',')
+          .map((id) => id.trim())
+          .filter((id) => id && id !== body.masterYieldId);
         spec.masterYieldIds = ids.length > 0 ? ids.join(',') : null;
       }
     }
