@@ -10,6 +10,7 @@ import MPSPlan from './pages/MPSPlan';
 import DPSPlan from './pages/DPSPlan';
 import ManualOperation from './pages/ManualOperation';
 import MasterYield from './pages/MasterYield';
+import MachineSetup from './pages/MachineSetup';
 import MainLayout from './components/layout/MainLayout';
 function App() {
   return (
@@ -29,6 +30,7 @@ function App() {
           <Route path="/:partId/dps" element={<DPSPlan />} />
           <Route path="/:partId/manual-operation" element={<ManualOperation />} />
           <Route path="/master-yield" element={<MasterYield />} />
+          <Route path="/machine-setup" element={<MachineSetup />} />
         </Route>
 
         {/* Redirect empty path to login */}

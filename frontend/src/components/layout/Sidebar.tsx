@@ -2,7 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import {
   Sun, Menu, LayoutDashboard, TrendingUp, CalendarDays,
-  Truck, Activity, Users,
+  Truck, Activity, Users, Settings,
   ClipboardList, Scale, RefreshCw, PieChart, Scissors, ChevronDown, ChevronRight
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -59,7 +59,8 @@ const menuGroups: MenuGroup[] = [
   {
     label: "System Data",
     items: [
-      { title: "ERP Integration Hub", icon: RefreshCw, path: "/erp-integration" }
+      { title: "ERP Integration Hub", icon: RefreshCw, path: "/erp-integration" },
+      { title: "Machine & Flow Setup", icon: Settings, path: "/machine-setup" }
       /*{ title: "Reports & Analytics", icon: BarChart3, path: "/reports" },
       { title: "Master Data", icon: Database, path: "/master-data" },
       { title: "Workflow & Alerts", icon: Bell, path: "/workflow" },

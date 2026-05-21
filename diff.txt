@@ -1,0 +1,688 @@
+﻿diff --git a/backend/src/mps.controller.ts b/backend/src/mps.controller.ts
+index 863a32a7..c75c3750 100644
+--- a/backend/src/mps.controller.ts
++++ b/backend/src/mps.controller.ts
+@@ -18,6 +18,7 @@ import { ChickenReceivingWeeklySize } from './chicken-receiving/entities/weekly-
+ import { ManualOperation } from './manual-operation.entity';
+ import { StgErpItem } from './stg-erp-item.entity';
+ import { MasterYield } from './master-yield.entity';
++import { MachineConfig } from './machine-config.entity';
+ 
+ @Controller('api/mps')
+ export class MpsController {
+@@ -57,6 +58,8 @@ export class MpsController {
+     private mpsSupplySizeRepo: Repository<MpsPlanSupplySize>,
+     @InjectRepository(ChickenReceivingWeeklySize)
+     private weeklySizeRepo: Repository<ChickenReceivingWeeklySize>,
++    @InjectRepository(MachineConfig)
++    private machineConfigRepo: Repository<MachineConfig>,
+     private chickenReceivingService: ChickenReceivingService,
+   ) { }
+ 
+@@ -102,6 +105,45 @@ export class MpsController {
+     return codes.length > 0 ? codes : null;
+   }
+ 
++  private async getItemCodesByProcessName(categoryName: string, processName: string): Promise<string[]> {
++    const allNodes = await this.masterYieldRepo.find();
++    
++    // Find category node
++    const catNodes = allNodes.filter(n => n.type === 'CATEGORY' && n.name === categoryName);
++    if (catNodes.length === 0) return [];
++
++    // Find process node under category
++    const processNodes = allNodes.filter(n => n.type === 'PROCESS' && n.name === processName && catNodes.some(c => c.id === n.parentId));
++    if (processNodes.length === 0) return [];
++
++    const nodeIds: string[] = [];
++    const collectTree = (parentId: string) => {
++      const children = allNodes.filter(n => n.parentId === parentId);
++      for (const child of children) {
++        nodeIds.push(child.id);
++        collectTree(child.id);
++      }
++    };
++
++    for (const p of processNodes) {
++      nodeIds.push(p.id);
++      collectTree(p.id);
++    }
++
++    if (nodeIds.length === 0) return [];
++
++    const specs = await this.specRepo.find();
++    const codes = specs
++      .filter(s => {
++        if (!s.masterYieldIds) return false;
++        const ids = s.masterYieldIds.split(',').map(id => id.trim());
++        return ids.some(id => nodeIds.includes(id));
++      })
++      .map(s => s.erpItemCode);
++
++    return codes;
++  }
++
+   // 0. Get allowed item codes for a partType (used by Demand Plan tab to filter)
+   @Get('allowed-items')
+   async getAllowedItems(@Query('partType') partType: string) {
+@@ -250,7 +292,24 @@ export class MpsController {
+ 
+   // 3. Generate & Snapshot MPS Plan
+   @Post('generate')
+-  async generatePlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string; partType?: string; _allocatedMap?: Map<number, number> }) { // targetMonth format: '2026-05'
++  async generatePlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string; partType?: string; _allocatedMap?: Map<number, number> }) {
++    const { targetMonth } = body;
++    const partType = body.partType || 'fillet';
++    
++    // Fetch active machine configurations
++    const machineConfigs = await this.machineConfigRepo.find({ where: { isActive: true } });
++    const getMachineConfig = (key: string, defaults: any) => {
++        const conf = machineConfigs.find(c => c.machineKey === key);
++        if (!conf) return defaults;
++        return {
++            speed: Number(conf.capacityPcsPerHour),
++            yield: Number(conf.yieldPercentage),
++            lines: Number(conf.defaultLines),
++            machinesPerLine: Number(conf.machinesPerLine),
++            workers: Number(conf.workersPerUnit)
++        };
++    };
++
+     return await this.dataSource.transaction(async (manager) => {
+       const targetMonth = body.targetMonth;
+       const partType = body.partType || 'fillet';
+@@ -357,6 +416,13 @@ export class MpsController {
+     // Filter item codes by partType using Master Yield Tree CATEGORY
+     const allowedItemCodes = await this.getItemCodesByPartType(partType);
+ 
++    let bilProcess1Codes: string[] = [];
++    let bilProcess2Codes: string[] = [];
++    if (partType === 'bil') {
++      bilProcess1Codes = await this.getItemCodesByProcessName('BIL L/C', 'process: 1');
++      bilProcess2Codes = await this.getItemCodesByProcessName('BIL L/C', 'process: 2');
++    }
++
+     // Helper functions โ€” use LOCAL date to avoid UTC timezone shift
+     // (toISOString() converts to UTC, shifting +7 timezone dates back by 1 day)
+     const formatDate = (date: Date) => {
+@@ -1084,13 +1150,33 @@ export class MpsController {
+     let totalRmFlKg = 0;
+ 
+     const dailyDemand = new Map<string, number>();
++    const dailyDemandP1 = new Map<string, number>();
++    const dailyDemandP2Thigh = new Map<string, number>();
++    const dailyDemandP2Drum = new Map<string, number>();
++    const dailyDemandP3 = new Map<string, number>();
+     const dailyStaff = new Map<string, number>();
+ 
+     mpsOrdersToSave.forEach(o => {
+       const d = formatDate(o.plannedProductionDate);
+       dailyDemand.set(d, (dailyDemand.get(d) || 0) + Number(o.quantityKg));
+-
++      
+       const spec = specMap.get(o.itemCode);
++      if (partType === 'bil') {
++        if (bilProcess1Codes.includes(o.itemCode)) {
++          dailyDemandP1.set(d, (dailyDemandP1.get(d) || 0) + Number(o.quantityKg));
++        } else if (bilProcess2Codes.includes(o.itemCode)) {
++          // Check if it's thigh or drumstick (usually by name, let's say "เธเนเธญเธ" in name means drumstick)
++          const isDrum = spec && spec.erpItemDesc && spec.erpItemDesc.includes('เธเนเธญเธ') && !spec.erpItemDesc.includes('เธชเธฐเนเธเธ');
++          if (isDrum) {
++            dailyDemandP2Drum.set(d, (dailyDemandP2Drum.get(d) || 0) + Number(o.quantityKg));
++          } else {
++            dailyDemandP2Thigh.set(d, (dailyDemandP2Thigh.get(d) || 0) + Number(o.quantityKg));
++          }
++        } else {
++          dailyDemandP3.set(d, (dailyDemandP3.get(d) || 0) + Number(o.quantityKg));
++        }
++      }
++
+       if (spec && !isByproductSpec(spec)) {
+         const speed = Number(spec.productSpeed || 45);
+         dailyStaff.set(d, (dailyStaff.get(d) || 0) + (Number(o.quantityKg) / speed));
+@@ -1117,8 +1203,113 @@ export class MpsController {
+       totalIntakeBirds += intakeBirds;
+       totalRmFlKg += originalSupplyKg;
+ 
+-      const cuttingStaff = demand > 0 ? (dailyStaff.get(dayStr) || 0) / 10 : 0;
+-      const supportStaff = demand > 0 ? 28 : 0;
++      let cuttingStaff = demand > 0 ? (dailyStaff.get(dayStr) || 0) / 10 : 0;
++      let supportStaff = demand > 0 ? 28 : 0;
++
++      if (partType === 'bil') {
++        const demandP1 = dailyDemandP1.get(dayStr) || 0;
++        
++        const bilPiecesTotal = intakeBirds * 2;
++        const avgPieceWeight = bilPiecesTotal > 0 ? originalSupplyKg / bilPiecesTotal : 0.3;
++        
++        let remainingPieces = bilPiecesTotal;
++
++        // Priority 1: BIL Orders
++        const piecesForP1 = avgPieceWeight > 0 ? demandP1 / avgPieceWeight : 0;
++        remainingPieces = Math.max(0, remainingPieces - piecesForP1);
++
++        // Priority 2: เธชเธฐเนเธเธ + เธเนเธญเธ (Thigh + Drumstick)
++        let requiredP1WorkersHours = 0;
++        let requiredP2ThighPcs = 0;
++        let requiredP2DrumPcs = 0;
++        let separationWorkers = 0;
++
++        mpsOrdersToSave.forEach(o => {
++          if (formatDate(o.plannedProductionDate) === dayStr) {
++            if (bilProcess1Codes.includes(o.itemCode)) {
++              const spec = specMap.get(o.itemCode);
++              const speed = spec?.productSpeed ? Number(spec.productSpeed) : 45;
++              requiredP1WorkersHours += Number(o.quantityKg) / speed;
++            } else if (bilProcess2Codes.includes(o.itemCode)) {
++              const spec = specMap.get(o.itemCode);
++              const isDrum = spec && spec.erpItemDesc && spec.erpItemDesc.includes('เธเนเธญเธ') && !spec.erpItemDesc.includes('เธชเธฐเนเธเธ');
++              const yieldPct = spec?.productYield ? Number(spec.productYield) : 0.5; // fallback to 50%
++              const speed = spec?.productSpeed ? Number(spec.productSpeed) : 45;
++              const pcs = avgPieceWeight > 0 && yieldPct > 0 ? Number(o.quantityKg) / (avgPieceWeight * yieldPct) : 0;
++              
++              if (isDrum) requiredP2DrumPcs += pcs;
++              else requiredP2ThighPcs += pcs;
++              
++              separationWorkers += Number(o.quantityKg) / speed;
++            }
++          }
++        });
++
++        // We need to cut max(thigh pieces, drum pieces)
++        const piecesToCutForP2 = Math.max(requiredP2ThighPcs, requiredP2DrumPcs);
++        const actualPiecesCutP2 = Math.min(remainingPieces, piecesToCutForP2);
++        remainingPieces = Math.max(0, remainingPieces - actualPiecesCutP2);
++
++        // Calculate manpower for Process 1 and Process 2
++        // Convert worker hours to workers (assume 9.58 hrs/shift)
++        const p1CuttingStaff = Math.ceil(requiredP1WorkersHours / 9.58);
++        const separationCuttingStaff = Math.ceil(separationWorkers / 9.58);
++
++        // Priority 3: Debone to BL (using remaining pieces)
++        const toridasConf = getMachineConfig('toridas', { speed: 1500, yield: 0.75, lines: 3, machinesPerLine: 4, workers: 5 });
++        const foodmateConf = getMachineConfig('foodmate', { speed: 6000, yield: 0.70, lines: 1, machinesPerLine: 1, workers: 5 });
++        const trimConf = getMachineConfig('trimming_belt', { speed: 600, yield: 1.0, lines: 3, machinesPerLine: 1, workers: 7 });
++        const xrayConf = getMachineConfig('xray', { speed: 18700, yield: 1.0, lines: 3, machinesPerLine: 1, workers: 5 });
++
++        const toridasCapPerShift = toridasConf.lines * toridasConf.machinesPerLine * toridasConf.speed * 9.58;
++        const foodmateCapPerShift = foodmateConf.lines * foodmateConf.machinesPerLine * foodmateConf.speed * 9.58;
++        const deboneCapPerShift = toridasCapPerShift + foodmateCapPerShift;
++
++        const shiftsNeeded = remainingPieces > 0 ? Math.ceil(remainingPieces / deboneCapPerShift) : 0;
++        const piecesPerShift = shiftsNeeded > 0 ? Math.ceil(remainingPieces / shiftsNeeded) : 0;
++
++        const toridasInputPcsPerShift = Math.min(piecesPerShift, toridasCapPerShift);
++        const leftoverPcsPerShift = Math.max(0, piecesPerShift - toridasInputPcsPerShift);
++        const foodmateInputPcsPerShift = Math.min(leftoverPcsPerShift, foodmateCapPerShift);
++
++        const totalPcsProcessedPerShift = toridasInputPcsPerShift + foodmateInputPcsPerShift;
++
++        const toridasOutputKg = (toridasInputPcsPerShift * shiftsNeeded * avgPieceWeight) * toridasConf.yield;
++        const foodmateOutputKg = (foodmateInputPcsPerShift * shiftsNeeded * avgPieceWeight) * foodmateConf.yield;
++        const totalBlOutputKg = toridasOutputKg + foodmateOutputKg;
++
++        const toridasLinesNeeded = toridasInputPcsPerShift > 0 ? Math.ceil(toridasInputPcsPerShift / (toridasConf.machinesPerLine * toridasConf.speed * 9.58)) : 0;
++        const foodmateLinesNeeded = foodmateInputPcsPerShift > 0 ? Math.ceil(foodmateInputPcsPerShift / (foodmateConf.machinesPerLine * foodmateConf.speed * 9.58)) : 0;
++
++        const deboneManpower = (toridasLinesNeeded * toridasConf.workers + foodmateLinesNeeded * foodmateConf.workers) * shiftsNeeded;
++
++        const trimmingSpeedPcsPerHr = trimConf.speed;
++        const trimmingWorkHoursPerShift = totalPcsProcessedPerShift / trimmingSpeedPcsPerHr;
++        const trimmingWorkers = Math.ceil(trimmingWorkHoursPerShift / 9.58) * shiftsNeeded;
++        const trimLinesNeeded = Math.min(trimConf.lines, toridasLinesNeeded + foodmateLinesNeeded);
++        const fixedTrimmingWorkers = totalPcsProcessedPerShift > 0 ? trimLinesNeeded * trimConf.workers * shiftsNeeded : 0;
++
++        const xrayCapPerShift = xrayConf.speed * 9.58; // per machine
++        const machinesNeededPerShift = totalPcsProcessedPerShift > 0 ? Math.ceil(totalPcsProcessedPerShift / xrayCapPerShift) : 0;
++        const xrayManpower = Math.min(xrayConf.lines, machinesNeededPerShift) * xrayConf.workers * shiftsNeeded;
++
++        // Total Cutting Staff = Process 1 Packing + Process 2 Separation + Process 3 Trimming
++        cuttingStaff = p1CuttingStaff + separationCuttingStaff + trimmingWorkers;
++        supportStaff = deboneManpower + fixedTrimmingWorkers + xrayManpower;
++
++        // Save generated BL to daily byproducts
++        if (totalBlOutputKg > 0) {
++          const daySupply = getOrInitByproductSupply(dayStr);
++          if (!daySupply['BL-DEBONE']) {
++              daySupply['BL-DEBONE'] = {
++                  name: 'BL (Debone)',
++                  qty: 0,
++                  processName: 'Debone Process'
++              };
++          }
++          daySupply['BL-DEBONE'].qty += totalBlOutputKg;
++        }
++      }
+ 
+       mpsDailiesToSave.push(manager.create(MpsPlanDaily, {
+         mpsPlan: plan,
+@@ -1592,7 +1783,8 @@ export class MpsController {
+     });
+ 
+     const workbook = new ExcelJS.Workbook();
+-    const sheet = workbook.addWorksheet('Fillet MPS Plan');
++    const isBilPlan = plan.partType === 'bil';
++    const sheet = workbook.addWorksheet(isBilPlan ? 'BIL MPS Plan' : 'Fillet MPS Plan');
+ 
+     // Fetch Order Headers for Customer Grade mapping
+     const headers = await this.orderHeaderRepo.find();
+@@ -1601,6 +1793,20 @@ export class MpsController {
+       if (h.erpOrderNumber) gradeMap.set(h.erpOrderNumber, h.erpCustomerGrade);
+     });
+ 
++    // Fetch machine configs for BIL
++    const machineConfigs = isBilPlan ? await this.machineConfigRepo.find({ where: { isActive: true } }) : [];
++    const getMachineConf = (key: string, defaults: any) => {
++      const conf = machineConfigs.find(c => c.machineKey === key);
++      if (!conf) return defaults;
++      return {
++        speed: Number(conf.capacityPcsPerHour),
++        yield: Number(conf.yieldPercentage),
++        lines: Number(conf.defaultLines),
++        machinesPerLine: Number(conf.machinesPerLine),
++        workers: Number(conf.workersPerUnit)
++      };
++    };
++
+     // 1. Prepare Data Structures
+     const dailyMap = new Map();
+     plan.dailySummaries.sort((a, b) => new Date(a.productionDate).getTime() - new Date(b.productionDate).getTime()).forEach(d => {
+@@ -1656,6 +1862,389 @@ export class MpsController {
+ 
+     const dates = Array.from(dailyMap.keys());
+ 
++    // Fetch BIL process codes from Master Yield Tree
++    let bilProcess1Codes: string[] = [];
++    let bilProcess2Codes: string[] = [];
++    if (isBilPlan) {
++      bilProcess1Codes = await this.getItemCodesByProcessName('BIL L/C', 'process: 1');
++      bilProcess2Codes = await this.getItemCodesByProcessName('BIL L/C', 'process: 2');
++    }
++
++    // Fetch product specs for BIL manpower calculation
++    const allSpecs = isBilPlan ? await this.specRepo.find() : [];
++    const specByCode = new Map();
++    allSpecs.forEach(s => specByCode.set(s.erpItemCode, s));
++
++    // โ”€โ”€ Get BIL size bin labels from supply breakdown โ”€โ”€
++    const bilSizeLabels: string[] = [];
++    if (isBilPlan) {
++      const sizeSet = new Set<string>();
++      plan.supplyBreakdown.forEach(s => {
++        if (s.sizes) s.sizes.forEach((sz: any) => { if (sz.groupSize) sizeSet.add(sz.groupSize); });
++      });
++      bilSizeLabels.push(...Array.from(sizeSet).sort());
++    }
++
++    // โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•
++    // BIL-specific Export
++    // โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•
++    if (isBilPlan) {
++      // โ•โ•โ• BIL Column Layout โ•โ•โ•
++      // Section A: Supply Control (9 cols: 1..9)
++      //   Date | Day | Intake Birds | BIL Pcs (x2) | Avg.Wt | Slaughtered Wt | RM BIL Total | RM Used | RM Balance
++      // Section B: Manpower P1 (1 col: 10) | P2 (1 col: 11)
++      // Section C: Process 3 BL Detail โ€” per machine: Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
++      //   Toridas (7 cols: 12..18) | Foodmate (7 cols: 19..25) | Trimming (7 cols: 26..32) | X-Ray (7 cols: 33..39) | P3 Total (1 col: 40)
++      // Section D: Total Pax (1 col: 41)
++      // Section E: BL Output (1 col: 42)
++      // Section F: RM BIL by Size (dynamic)
++      // Section G: Production Plan (dynamic)
++
++      const supplyEnd = 9;        // cols 1..9
++      const p1Col = 10;
++      const p2Col = 11;
++      const p3Start = 12;
++      const machColsPerMachine = 7; // Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
++      const toridasStart = p3Start;                              // 12
++      const foodmateStart = toridasStart + machColsPerMachine;   // 19
++      const trimmingStart = foodmateStart + machColsPerMachine;  // 26
++      const xrayStart = trimmingStart + machColsPerMachine;      // 33
++      const p3TotalCol = xrayStart + machColsPerMachine;         // 40
++      const p3End = p3TotalCol;                                  // 40
++      const totalCol = p3End + 1;     // 41
++      const blOutputCol = totalCol + 1; // 42
++      const sizeStart = blOutputCol + 1; // 43
++      const sizeEnd = sizeStart + bilSizeLabels.length - 1;
++      const prodStart = sizeEnd + 1;
++      const prodEnd = prodStart + itemCodes.length - 1;
++
++      // Row 1: Section Headers
++      const sectionRow = sheet.addRow([]);
++      sectionRow.getCell(1).value = 'Supply Control';
++      sheet.mergeCells(1, 1, 1, supplyEnd);
++      sectionRow.getCell(p1Col).value = 'P1';
++      sectionRow.getCell(p2Col).value = 'P2';
++      sectionRow.getCell(p3Start).value = 'Process 3: BL โ€” เธฃเธฒเธขเธฅเธฐเน€เธญเธตเธขเธ”เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ';
++      sheet.mergeCells(1, p3Start, 1, p3End);
++      sectionRow.getCell(totalCol).value = 'Total';
++      sectionRow.getCell(blOutputCol).value = 'BL Output';
++      sectionRow.getCell(sizeStart).value = 'RM BIL by Size';
++      if (bilSizeLabels.length > 1) sheet.mergeCells(1, sizeStart, 1, sizeEnd);
++      sectionRow.getCell(prodStart).value = 'Production Plan';
++      if (itemCodes.length > 1) sheet.mergeCells(1, prodStart, 1, prodEnd);
++
++      // Style Section Headers
++      const secDefs = [
++        { start: 1, end: supplyEnd, color: 'FF4472C4' },
++        { start: p1Col, end: p1Col, color: 'FF2E75B6' },
++        { start: p2Col, end: p2Col, color: 'FF7B2D8B' },
++        { start: toridasStart, end: toridasStart + machColsPerMachine - 1, color: 'FFBF3969' },
++        { start: foodmateStart, end: foodmateStart + machColsPerMachine - 1, color: 'FFD84B8A' },
++        { start: trimmingStart, end: trimmingStart + machColsPerMachine - 1, color: 'FFE67CA0' },
++        { start: xrayStart, end: xrayStart + machColsPerMachine - 1, color: 'FFF0A0BA' },
++        { start: p3TotalCol, end: p3TotalCol, color: 'FF880E4F' },
++        { start: totalCol, end: totalCol, color: 'FF3F51B5' },
++        { start: blOutputCol, end: blOutputCol, color: 'FF2E7D32' },
++        { start: sizeStart, end: sizeEnd, color: 'FFED7D31' },
++        { start: prodStart, end: prodEnd, color: 'FF7030A0' }
++      ];
++      secDefs.forEach(sec => {
++        for (let i = sec.start; i <= sec.end; i++) {
++          const cell = sectionRow.getCell(i);
++          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sec.color } };
++          cell.font = { color: { argb: 'FFFFFFFF' }, bold: true, size: 10 };
++          cell.alignment = { horizontal: 'center' };
++          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
++        }
++      });
++
++      // Row 2: Machine Names (sub-section headers) + Item Descriptions
++      const machineNameRow = sheet.addRow([]);
++      // Machine group labels
++      machineNameRow.getCell(toridasStart).value = '๐”ง Toridas (Debone)';
++      sheet.mergeCells(2, toridasStart, 2, toridasStart + machColsPerMachine - 1);
++      machineNameRow.getCell(foodmateStart).value = '๐”ง Foodmate (Debone)';
++      sheet.mergeCells(2, foodmateStart, 2, foodmateStart + machColsPerMachine - 1);
++      machineNameRow.getCell(trimmingStart).value = 'โ๏ธ Trimming Belt';
++      sheet.mergeCells(2, trimmingStart, 2, trimmingStart + machColsPerMachine - 1);
++      machineNameRow.getCell(xrayStart).value = '๐“ก X-Ray';
++      sheet.mergeCells(2, xrayStart, 2, xrayStart + machColsPerMachine - 1);
++      machineNameRow.getCell(p3TotalCol).value = 'P3 เธฃเธงเธก';
++      // Production plan item descriptions
++      itemCodes.forEach((code, idx) => {
++        machineNameRow.getCell(prodStart + idx).value = itemMap.get(code) || '';
++      });
++      // Style machine name cells
++      const machNameDefs = [
++        { start: toridasStart, end: toridasStart + machColsPerMachine - 1, color: 'FFFCE4EC' },
++        { start: foodmateStart, end: foodmateStart + machColsPerMachine - 1, color: 'FFFCE4EC' },
++        { start: trimmingStart, end: trimmingStart + machColsPerMachine - 1, color: 'FFFCE4EC' },
++        { start: xrayStart, end: xrayStart + machColsPerMachine - 1, color: 'FFFCE4EC' },
++        { start: p3TotalCol, end: p3TotalCol, color: 'FFFCE4EC' },
++      ];
++      machNameDefs.forEach(sec => {
++        for (let i = sec.start; i <= sec.end; i++) {
++          const cell = machineNameRow.getCell(i);
++          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sec.color } };
++          cell.font = { bold: true, size: 9, color: { argb: 'FF880E4F' } };
++          cell.alignment = { horizontal: 'center', vertical: 'middle' };
++          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
++        }
++      });
++      // Style production plan item desc cells
++      for (let i = prodStart; i <= prodEnd; i++) {
++        const cell = machineNameRow.getCell(i);
++        cell.font = { bold: true, size: 8 };
++        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
++        cell.alignment = { horizontal: 'center', wrapText: true };
++        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
++      }
++      machineNameRow.height = 30;
++
++      // Repeated column labels for each machine group
++      const machSubCols = ['เนเธฅเธเน', 'เน€เธเธฃเธทเนเธญเธ/เนเธฅเธเน', 'เน€เธเธฃเธทเนเธญเธเธฃเธงเธก', 'เธเธฐ', 'Yield', 'เธเธ/เนเธฅเธเน/เธเธฐ', 'เธฃเธงเธกเธเธ'];
++
++      // Row 3: Sub-Headers
++      const subHeaders = [
++        'Date', 'Day', 'Intake Birds', 'BIL Pcs (x2)', 'Avg. Wt (kg)',
++        'Slaughtered Wt', 'RM BIL Total', 'RM Used', 'RM Balance',
++        'P1 Pax', 'P2 Pax',
++        ...machSubCols, // Toridas
++        ...machSubCols, // Foodmate
++        ...machSubCols, // Trimming
++        ...machSubCols, // X-Ray
++        'P3 เธฃเธงเธกเธเธ',
++        'Total Pax',
++        'BL Output (kg)',
++        ...bilSizeLabels,
++        ...itemCodes
++      ];
++      const headerRow = sheet.addRow(subHeaders);
++      headerRow.eachCell((cell) => {
++        cell.font = { bold: true, size: 8 };
++        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
++        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
++        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
++      });
++      headerRow.height = 35;
++
++      // Machine configs
++      const toridasConf = getMachineConf('toridas', { speed: 1500, yield: 0.75, lines: 3, machinesPerLine: 4, workers: 5 });
++      const foodmateConf = getMachineConf('foodmate', { speed: 6000, yield: 0.70, lines: 1, machinesPerLine: 1, workers: 5 });
++      const trimConf = getMachineConf('trimming_belt', { speed: 600, yield: 1.0, lines: 3, machinesPerLine: 1, workers: 7 });
++      const xrayConf = getMachineConf('xray', { speed: 18700, yield: 1.0, lines: 3, machinesPerLine: 1, workers: 5 });
++
++      // Data Rows
++      dates.forEach(dateStr => {
++        const d = dailyMap.get(dateStr);
++        const s = d.summary;
++        const supply = d.supply;
++        const dateObj = new Date(dateStr);
++        const isNoSupply = !s.intakeBirds || s.intakeBirds === 0;
++
++        // โ”€โ”€ BIL Supply Numbers โ”€โ”€
++        const dailyOrders = orders.filter(o => new Date(o.plannedProductionDate).toISOString().split('T')[0] === dateStr);
++        const intakeBirds = s.intakeBirds || 0;
++        const bilPiecesTotal = intakeBirds * 2; // 2 เธเธฒเธ•เนเธญเธ•เธฑเธง
++        const totalWeight = supply?.totalWeight || 0;
++        const avgWeight = supply?.avgWeight || 0;
++        const slaughteredWeight = totalWeight * 0.9575 * 0.95;
++        const rmBilTotal = Math.round(s.rmFlAvailKg); // stored as RM BIL in the plan
++        const rmUsed = Math.round(s.demandKg);
++        const rmBalance = rmBilTotal - rmUsed;
++
++        // โ”€โ”€ Pieces-based avg piece weight โ”€โ”€
++        const avgPieceWeight = intakeBirds > 0 ? (rmBilTotal / bilPiecesTotal) : 0;
++        let remainingPieces = bilPiecesTotal; // BIL uses x2
++
++        // P1: BIL orders (matched by Master Yield Tree process: 1)
++        let requiredP1WorkersHours = 0;
++        dailyOrders.forEach(o => {
++          if (bilProcess1Codes.includes(o.itemCode)) {
++            const spec = specByCode.get(o.itemCode);
++            const speed = spec?.productSpeed ? Number(spec.productSpeed) : 45;
++            requiredP1WorkersHours += Number(o.quantityKg) / speed;
++          }
++        });
++        const p1Pax = Math.ceil(requiredP1WorkersHours / 9.58);
++
++        // Deduct P1 demand pieces from remaining
++        const demandP1 = dailyOrders.filter(o => bilProcess1Codes.includes(o.itemCode)).reduce((sum, o) => sum + Number(o.quantityKg), 0);
++        const piecesForP1 = avgPieceWeight > 0 ? demandP1 / avgPieceWeight : 0;
++        remainingPieces = Math.max(0, remainingPieces - piecesForP1);
++
++        // P2: เธชเธฐเนเธเธ + เธเนเธญเธ orders (matched by Master Yield Tree process: 2)
++        let separationWorkers = 0;
++        let requiredP2ThighPcs = 0;
++        let requiredP2DrumPcs = 0;
++        dailyOrders.forEach(o => {
++          if (bilProcess2Codes.includes(o.itemCode)) {
++            const spec = specByCode.get(o.itemCode);
++            const isDrum = spec && spec.erpItemDesc && spec.erpItemDesc.includes('เธเนเธญเธ') && !spec.erpItemDesc.includes('เธชเธฐเนเธเธ');
++            const yieldPct = spec?.productYield ? Number(spec.productYield) : 0.5;
++            const speed = spec?.productSpeed ? Number(spec.productSpeed) : 45;
++            const pcs = avgPieceWeight > 0 && yieldPct > 0 ? Number(o.quantityKg) / (avgPieceWeight * yieldPct) : 0;
++            if (isDrum) requiredP2DrumPcs += pcs; else requiredP2ThighPcs += pcs;
++            separationWorkers += Number(o.quantityKg) / speed;
++          }
++        });
++        const piecesToCutP2 = Math.max(requiredP2ThighPcs, requiredP2DrumPcs);
++        remainingPieces = Math.max(0, remainingPieces - Math.min(remainingPieces, piecesToCutP2));
++        const p2Pax = Math.ceil(separationWorkers / 9.58);
++
++        // P3: BL via Debone โ’ Trimming โ’ X-Ray
++        const toridasCapPerLineShift = toridasConf.machinesPerLine * toridasConf.speed * 9.58;
++        const toridasCapPerShift = toridasConf.lines * toridasCapPerLineShift;
++        const foodmateCapPerLineShift = foodmateConf.machinesPerLine * foodmateConf.speed * 9.58;
++        const foodmateCapPerShift = foodmateConf.lines * foodmateCapPerLineShift;
++        const deboneCapPerShift = toridasCapPerShift + foodmateCapPerShift;
++
++        const shiftsNeeded = remainingPieces > 0 ? Math.ceil(remainingPieces / deboneCapPerShift) : 0;
++        const piecesPerShift = shiftsNeeded > 0 ? Math.ceil(remainingPieces / shiftsNeeded) : 0;
++
++        const toridasInputPcsPerShift = Math.min(piecesPerShift, toridasCapPerShift);
++        const leftoverPcsPerShift = Math.max(0, piecesPerShift - toridasInputPcsPerShift);
++        const foodmateInputPcsPerShift = Math.min(leftoverPcsPerShift, foodmateCapPerShift);
++        const totalPcsProcessedPerShift = toridasInputPcsPerShift + foodmateInputPcsPerShift;
++
++        const toridasLinesNeeded = toridasInputPcsPerShift > 0 ? Math.ceil(toridasInputPcsPerShift / toridasCapPerLineShift) : 0;
++        const toridasPax = toridasLinesNeeded * toridasConf.workers * shiftsNeeded;
++        
++        const foodmateLinesNeeded = foodmateInputPcsPerShift > 0 ? Math.ceil(foodmateInputPcsPerShift / foodmateCapPerLineShift) : 0;
++        const foodmatePax = foodmateLinesNeeded * foodmateConf.workers * shiftsNeeded;
++
++        const trimmingWorkHoursPerShift = totalPcsProcessedPerShift / trimConf.speed;
++        const trimVolPax = Math.ceil(trimmingWorkHoursPerShift / 9.58) * shiftsNeeded;
++        const trimLinesNeeded = Math.min(trimConf.lines, toridasLinesNeeded + foodmateLinesNeeded);
++        const trimFixedPax = trimLinesNeeded * trimConf.workers * shiftsNeeded;
++
++        const xrayCapPerMachineShift = xrayConf.speed * 9.58;
++        const xrayMachinesNeeded = totalPcsProcessedPerShift > 0 ? Math.min(xrayConf.lines, Math.ceil(totalPcsProcessedPerShift / xrayCapPerMachineShift)) : 0;
++        const xrayPax = xrayMachinesNeeded * xrayConf.workers * shiftsNeeded;
++
++        const p3Total = toridasPax + foodmatePax + trimVolPax + trimFixedPax + xrayPax;
++        const totalPax = p1Pax + p2Pax + p3Total;
++
++        // BL Output (kg) โ€” pieces through debone * avg piece weight * yield
++        const toridasBlKg = (toridasInputPcsPerShift * shiftsNeeded * avgPieceWeight) * toridasConf.yield;
++        const foodmateBlKg = (foodmateInputPcsPerShift * shiftsNeeded * avgPieceWeight) * foodmateConf.yield;
++        const blOutputKg = Math.round(toridasBlKg + foodmateBlKg);
++
++        // Size bins
++        const getSizeKg = (sizeArr: any[] | undefined, groupSize: string): number => {
++          if (!sizeArr) return 0;
++          return sizeArr.filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
++        };
++
++        const toridasTotalMachines = toridasLinesNeeded * toridasConf.machinesPerLine;
++        const foodmateTotalMachines = foodmateLinesNeeded * foodmateConf.machinesPerLine;
++        const trimTotalMachines = trimLinesNeeded * 1; // 1 machine per line
++        const toridasYieldPct = `${(toridasConf.yield * 100).toFixed(0)}%`;
++        const foodmateYieldPct = `${(foodmateConf.yield * 100).toFixed(0)}%`;
++
++        const rowData = [
++          dateStr,
++          dateObj.toLocaleDateString('en-US', { weekday: 'short' }),
++          intakeBirds,
++          bilPiecesTotal,
++          avgWeight ? Number(avgWeight).toFixed(2) : '-',
++          Math.round(slaughteredWeight),
++          rmBilTotal,
++          rmUsed,
++          rmBalance,
++          p1Pax, p2Pax,
++          // Toridas: Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
++          toridasLinesNeeded, toridasConf.machinesPerLine, toridasTotalMachines, shiftsNeeded, toridasYieldPct, toridasConf.workers, toridasPax,
++          // Foodmate: Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
++          foodmateLinesNeeded, foodmateConf.machinesPerLine, foodmateTotalMachines, shiftsNeeded, foodmateYieldPct, foodmateConf.workers, foodmatePax,
++          // Trimming: Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
++          trimLinesNeeded, 1, trimTotalMachines, shiftsNeeded, '-', trimConf.workers, (trimVolPax + trimFixedPax),
++          // X-Ray: Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
++          '-', '-', xrayMachinesNeeded, shiftsNeeded, '-', xrayConf.workers, xrayPax,
++          p3Total,
++          totalPax,
++          blOutputKg || '-',
++          ...bilSizeLabels.map(label => Math.round(getSizeKg(supply?.sizes, label)) || '-'),
++          ...itemCodes.map(code => d.orders.has(code) ? Math.round(d.orders.get(code)) : '-')
++        ];
++
++        const r = sheet.addRow(rowData);
++        r.eachCell((cell, colNumber) => {
++          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
++          cell.font = { size: 9 };
++          cell.alignment = { horizontal: 'center' };
++
++          if (isNoSupply) {
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEDED' } };
++            cell.font = { color: { argb: 'FF999999' }, size: 9 };
++          } else if (colNumber === p1Col) { // P1
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE6F1' } };
++            cell.font = { color: { argb: 'FF1F4E79' }, bold: true, size: 9 };
++          } else if (colNumber === p2Col) { // P2
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8DAEF' } };
++            cell.font = { color: { argb: 'FF6C3483' }, bold: true, size: 9 };
++          } else if (colNumber >= toridasStart && colNumber < foodmateStart) { // Toridas
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCE4EC' } };
++            if (colNumber === toridasStart + machColsPerMachine - 1) cell.font = { color: { argb: 'FF880E4F' }, bold: true, size: 9 };
++          } else if (colNumber >= foodmateStart && colNumber < trimmingStart) { // Foodmate
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8BBD0' } };
++            if (colNumber === foodmateStart + machColsPerMachine - 1) cell.font = { color: { argb: 'FF880E4F' }, bold: true, size: 9 };
++          } else if (colNumber >= trimmingStart && colNumber < xrayStart) { // Trimming
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCE4EC' } };
++            if (colNumber === trimmingStart + machColsPerMachine - 1) cell.font = { color: { argb: 'FF880E4F' }, bold: true, size: 9 };
++          } else if (colNumber >= xrayStart && colNumber < p3TotalCol) { // X-Ray
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8BBD0' } };
++            if (colNumber === xrayStart + machColsPerMachine - 1) cell.font = { color: { argb: 'FF880E4F' }, bold: true, size: 9 };
++          } else if (colNumber === p3TotalCol) { // P3 Total
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF48FB1' } };
++            cell.font = { color: { argb: 'FF880E4F' }, bold: true, size: 10 };
++          } else if (colNumber === totalCol) { // Total
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC5CAE9' } };
++            cell.font = { color: { argb: 'FF283593' }, bold: true, size: 10 };
++          } else if (colNumber === blOutputCol && cell.value !== '-') { // BL Output
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8E6C9' } };
++            cell.font = { color: { argb: 'FF1B5E20' }, bold: true, size: 9 };
++          } else if (colNumber >= prodStart && cell.value !== '-') { // Production
++            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
++            cell.font = { color: { argb: 'FF375623' }, bold: true, size: 9 };
++          }
++        });
++      });
++
++      // Column widths
++      sheet.getColumn(1).width = 12;  // Date
++      sheet.getColumn(2).width = 7;   // Day
++      sheet.getColumn(3).width = 13;  // Intake Birds
++      sheet.getColumn(4).width = 13;  // BIL Pcs
++      sheet.getColumn(5).width = 10;  // Avg Wt
++      sheet.getColumn(6).width = 16;  // Slaughtered Wt
++      sheet.getColumn(7).width = 14;  // RM BIL Total
++      sheet.getColumn(8).width = 14;  // RM Used
++      sheet.getColumn(9).width = 12;  // RM Balance
++      sheet.getColumn(p1Col).width = 8;
++      sheet.getColumn(p2Col).width = 8;
++      // Machine detail columns (7 cols each x 4 machines)
++      for (const mStart of [toridasStart, foodmateStart, trimmingStart, xrayStart]) {
++        sheet.getColumn(mStart).width = 8;      // เนเธฅเธเน
++        sheet.getColumn(mStart + 1).width = 10;  // เน€เธเธฃเธทเนเธญเธ/เนเธฅเธเน
++        sheet.getColumn(mStart + 2).width = 10;  // เน€เธเธฃเธทเนเธญเธเธฃเธงเธก
++        sheet.getColumn(mStart + 3).width = 7;   // เธเธฐ
++        sheet.getColumn(mStart + 4).width = 8;   // Yield
++        sheet.getColumn(mStart + 5).width = 11;  // เธเธ/เนเธฅเธเน/เธเธฐ
++        sheet.getColumn(mStart + 6).width = 9;   // เธฃเธงเธกเธเธ
++      }
++      sheet.getColumn(p3TotalCol).width = 10;
++      sheet.getColumn(totalCol).width = 11;
++      sheet.getColumn(blOutputCol).width = 14;
++      for (let i = sizeStart; i <= sizeEnd; i++) sheet.getColumn(i).width = 12;
++      for (let i = prodStart; i <= prodEnd; i++) sheet.getColumn(i).width = 15;
++      sheet.views = [{ state: 'frozen', xSplit: supplyEnd, ySplit: 3 }];
++
++    } else {
++    // โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•
++    // Original Fillet Export (unchanged)
++    // โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•โ•
++
+     // 2. Setup Headers
+     // Row 1: Section Headers
+     const sectionRow = sheet.addRow([]);
+@@ -1793,6 +2382,8 @@ export class MpsController {
+     }
+     sheet.views = [{ state: 'frozen', xSplit: 6, ySplit: 3 }];
+ 
++    } // end if-else isBilPlan
++
+     // 5. Sheet 2: Demand Plan (Detailed View)
+     const demandSheet = workbook.addWorksheet('Demand Plan');
+ 

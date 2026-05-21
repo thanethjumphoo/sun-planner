@@ -1,13 +1,4 @@
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-  UpdateDateColumn,
-  ManyToOne,
-  OneToMany,
-  JoinColumn,
-} from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { MpsPlan } from './mps-plan.entity';
 
 // ─── 1. DPS Plan Header (หัวตารางแผนผลิตรายวัน) ───
@@ -30,31 +21,13 @@ export class DpsPlan {
   @Column({ name: 'status', type: 'varchar', length: 20, default: 'DRAFT' })
   status: string; // DRAFT, CONFIRMED, COMPLETED
 
-  @Column({
-    name: 'total_supply_kg',
-    type: 'decimal',
-    precision: 18,
-    scale: 2,
-    default: 0,
-  })
+  @Column({ name: 'total_supply_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
   totalSupplyKg: number;
 
-  @Column({
-    name: 'total_demand_kg',
-    type: 'decimal',
-    precision: 18,
-    scale: 2,
-    default: 0,
-  })
+  @Column({ name: 'total_demand_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
   totalDemandKg: number;
 
-  @Column({
-    name: 'fulfillment_rate',
-    type: 'decimal',
-    precision: 5,
-    scale: 2,
-    default: 0,
-  })
+  @Column({ name: 'fulfillment_rate', type: 'decimal', precision: 5, scale: 2, default: 0 })
   fulfillmentRate: number; // %
 
   @CreateDateColumn({ name: 'created_at' })
@@ -63,13 +36,13 @@ export class DpsPlan {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  @OneToMany(() => DpsSublot, (sublot) => sublot.dpsPlan, { cascade: true })
+  @OneToMany(() => DpsSublot, sublot => sublot.dpsPlan, { cascade: true })
   sublots: DpsSublot[];
 
-  @OneToMany(() => DpsOrder, (order) => order.dpsPlan, { cascade: true })
+  @OneToMany(() => DpsOrder, order => order.dpsPlan, { cascade: true })
   orders: DpsOrder[];
 
-  @OneToMany(() => DpsAllocation, (alloc) => alloc.dpsPlan, { cascade: true })
+  @OneToMany(() => DpsAllocation, alloc => alloc.dpsPlan, { cascade: true })
   allocations: DpsAllocation[];
 }
 
@@ -79,14 +52,14 @@ export class DpsSublot {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => DpsPlan, (plan) => plan.sublots, { onDelete: 'CASCADE' })
+  @ManyToOne(() => DpsPlan, plan => plan.sublots, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'dps_plan_id' })
   dpsPlan: DpsPlan;
 
   @Column({ name: 'sublot_number', type: 'varchar', length: 50 })
   sublotNumber: string; // เช่น SL-1
 
-  @Column({ name: 'farm_name', type: 'varchar', length: 255, nullable: true })
+  @Column({ name: 'farm_name', type: 'nvarchar', length: 255, nullable: true })
   farmName: string;
 
   @Column({ name: 'total_birds', type: 'int' })
@@ -101,16 +74,10 @@ export class DpsSublot {
   @Column({ name: 'avg_live_weight', type: 'decimal', precision: 10, scale: 4 })
   avgLiveWeight: number;
 
-  @Column({
-    name: 'co_product_kg',
-    type: 'decimal',
-    precision: 18,
-    scale: 2,
-    default: 0,
-  })
+  @Column({ name: 'co_product_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
   coProductKg: number; // น้ำหนัก Grade B ที่กระจายมา
 
-  @OneToMany(() => DpsSublotBin, (bin) => bin.sublot, { cascade: true })
+  @OneToMany(() => DpsSublotBin, bin => bin.sublot, { cascade: true })
   bins: DpsSublotBin[];
 }
 
@@ -120,7 +87,7 @@ export class DpsSublotBin {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => DpsSublot, (sublot) => sublot.bins, { onDelete: 'CASCADE' })
+  @ManyToOne(() => DpsSublot, sublot => sublot.bins, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'dps_sublot_id' })
   sublot: DpsSublot;
 
@@ -137,7 +104,7 @@ export class DpsOrder {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => DpsPlan, (plan) => plan.orders, { onDelete: 'CASCADE' })
+  @ManyToOne(() => DpsPlan, plan => plan.orders, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'dps_plan_id' })
   dpsPlan: DpsPlan;
 
@@ -147,7 +114,7 @@ export class DpsOrder {
   @Column({ name: 'item_code', type: 'varchar', length: 100 })
   itemCode: string;
 
-  @Column({ name: 'item_desc', type: 'varchar', length: 255 })
+  @Column({ name: 'item_desc', type: 'nvarchar', length: 255, nullable: true })
   itemDesc: string;
 
   @Column({ name: 'product_type', type: 'varchar', length: 50 })
@@ -159,13 +126,7 @@ export class DpsOrder {
   @Column({ name: 'required_kg', type: 'decimal', precision: 18, scale: 2 })
   requiredKg: number; // ยอดเต็มที่ต้องการ
 
-  @Column({
-    name: 'fulfilled_kg',
-    type: 'decimal',
-    precision: 18,
-    scale: 2,
-    default: 0,
-  })
+  @Column({ name: 'fulfilled_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
   fulfilledKg: number; // ยอดที่หาเนื้อมาเติมได้แล้ว
 
   @Column({ name: 'unfulfilled_kg', type: 'decimal', precision: 18, scale: 2 })
@@ -178,7 +139,7 @@ export class DpsAllocation {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => DpsPlan, (plan) => plan.allocations, { onDelete: 'CASCADE' })
+  @ManyToOne(() => DpsPlan, plan => plan.allocations, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'dps_plan_id' })
   dpsPlan: DpsPlan;
 

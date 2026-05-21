@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users, ChevronDown } from 'lucide-react';
+import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users, ChevronDown, Download } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL;
 
@@ -162,6 +162,7 @@ const DPSPlan: React.FC = () => {
   const [yieldTree, setYieldTree] = useState<any[]>([]);
   const [specsMap, setSpecsMap] = useState<Record<string, any>>({});
   const [sizeColumns, setSizeColumns] = useState<string[]>([]);
+  const [machineConfigs, setMachineConfigs] = useState<any[]>([]);
 
   const getProductType = (itemCode: string): 'main' | 'coproduct' | 'byproduct' => {
     const spec = specsMap[itemCode];
@@ -574,9 +575,10 @@ const DPSPlan: React.FC = () => {
         const yieldRes = await fetch(`${API}/api/master-yield`);
         if (yieldRes.ok) {
           parsedYieldTree = await yieldRes.json();
-          setYieldTree(parsedYieldTree);
+          const flatNodes: any[] = [];
           const traverse = (nodes: any[]) => {
             nodes.forEach(node => {
+              flatNodes.push(node);
               if (node.type) {
                 typeMap.set(node.id, node.type);
               }
@@ -586,6 +588,8 @@ const DPSPlan: React.FC = () => {
             });
           };
           traverse(parsedYieldTree);
+          parsedYieldTree = flatNodes;
+          setYieldTree(flatNodes);
           setYieldNodeTypeMap(typeMap);
         }
       } catch (e) {
@@ -613,6 +617,17 @@ const DPSPlan: React.FC = () => {
         }
       } catch (e) {
         console.error("Error loading specs in fetchData", e);
+      }
+
+      // Fetch machine configs
+      try {
+        const confRes = await fetch(`${API}/api/machine-config`);
+        if (confRes.ok) {
+          const confs = await confRes.json();
+          setMachineConfigs(confs);
+        }
+      } catch (e) {
+        console.error("Error loading machine configs in fetchData", e);
       }
 
       // Determine category yield (e.g. 0.04 for fillet, 0.25 for bil)
@@ -1125,6 +1140,10 @@ const DPSPlan: React.FC = () => {
     }
   };
 
+  const handleExportExcel = () => {
+    window.open(`${API}/api/dps/${targetDate}/export?partType=${partId || 'fillet'}`, '_blank');
+  };
+
   const handleReallocate = async () => {
     if (!confirm('Re-allocating will overwrite all current manual adjustments and recalculate from scratch. Proceed?')) return;
 
@@ -1272,14 +1291,158 @@ const DPSPlan: React.FC = () => {
   const totalSublots = sublots.length;
 
   const calculateManpower = () => {
+    if (isBil) {
+      const getCodesByProcess = (categoryName: string, processName: string) => {
+        const catNodes = yieldTree.filter(n => n.type === 'CATEGORY' && n.name === categoryName);
+        const procNodes = yieldTree.filter(n => n.type === 'PROCESS' && n.name === processName && catNodes.some(c => c.id === n.parentId));
+        
+        const nodeIds: string[] = [];
+        const collect = (parentId: string) => {
+          const children = yieldTree.filter(n => n.parentId === parentId);
+          for (const child of children) {
+            nodeIds.push(child.id);
+            collect(child.id);
+          }
+        };
+        
+        procNodes.forEach(p => {
+          nodeIds.push(p.id);
+          collect(p.id);
+        });
+
+        return Object.values(specsMap)
+          .filter(s => {
+            if (!s.masterYieldIds) return false;
+            const ids = s.masterYieldIds.split(',').map((id: string) => id.trim());
+            return ids.some((id: string) => nodeIds.includes(id));
+          })
+          .map(s => s.erpItemCode);
+      };
+
+      const bilProcess1Codes = getCodesByProcess('BIL L/C', 'process: 1');
+      const bilProcess2Codes = getCodesByProcess('BIL L/C', 'process: 2');
+
+      const isByproductSpec = (code: string) => {
+        const s = specsMap[code];
+        if (!s) return false;
+        return s.productType === 'BY-PRODUCT' || s.productType === 'CO-PRODUCT';
+      };
+
+      const getMachineConfig = (key: string, defaults: any) => {
+        const conf = machineConfigs.find(c => c.machineKey === key);
+        if (!conf) return defaults;
+        return {
+            speed: Number(conf.capacityPcsPerHour),
+            yield: Number(conf.yieldPercentage),
+            lines: Number(conf.defaultLines),
+            machinesPerLine: Number(conf.machinesPerLine),
+            workers: Number(conf.workersPerUnit)
+        };
+      };
+
+      const processShift = (shiftTarget: string) => {
+        let demandP1 = 0;
+        let requiredP1WorkersHours = 0;
+        let requiredP2ThighPcs = 0;
+        let requiredP2DrumPcs = 0;
+        let separationWorkersHours = 0;
+
+        let shiftTotalPcs = 0;
+        let shiftRemainingPieces = 0;
+
+        sublots.forEach(sl => {
+          if ((sl.shift || 'A') !== shiftTarget) return;
+
+          const bilCategoryNode = yieldTree.find(n => n.name === 'BIL L/C' && n.type === 'CATEGORY');
+          const partYield = bilCategoryNode?.yieldPercentage ? Number(bilCategoryNode.yieldPercentage) : 0.25;
+          const slNet = sl.totalWeightKg * 0.9575 * 0.95 * partYield;
+          
+          const bilPiecesTotal = sl.totalBirds * 2;
+          const avgPieceWeight = bilPiecesTotal > 0 ? slNet / bilPiecesTotal : 0.3;
+          shiftTotalPcs += bilPiecesTotal;
+
+          sl.allocations.forEach(alloc => {
+            const o = orders.find(ord => ord.id === alloc.orderId);
+            if (o && !isByproductSpec(o.itemCode)) {
+              if (bilProcess1Codes.includes(o.itemCode)) {
+                demandP1 += alloc.qty;
+                const spec = specsMap[o.itemCode];
+                const speed = spec?.productSpeed ? Number(spec.productSpeed) : 45;
+                requiredP1WorkersHours += alloc.qty / speed;
+              } else if (bilProcess2Codes.includes(o.itemCode)) {
+                const spec = specsMap[o.itemCode];
+                const isDrum = spec && spec.erpItemDesc && spec.erpItemDesc.includes('น่อง') && !spec.erpItemDesc.includes('สะโพก');
+                const yieldPct = spec?.productYield ? Number(spec.productYield) : 0.5;
+                const speed = spec?.productSpeed ? Number(spec.productSpeed) : 45;
+                const pcs = avgPieceWeight > 0 && yieldPct > 0 ? alloc.qty / (avgPieceWeight * yieldPct) : 0;
+                
+                if (isDrum) requiredP2DrumPcs += pcs;
+                else requiredP2ThighPcs += pcs;
+                
+                separationWorkersHours += alloc.qty / speed;
+              }
+            }
+          });
+        });
+
+        // Use a generic avg piece weight for the shift (assume 0.3 if 0)
+        const avgPieceWeight = 0.3; 
+        shiftRemainingPieces = shiftTotalPcs;
+
+        // P1
+        const piecesForP1 = demandP1 / avgPieceWeight;
+        shiftRemainingPieces = Math.max(0, shiftRemainingPieces - piecesForP1);
+
+        // P2
+        const piecesToCutForP2 = Math.max(requiredP2ThighPcs, requiredP2DrumPcs);
+        const actualPiecesCutP2 = Math.min(shiftRemainingPieces, piecesToCutForP2);
+        shiftRemainingPieces = Math.max(0, shiftRemainingPieces - actualPiecesCutP2);
+
+        const p1CuttingStaff = Math.ceil(requiredP1WorkersHours / 9.58);
+        const separation = p1CuttingStaff + Math.ceil(separationWorkersHours / 9.58);
+
+        // P3
+        const pcs = shiftRemainingPieces;
+        if (pcs <= 0) return { debone: 0, trimming: 0, xray: 0, separation, total: separation };
+
+        const toridasConf = getMachineConfig('toridas', { speed: 1500, yield: 0.75, lines: 3, machinesPerLine: 4, workers: 5 });
+        const foodmateConf = getMachineConfig('foodmate', { speed: 6000, yield: 0.70, lines: 1, machinesPerLine: 1, workers: 5 });
+        const trimConf = getMachineConfig('trimming_belt', { speed: 600, yield: 1.0, lines: 3, machinesPerLine: 1, workers: 7 });
+        const xrayConf = getMachineConfig('xray', { speed: 18700, yield: 1.0, lines: 3, machinesPerLine: 1, workers: 5 });
+
+        const toridasInputPcs = Math.min(pcs, toridasConf.lines * toridasConf.machinesPerLine * toridasConf.speed * 9.58);
+        const leftoverPcs = Math.max(0, pcs - toridasInputPcs);
+        const foodmateInputPcs = Math.min(leftoverPcs, foodmateConf.lines * foodmateConf.machinesPerLine * foodmateConf.speed * 9.58);
+        const totalPcs = toridasInputPcs + foodmateInputPcs;
+
+        const debone = (toridasInputPcs > 0 ? toridasConf.lines * toridasConf.workers : 0) + (foodmateInputPcs > 0 ? foodmateConf.lines * foodmateConf.workers : 0);
+        const trimming = Math.ceil((totalPcs / trimConf.speed) / 9.58) + (totalPcs > 0 ? trimConf.lines * trimConf.workers : 0);
+        const machinesNeeded = totalPcs > 0 ? Math.ceil(totalPcs / (xrayConf.speed * 9.58)) : 0;
+        const xray = Math.min(xrayConf.lines, machinesNeeded) * xrayConf.workers;
+
+        return { debone, trimming, xray, separation, total: debone + trimming + xray + separation };
+      };
+
+      const shiftA = processShift('A');
+      const shiftB = processShift('B');
+
+      return {
+        isBil: true,
+        shiftA: shiftA.total,
+        shiftB: shiftB.total,
+        detailsA: shiftA,
+        detailsB: shiftB
+      };
+    }
+
     let shiftA_Hours = 0;
     let shiftB_Hours = 0;
 
     sublots.forEach(sl => {
       const shift = sl.shift || 'A';
       sl.allocations.forEach(alloc => {
-        const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
-        if (getProductType(itemCodeMatch) !== 'main') return;
+        const itemCodeMatch = alloc.itemDesc ? alloc.itemDesc.split(' - ')[0] : '';
+        if (!itemCodeMatch || getProductType(itemCodeMatch) !== 'main') return;
         const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
         const speed = spec?.productSpeed;
 
@@ -1292,6 +1455,7 @@ const DPSPlan: React.FC = () => {
     });
 
     return {
+      isBil: false,
       shiftA: Math.round(shiftA_Hours > 0 ? (shiftA_Hours / 9.58) : 0),
       shiftB: Math.round(shiftB_Hours > 0 ? (shiftB_Hours / 9.58) : 0)
     };
@@ -1330,9 +1494,14 @@ const DPSPlan: React.FC = () => {
               <Activity className="w-4 h-4" /> Run Schedule
             </button>
           ) : (
-            <button onClick={handleDeletePlan} className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
-              <Trash2 className="w-4 h-4" /> Delete Schedule
-            </button>
+            <>
+              <button onClick={handleExportExcel} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
+                <Download className="w-4 h-4" /> Export Excel
+              </button>
+              <button onClick={handleDeletePlan} className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
+                <Trash2 className="w-4 h-4" /> Delete Schedule
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1449,7 +1618,11 @@ const DPSPlan: React.FC = () => {
             </div>
             <div className="flex-1">
               <h3 className="text-lg font-bold text-gray-800 mb-1">Manpower Planning</h3>
-              <p className="text-sm text-gray-500">Calculated automatically based on Item Product Speed and 9.58 hrs/shift.</p>
+              {manpower.isBil ? (
+                <p className="text-sm text-gray-500">Calculated automatically for Debone (15 pax), Trimming, and X-Ray.</p>
+              ) : (
+                <p className="text-sm text-gray-500">Calculated automatically based on Item Product Speed and 9.58 hrs/shift.</p>
+              )}
             </div>
             <div className="flex items-center gap-8">
               <div className="text-center px-4 border-r border-gray-100">
@@ -1488,8 +1661,8 @@ const DPSPlan: React.FC = () => {
                   // Calculate Sublot Manpower
                   let slHours = 0;
                   sl.allocations.forEach(alloc => {
-                    const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
-                    if (getProductType(itemCodeMatch) !== 'main') return;
+                    const itemCodeMatch = alloc.itemDesc ? alloc.itemDesc.split(' - ')[0] : '';
+                    if (!itemCodeMatch || getProductType(itemCodeMatch) !== 'main') return;
                     const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
                     const speed = spec?.productSpeed;
                     if (speed && speed > 0) {
@@ -1902,6 +2075,9 @@ const DPSPlan: React.FC = () => {
                 <span className="font-bold text-gray-700 text-sm">Demand (Orders)</span>
                 <span className="font-black text-blue-600">{rawDemandCount} Orders</span>
               </div>
+              
+
+
               <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-100">
                 <span className="font-bold text-gray-700 text-sm">Supply (Intake)</span>
                 <span className="font-black text-emerald-600">{rawSupplyCount} Sublots</span>

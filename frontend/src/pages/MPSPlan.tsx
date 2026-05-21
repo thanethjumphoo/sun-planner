@@ -60,6 +60,7 @@ const MPSPlan: React.FC = () => {
   const [draggedOrderId, setDraggedOrderId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'calendar' | 'drafts' | 'demand'>('calendar');
+  const [machineConfigs, setMachineConfigs] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
   const [currentPlan, setCurrentPlan] = useState<any>(null);
   const [demandOrders, setDemandOrders] = useState<any[]>([]);
@@ -69,6 +70,7 @@ const MPSPlan: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [selectedDailyOrders, setSelectedDailyOrders] = useState<any[]>([]);
   const [expandedSizeBins, setExpandedSizeBins] = useState<Record<string, boolean>>({});
+  // Removed showFilters
   const [showSupplyModal, setShowSupplyModal] = useState(false);
   const [highlightedSoNumber, setHighlightedSoNumber] = useState<string | null>(null);
   const [priorityMap, setPriorityMap] = useState<Record<number, number | null>>({});
@@ -76,6 +78,7 @@ const MPSPlan: React.FC = () => {
   const [savingPriority, setSavingPriority] = useState(false);
   const [allowedItemCodes, setAllowedItemCodes] = useState<string[]>([]);
   const [yieldNodeTypeMap, setYieldNodeTypeMap] = useState<Map<string, string>>(new Map());
+  const [yieldTree, setYieldTree] = useState<any[]>([]);
 
   const fetchYieldNodes = async () => {
     try {
@@ -83,8 +86,10 @@ const MPSPlan: React.FC = () => {
       if (res.ok) {
         const tree = await res.json();
         const typeMap = new Map<string, string>();
+        const flatNodes: any[] = [];
         const traverse = (nodes: any[]) => {
           nodes.forEach(node => {
+            flatNodes.push(node);
             if (node.type) {
               typeMap.set(node.id, node.type);
             }
@@ -94,6 +99,7 @@ const MPSPlan: React.FC = () => {
           });
         };
         traverse(tree);
+        setYieldTree(flatNodes);
         setYieldNodeTypeMap(typeMap);
       }
     } catch (e) {
@@ -136,7 +142,7 @@ const MPSPlan: React.FC = () => {
       const startDate = `${monthStr}-01`;
       const endDate = `${monthStr}-${lastDay.toString().padStart(2, '0')}`;
 
-      const res = await fetch(`${API}/api/manual-operation?startDate=${startDate}&endDate=${endDate}&partType=${partId || 'fillet'}`);
+      const res = await fetch(`${API}/api/manual-operation?startDate=${startDate}&endDate=${endDate}&partType=${partId}`);
       if (res.ok) {
         setManpowerData(await res.json());
       }
@@ -156,8 +162,9 @@ const MPSPlan: React.FC = () => {
       fetchDemandOrders(),
       fetchManpowerData(),
       fetchAllowedItems(),
-      fetchYieldNodes()
-    ]);
+      fetchYieldNodes(),
+      fetchMachineConfigs()
+    ]).catch(e => console.error("Error in initial fetches:", e));
 
     setLoadingPhase({ mode: 'loading', step: 2, message: 'Loading plan drafts...' });
     const allPlans = await fetchPlans();
@@ -265,6 +272,18 @@ const MPSPlan: React.FC = () => {
   const cancelPriorities = async () => {
     // Re-fetch to reset
     await fetchDemandOrders();
+  };
+
+  const fetchMachineConfigs = async () => {
+    try {
+      const res = await fetch(`${API}/api/machine-config`);
+      if (res.ok) {
+        const data = await res.json();
+        setMachineConfigs(data);
+      }
+    } catch (e) {
+      console.error('Error fetching machine configs:', e);
+    }
   };
 
   const fetchPlans = async () => {
@@ -588,7 +607,7 @@ const MPSPlan: React.FC = () => {
   // --- Calculations ---
   const calculateDailyMetrics = (date: string) => {
     if (!currentPlan) {
-      return { intake: 0, intakeKg: 0, rmFlAvailable: 0, totalOrderQty: 0, manpower: 0, dailyOrders: [] };
+      return { intake: 0, intakeKg: 0, rmFlAvailable: 0, totalOrderQty: 0, manpower: 0, dailyOrders: [], manpowerBreakdown: {} as any };
     }
 
     const formatDBDate = (dateVal: any) => {
@@ -628,33 +647,247 @@ const MPSPlan: React.FC = () => {
 
     const totalOrderQty = dailyOrders.filter((o: any) => !isByproductSpec(o.itemCode)).reduce((sum: number, o: any) => sum + o.qty, 0);
 
-    const dailyManpower = manpowerData.find((m: any) => formatDBDate(m.productionDate) === date) || {};
+    const getCodesByProcess = (categoryName: string, processName: string) => {
+      const catNodes = yieldTree.filter((n: any) => n.type === 'CATEGORY' && n.name === categoryName);
+      const procNodes = yieldTree.filter((n: any) => n.type === 'PROCESS' && n.name === processName && catNodes.some((c: any) => c.id === n.parentId));
+      
+      const nodeIds: string[] = [];
+      const collect = (parentId: string) => {
+        const children = yieldTree.filter((n: any) => n.parentId === parentId);
+        for (const child of children) {
+          nodeIds.push(child.id);
+          collect(child.id);
+        }
+      };
+      
+      procNodes.forEach((p: any) => {
+        nodeIds.push(p.id);
+        collect(p.id);
+      });
 
-    let requiredCuttingWorkers = 0;
-    dailyOrders.filter((o: any) => !isByproductSpec(o.itemCode)).forEach((o: any) => {
-      const spec = specs[o.itemCode];
-      const speed = spec?.productSpeed || 45;
-      requiredCuttingWorkers += (o.qty / speed);
-    });
-    requiredCuttingWorkers = Math.ceil(requiredCuttingWorkers / 10);
+      return Object.values(specs)
+        .filter((s: any) => {
+          if (!s.masterYieldIds) return false;
+          const ids = s.masterYieldIds.split(',').map((id: string) => id.trim());
+          return ids.some((id: string) => nodeIds.includes(id));
+        })
+        .map((s: any) => s.erpItemCode);
+    };
+
+    const dailyManpower = manpowerData.find((m: any) => formatDBDate(m.productionDate) === date) || {};
 
     const plannedStationWorkers = dailyManpower.plannedStationWorkers || 28;
     const actualStationWorkers = dailyManpower.actualStationWorkers || 0;
     const actualCuttingWorkers = dailyManpower.actualCuttingWorkers || 0;
 
-    const totalManpowerPlan = plannedStationWorkers + requiredCuttingWorkers;
+    let totalManpowerPlan = 0;
+    let requiredCuttingWorkers = 0;
+    let deboneWorkers = 0;
+    let xrayWorkers = 0;
+    let p1CuttingStaff = 0;
+    let separationCuttingStaff = 0;
+    let trimmingWorkersBase = 0;
+    let toridasWorkers = 0;
+    let foodmateWorkers = 0;
+    let fixedTrimmingWorkers = 0;
+    let xrayMachinesCount = 0;
+    
+    let toridasLinesNeeded = 0;
+    let foodmateLinesNeeded = 0;
+    let trimmingLinesNeeded = 0;
+    let shiftsNeeded = 0;
+    // Machine config detail variables (populated inside BIL block)
+    let mcToridasMachinesPerLine = 0;
+    let mcFoodmateMachinesPerLine = 0;
+    let mcToridasWorkersPerUnit = 0;
+    let mcFoodmateWorkersPerUnit = 0;
+    let mcTrimWorkersPerLine = 0;
+    let mcXrayWorkersPerUnit = 0;
+    let mcToridasYield = 0;
+    let mcFoodmateYield = 0;
+
+    const originalSupplyKg = dailySummary?.rmFlTotal || 0;
+    const intakeBirds = dailySummary?.intakeBirds || 0;
+
+    if (partId === 'bil') {
+      const bilProcess1Codes = getCodesByProcess('BIL L/C', 'process: 1');
+      const bilProcess2Codes = getCodesByProcess('BIL L/C', 'process: 2');
+
+      let demandP1 = 0;
+      let requiredP1WorkersHours = 0;
+      let requiredP2ThighPcs = 0;
+      let requiredP2DrumPcs = 0;
+      let separationWorkers = 0;
+
+      const bilPiecesTotal = intakeBirds * 2;
+      const avgPieceWeight = bilPiecesTotal > 0 ? originalSupplyKg / bilPiecesTotal : 0.3;
+
+      dailyOrders.forEach((o: any) => {
+        if (!isByproductSpec(o.itemCode)) {
+          if (bilProcess1Codes.includes(o.itemCode)) {
+            demandP1 += o.qty;
+            const spec = specs[o.itemCode];
+            const speed = spec?.productSpeed ? Number(spec.productSpeed) : 45;
+            requiredP1WorkersHours += o.qty / speed;
+          } else if (bilProcess2Codes.includes(o.itemCode)) {
+            const spec = specs[o.itemCode];
+            const isDrum = spec && spec.erpItemDesc && spec.erpItemDesc.includes('น่อง') && !spec.erpItemDesc.includes('สะโพก');
+            const yieldPct = spec?.productYield ? Number(spec.productYield) : 0.5;
+            const speed = spec?.productSpeed ? Number(spec.productSpeed) : 45;
+            const pcs = avgPieceWeight > 0 && yieldPct > 0 ? o.qty / (avgPieceWeight * yieldPct) : 0;
+            
+            if (isDrum) requiredP2DrumPcs += pcs;
+            else requiredP2ThighPcs += pcs;
+            
+            separationWorkers += o.qty / speed;
+          }
+        }
+      });
+
+      let remainingPieces = bilPiecesTotal;
+
+      // Priority 1: BIL
+      const piecesForP1 = avgPieceWeight > 0 ? demandP1 / avgPieceWeight : 0;
+      remainingPieces = Math.max(0, remainingPieces - piecesForP1);
+
+      // Priority 2: Thigh + Drumstick
+      const piecesToCutForP2 = Math.max(requiredP2ThighPcs, requiredP2DrumPcs);
+      const actualPiecesCutP2 = Math.min(remainingPieces, piecesToCutForP2);
+      remainingPieces = Math.max(0, remainingPieces - actualPiecesCutP2);
+
+      p1CuttingStaff = Math.ceil(requiredP1WorkersHours / 9.58);
+      separationCuttingStaff = Math.ceil(separationWorkers / 9.58);
+
+      const getMachineConfig = (key: string, defaults: any) => {
+        const conf = machineConfigs.find(c => c.machineKey === key);
+        if (!conf) return defaults;
+        return {
+            speed: Number(conf.capacityPcsPerHour),
+            yield: Number(conf.yieldPercentage),
+            lines: Number(conf.defaultLines),
+            machinesPerLine: Number(conf.machinesPerLine),
+            workers: Number(conf.workersPerUnit)
+        };
+      };
+
+      const toridasConf = getMachineConfig('toridas', { speed: 1500, yield: 0.75, lines: 3, machinesPerLine: 4, workers: 5 });
+      const foodmateConf = getMachineConfig('foodmate', { speed: 6000, yield: 0.70, lines: 1, machinesPerLine: 1, workers: 5 });
+      const trimConf = getMachineConfig('trimming_belt', { speed: 600, yield: 1.0, lines: 3, machinesPerLine: 1, workers: 7 });
+      const xrayConf = getMachineConfig('xray', { speed: 18700, yield: 1.0, lines: 3, machinesPerLine: 1, workers: 5 });
+
+      // Populate outer-scoped machine config vars for UI
+      mcToridasMachinesPerLine = toridasConf.machinesPerLine;
+      mcFoodmateMachinesPerLine = foodmateConf.machinesPerLine;
+      mcToridasWorkersPerUnit = toridasConf.workers;
+      mcFoodmateWorkersPerUnit = foodmateConf.workers;
+      mcTrimWorkersPerLine = trimConf.workers;
+      mcXrayWorkersPerUnit = xrayConf.workers;
+      mcToridasYield = toridasConf.yield;
+      mcFoodmateYield = foodmateConf.yield;
+
+      const toridasCapPerShift = toridasConf.lines * toridasConf.machinesPerLine * toridasConf.speed * 9.58;
+      const foodmateCapPerShift = foodmateConf.lines * foodmateConf.machinesPerLine * foodmateConf.speed * 9.58;
+      const deboneCapPerShift = toridasCapPerShift + foodmateCapPerShift;
+
+      shiftsNeeded = 0;
+      if (remainingPieces > 0) {
+        if (remainingPieces <= toridasCapPerShift) {
+          shiftsNeeded = 1;
+        } else if (remainingPieces <= toridasCapPerShift * 2) {
+          shiftsNeeded = 2;
+        } else {
+          // If Toridas is full for 2 shifts and we still need more, calculate shifts based on total debone capacity
+          // Usually max shifts per day is 2, but the math naturally handles overflow
+          shiftsNeeded = Math.ceil(remainingPieces / deboneCapPerShift);
+          if (shiftsNeeded < 2) shiftsNeeded = 2; // Ensure at least 2 shifts if we surpassed Toridas 2-shift cap
+        }
+      }
+
+      const piecesPerShift = shiftsNeeded > 0 ? Math.ceil(remainingPieces / shiftsNeeded) : 0;
+
+      const toridasInputPcsPerShift = Math.min(piecesPerShift, toridasCapPerShift);
+      const leftoverPcsPerShift = Math.max(0, piecesPerShift - toridasInputPcsPerShift);
+      const foodmateInputPcsPerShift = Math.min(leftoverPcsPerShift, foodmateCapPerShift);
+
+      const totalPcsProcessedPerShift = toridasInputPcsPerShift + foodmateInputPcsPerShift;
+
+      if (toridasInputPcsPerShift > 0) {
+        const capacityPerToridasLine = toridasConf.machinesPerLine * toridasConf.speed * 9.58;
+        toridasLinesNeeded = Math.ceil(toridasInputPcsPerShift / capacityPerToridasLine);
+        toridasWorkers = toridasLinesNeeded * toridasConf.workers * shiftsNeeded;
+      }
+      
+      if (foodmateInputPcsPerShift > 0) {
+        const capacityPerFoodmateLine = foodmateConf.machinesPerLine * foodmateConf.speed * 9.58;
+        foodmateLinesNeeded = Math.ceil(foodmateInputPcsPerShift / capacityPerFoodmateLine);
+        foodmateWorkers = foodmateLinesNeeded * foodmateConf.workers * shiftsNeeded;
+      }
+      
+      deboneWorkers = toridasWorkers + foodmateWorkers;
+      
+      const trimmingWorkHoursPerShift = totalPcsProcessedPerShift / trimConf.speed;
+      trimmingWorkersBase = Math.ceil(trimmingWorkHoursPerShift / 9.58) * shiftsNeeded;
+      
+      trimmingLinesNeeded = Math.min(trimConf.lines, toridasLinesNeeded + foodmateLinesNeeded);
+      fixedTrimmingWorkers = trimmingLinesNeeded * trimConf.workers * shiftsNeeded;
+      
+      requiredCuttingWorkers = p1CuttingStaff + separationCuttingStaff + trimmingWorkersBase;
+      const totalTrimmingWorkers = trimmingWorkersBase + fixedTrimmingWorkers;
+
+      const xrayCapPerShift = xrayConf.speed * 9.58;
+      const machinesNeededPerShift = totalPcsProcessedPerShift > 0 ? Math.ceil(totalPcsProcessedPerShift / xrayCapPerShift) : 0;
+      xrayMachinesCount = Math.min(xrayConf.lines, machinesNeededPerShift);
+      xrayWorkers = xrayMachinesCount * xrayConf.workers * shiftsNeeded;
+
+      totalManpowerPlan = deboneWorkers + totalTrimmingWorkers + xrayWorkers;
+      requiredCuttingWorkers = p1CuttingStaff + separationCuttingStaff + trimmingWorkersBase;
+    } else {
+      dailyOrders.filter((o: any) => !isByproductSpec(o.itemCode)).forEach((o: any) => {
+        const spec = specs[o.itemCode];
+        const speed = spec?.productSpeed || 45;
+        requiredCuttingWorkers += (o.qty / speed);
+      });
+      requiredCuttingWorkers = Math.ceil(requiredCuttingWorkers / 10);
+      totalManpowerPlan = plannedStationWorkers + requiredCuttingWorkers;
+    }
 
     return {
       intake: dailySummary ? Number(dailySummary.intakeBirds) : 0,
       intakeKg: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
       rmFlAvailable: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
-      totalOrderQty,
+      totalOrderQty: dailySummary ? Number(dailySummary.demandKg) : totalOrderQty,
       manpower: dailyOrders.length > 0 ? totalManpowerPlan : 0,
       manpowerBreakdown: {
-        plannedStationWorkers,
+        plannedStationWorkers: partId === 'bil' ? deboneWorkers + fixedTrimmingWorkers + xrayWorkers : plannedStationWorkers,
         plannedCuttingWorkers: requiredCuttingWorkers,
         actualStationWorkers,
-        actualCuttingWorkers
+        actualCuttingWorkers,
+        isBil: partId === 'bil',
+        deboneWorkers,
+        xrayWorkers,
+        trimmingBeltWorkers: trimmingWorkersBase + fixedTrimmingWorkers,
+        p1CuttingStaff,
+        separationCuttingStaff,
+        trimmingWorkersBase,
+        toridasWorkers,
+        foodmateWorkers,
+        fixedTrimmingWorkers,
+        xrayMachinesCount,
+        toridasLinesNeeded,
+        foodmateLinesNeeded,
+        trimmingLinesNeeded,
+        shiftsNeeded,
+        // Machine config details for UI display
+        toridasMachinesPerLine: mcToridasMachinesPerLine,
+        foodmateMachinesPerLine: mcFoodmateMachinesPerLine,
+        toridasWorkersPerUnit: mcToridasWorkersPerUnit,
+        foodmateWorkersPerUnit: mcFoodmateWorkersPerUnit,
+        trimWorkersPerLine: mcTrimWorkersPerLine,
+        xrayWorkersPerUnit: mcXrayWorkersPerUnit,
+        toridasYield: mcToridasYield,
+        foodmateYield: mcFoodmateYield,
+        toridasTotalMachines: toridasLinesNeeded * mcToridasMachinesPerLine,
+        foodmateTotalMachines: foodmateLinesNeeded * mcFoodmateMachinesPerLine,
       },
       dailyOrders,
       supplyBreakdown: currentPlan.supplyBreakdown?.find((s: any) => formatDBDate(s.productionDate) === date)
@@ -1747,7 +1980,7 @@ const MPSPlan: React.FC = () => {
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            className="bg-white rounded-2xl shadow-xl w-full max-w-6xl flex flex-col max-h-[90vh] border border-gray-200"
+            className="bg-white rounded-2xl shadow-xl w-full max-w-7xl flex flex-col max-h-[90vh] border border-gray-200"
           >
             {/* Modal Header */}
             <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl">
@@ -1799,39 +2032,230 @@ const MPSPlan: React.FC = () => {
                         <Users size={16} className="text-indigo-500" />
                         Manpower Planning & Actual
                       </h4>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Station Workers (Plan)</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedStationWorkers}</span>
-                            <span className="text-[9px] font-bold text-indigo-400">Pax</span>
+                      {selectedManpower.isBil ? (() => {
+                        const metrics = calculateDailyMetrics(selectedDate);
+                        const mb = metrics.manpowerBreakdown;
+                        return (
+                        <div className="flex flex-col gap-4">
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            {/* Process 1 */}
+                            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-2xl border border-blue-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-md transition-all">
+                              <div className="flex items-center justify-between mb-2 z-10">
+                                <p className="text-xs font-bold text-blue-700 uppercase tracking-wider">Process 1: BIL</p>
+                                <Package size={16} className="text-blue-400" />
+                              </div>
+                              <div className="flex items-baseline gap-1 z-10">
+                                <span className="text-3xl font-black text-blue-900">{mb.p1CuttingStaff || 0}</span>
+                                <span className="text-xs font-bold text-blue-500">Pax</span>
+                              </div>
+                              <div className="absolute -bottom-4 -right-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                <Package size={80} />
+                              </div>
+                            </div>
+                            
+                            {/* Process 2 */}
+                            <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-2xl border border-purple-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-md transition-all">
+                              <div className="flex items-center justify-between mb-2 z-10">
+                                <p className="text-xs font-bold text-purple-700 uppercase tracking-wider">Process 2: สะโพก + น่อง</p>
+                                <Move size={16} className="text-purple-400" />
+                              </div>
+                              <div className="flex items-baseline gap-1 z-10">
+                                <span className="text-3xl font-black text-purple-900">{mb.separationCuttingStaff || 0}</span>
+                                <span className="text-xs font-bold text-purple-500">Pax</span>
+                              </div>
+                              <div className="absolute -bottom-4 -right-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                <Move size={80} />
+                              </div>
+                            </div>
+
+                            {/* Process 3 */}
+                            <div className="bg-gradient-to-br from-pink-50 to-pink-100 p-4 rounded-2xl border border-pink-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-md transition-all">
+                              <div className="flex items-center justify-between mb-2 z-10">
+                                <p className="text-xs font-bold text-pink-700 uppercase tracking-wider">Process 3: BL</p>
+                                <Activity size={16} className="text-pink-400" />
+                              </div>
+                              <div className="flex items-baseline gap-1 z-10">
+                                <span className="text-3xl font-black text-pink-900">{((mb.deboneWorkers || 0) + (mb.trimmingBeltWorkers || 0) + (mb.xrayWorkers || 0)) || 0}</span>
+                                <span className="text-xs font-bold text-pink-500">Pax</span>
+                              </div>
+                              <div className="absolute -bottom-4 -right-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                <Activity size={80} />
+                              </div>
+                            </div>
+
+                            {/* Total Manpower */}
+                            <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 p-4 rounded-2xl border border-indigo-700 shadow-md flex flex-col justify-between relative overflow-hidden group hover:shadow-lg transition-all text-white">
+                              <div className="flex items-center justify-between mb-2 z-10">
+                                <p className="text-xs font-bold text-indigo-100 uppercase tracking-wider">Total Manpower</p>
+                                <Users size={16} className="text-indigo-200" />
+                              </div>
+                              <div className="flex items-baseline gap-1 z-10">
+                                <span className="text-3xl font-black text-white">{(mb.p1CuttingStaff || 0) + (mb.separationCuttingStaff || 0) + ((mb.deboneWorkers || 0) + (mb.trimmingBeltWorkers || 0) + (mb.xrayWorkers || 0))}</span>
+                                <span className="text-xs font-bold text-indigo-200">Pax</span>
+                              </div>
+                              <div className="absolute -bottom-4 -right-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                <Users size={80} />
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Process 3 Breakdown */}
+                          <div className="mt-2 bg-white rounded-2xl border border-pink-100 overflow-hidden shadow-sm">
+                            <div className="bg-pink-50/50 px-4 py-2 border-b border-pink-100 flex items-center justify-between">
+                               <p className="text-xs font-bold text-pink-700 flex items-center gap-2">
+                                 <Activity size={14}/>
+                                 Process 3 (BL) Breakdown
+                               </p>
+                            </div>
+                            {/* Machine Summary Table */}
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-[11px] border-collapse">
+                                <thead>
+                                  <tr className="bg-pink-50/80">
+                                    <th className="text-left px-3 py-2 font-bold text-pink-800 border-b border-pink-200">เครื่องจักร</th>
+                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">จำนวนไลน์</th>
+                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">เครื่อง/ไลน์</th>
+                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">เครื่องทั้งหมด</th>
+                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">จำนวนกะ</th>
+                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">Yield</th>
+                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">คน/ไลน์/กะ</th>
+                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">รวมคน</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {/* Toridas */}
+                                  <tr className="hover:bg-pink-50/40 transition-colors">
+                                    <td className="px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-gray-800">🔧 Toridas</span>
+                                      <span className="text-[9px] text-gray-400 ml-1">(Debone)</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 font-semibold text-gray-700">{mb.toridasLinesNeeded || 0}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.toridasMachinesPerLine || 4}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-pink-700 bg-pink-50 px-2 py-0.5 rounded">{mb.toridasTotalMachines || 0}</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">{mb.shiftsNeeded || 0} กะ</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{((mb.toridasYield || 0.75) * 100).toFixed(0)}%</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.toridasWorkersPerUnit || 5}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-extrabold text-gray-900">{mb.toridasWorkers || 0}</span>
+                                    </td>
+                                  </tr>
+                                  {/* Foodmate */}
+                                  <tr className="hover:bg-pink-50/40 transition-colors">
+                                    <td className="px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-gray-800">🔧 Foodmate</span>
+                                      <span className="text-[9px] text-gray-400 ml-1">(Debone)</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 font-semibold text-gray-700">{mb.foodmateLinesNeeded || 0}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.foodmateMachinesPerLine || 1}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-pink-700 bg-pink-50 px-2 py-0.5 rounded">{mb.foodmateTotalMachines || 0}</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">{mb.shiftsNeeded || 0} กะ</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{((mb.foodmateYield || 0.70) * 100).toFixed(0)}%</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.foodmateWorkersPerUnit || 5}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-extrabold text-gray-900">{mb.foodmateWorkers || 0}</span>
+                                    </td>
+                                  </tr>
+                                  {/* Trimming Belt */}
+                                  <tr className="hover:bg-pink-50/40 transition-colors">
+                                    <td className="px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-gray-800">✂️ Trimming Belt</span>
+                                      <span className="text-[9px] text-gray-400 ml-1">(ตัดแต่ง+ประจำจุด)</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 font-semibold text-gray-700">{mb.trimmingLinesNeeded || 0}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">1</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-pink-700 bg-pink-50 px-2 py-0.5 rounded">{mb.trimmingLinesNeeded || 0}</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">{mb.shiftsNeeded || 0} กะ</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">-</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.trimWorkersPerLine || 7}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-extrabold text-gray-900">{mb.trimmingBeltWorkers || 0}</span>
+                                    </td>
+                                  </tr>
+                                  {/* X-Ray */}
+                                  <tr className="hover:bg-pink-50/40 transition-colors">
+                                    <td className="px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-gray-800">📡 X-Ray</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 font-semibold text-gray-700">-</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">-</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-pink-700 bg-pink-50 px-2 py-0.5 rounded">{mb.xrayMachinesCount || 0}</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">{mb.shiftsNeeded || 0} กะ</span>
+                                    </td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">-</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.xrayWorkersPerUnit || 5}</td>
+                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                      <span className="font-extrabold text-gray-900">{mb.xrayWorkers || 0}</span>
+                                    </td>
+                                  </tr>
+                                </tbody>
+                                <tfoot>
+                                  <tr className="bg-pink-50/60">
+                                    <td colSpan={7} className="px-3 py-2.5 font-bold text-pink-800 text-right border-t border-pink-200">รวมคนทั้งหมด (Process 3)</td>
+                                    <td className="text-center px-3 py-2.5 border-t border-pink-200">
+                                      <span className="font-extrabold text-pink-700 text-sm">{(mb.deboneWorkers || 0) + (mb.trimmingBeltWorkers || 0) + (mb.xrayWorkers || 0)}</span>
+                                    </td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          </div>
+                          <div className="text-[10px] text-indigo-400/80 italic font-medium px-2">
+                            * Total Planned Station Workers: {mb.plannedStationWorkers} | Cutting: {mb.plannedCuttingWorkers}
                           </div>
                         </div>
-                        <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Cutting Workers (Plan)</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedCuttingWorkers}</span>
-                            <span className="text-[9px] font-bold text-indigo-400">Pax</span>
+                        );
+                      })() : (
+                        <>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
+                              <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Station Workers (Plan)</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedStationWorkers}</span>
+                                <span className="text-[9px] font-bold text-indigo-400">Pax</span>
+                              </div>
+                            </div>
+                            <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
+                              <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">Cutting Workers (Plan)</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-black text-indigo-900">{selectedManpower.plannedCuttingWorkers}</span>
+                                <span className="text-[9px] font-bold text-indigo-400">Pax</span>
+                              </div>
+                            </div>
+                            <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
+                              <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Station Workers (Actual)</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualStationWorkers}</span>
+                                <span className="text-[9px] font-bold text-emerald-500">Pax</span>
+                              </div>
+                            </div>
+                            <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
+                              <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Cutting Workers (Actual)</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualCuttingWorkers}</span>
+                                <span className="text-[9px] font-bold text-emerald-500">Pax</span>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Station Workers (Actual)</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualStationWorkers}</span>
-                            <span className="text-[9px] font-bold text-emerald-500">Pax</span>
+                          <div className="text-[10px] text-indigo-400 italic font-medium">
+                            * Cutting Workers (Plan) calculated dynamically via Demand Orders: SUMPRODUCT(Order Qty / Product Speed) / 10
                           </div>
-                        </div>
-                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Cutting Workers (Actual)</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-emerald-900">{selectedManpower.actualCuttingWorkers}</span>
-                            <span className="text-[9px] font-bold text-emerald-500">Pax</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-[10px] text-indigo-400 italic font-medium">
-                        * Cutting Workers (Plan) calculated dynamically via Demand Orders: SUMPRODUCT(Order Qty / Product Speed) / 10
-                      </div>
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -2340,18 +2764,76 @@ const MPSPlan: React.FC = () => {
                             <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
                             {(() => {
                               const isBil = currentPlan?.partType === 'bil';
-                              const supplySizes = (selectedSupply.sizes || []).map((s: any) => s.groupSize as string);
+                              // Derive base sizes from entire plan supply to know all standard bins
+                              const allSupplySizesSet = new Set<string>([
+                                "180 Down", "180-210", "210-230", "230-260", "260-280", 
+                                "280-310", "310-330", "330-360", "360-390", "390-410", 
+                                "410-440", "440-460", "460-490"
+                              ]);
+                              currentPlan?.supplyBreakdown?.forEach((s: any) => {
+                                if (s.sizes) s.sizes.forEach((sz: any) => { if (sz.groupSize) allSupplySizesSet.add(sz.groupSize); });
+                              });
+                              // Sort using custom logic to ensure "180 Down" is first and numbers are sorted correctly
+                              const allSupplySizes = Array.from(allSupplySizesSet).sort((a, b) => {
+                                if (a.includes('Down') && !b.includes('Down')) return -1;
+                                if (!a.includes('Down') && b.includes('Down')) return 1;
+                                return a.localeCompare(b, undefined, { numeric: true });
+                              });
+
+                              // Parse standard BIL bins into lo/hi values for overlap mapping
+                              const bilBinDefs = allSupplySizes.map(label => {
+                                const s = label.toLowerCase().trim();
+                                let lo = 0, hi = 9999;
+                                if (s.includes('down')) {
+                                  const m = s.match(/(\d+)/);
+                                  if (m) hi = parseInt(m[1], 10);
+                                } else if (s.includes('up')) {
+                                  const m = s.match(/(\d+)/);
+                                  if (m) lo = parseInt(m[1], 10);
+                                } else {
+                                  const m = s.match(/(\d+)\s*[-–]\s*(\d+)/);
+                                  if (m) {
+                                    lo = parseInt(m[1], 10);
+                                    hi = parseInt(m[2], 10);
+                                  }
+                                }
+                                return { key: label, lo, hi, label };
+                              });
+
                               const orderSizes: string[] = [];
                               if (isBil) {
                                 mainOrders.forEach((o: any) => {
                                   const spec = specs[o.itemCode];
                                   const size = spec?.productSize;
                                   if (size && size.toLowerCase().trim() !== 'unsize' && size.toLowerCase().trim() !== '') {
-                                    orderSizes.push(size.trim());
+                                    const s = size.toLowerCase().trim();
+                                    const match = bilBinDefs.find(b => b.key.toLowerCase() === s);
+                                    if (!match) {
+                                      // Check if it can be parsed as a range and mapped
+                                      let lo = -1, hi = -1;
+                                      if (s.includes('down')) {
+                                        const m = s.match(/(\d+)/);
+                                        if (m) { lo = 0; hi = parseInt(m[1], 10); }
+                                      } else if (s.includes('up')) {
+                                        const m = s.match(/(\d+)/);
+                                        if (m) { lo = parseInt(m[1], 10); hi = 9999; }
+                                      } else {
+                                        const m = s.match(/(\d+)\s*[-–]\s*(\d+)/);
+                                        if (m) { lo = parseInt(m[1], 10); hi = parseInt(m[2], 10); }
+                                      }
+                                      
+                                      if (lo >= 0 && hi >= 0 && hi > lo) {
+                                        const overlaps = bilBinDefs.filter(b => Math.max(lo, b.lo) < Math.min(hi, b.hi));
+                                        if (overlaps.length === 0) orderSizes.push(size.trim()); // completely unmappable
+                                      } else {
+                                        orderSizes.push(size.trim()); // unmappable string
+                                      }
+                                    }
                                   }
                                 });
                               }
-                              const uniqueSizes = Array.from(new Set([...supplySizes, ...orderSizes]));
+                              
+                              const uniqueSizes = Array.from(new Set([...allSupplySizes, ...orderSizes]));
                               const sizeLabels = isBil
                                 ? uniqueSizes.map((label, idx) => ({
                                   key: label,
@@ -2389,11 +2871,34 @@ const MPSPlan: React.FC = () => {
                                 if (s === 'unsize' || s === '') return [];
 
                                 if (isBil) {
-                                  // For BIL, match directly to one of our labels
+                                  // 1. Direct match
                                   const match = sizeLabels.find(sl => sl.label.toLowerCase() === s);
-                                  return match ? [match.key] : [productSize]; // Fallback to raw size if no direct label match
+                                  if (match) return [match.key];
+
+                                  // 2. Range Overlap mapping for BIL
+                                  let lo = -1, hi = -1;
+                                  if (s.includes('down')) {
+                                    const m = s.match(/(\d+)/);
+                                    if (m) { lo = 0; hi = parseInt(m[1], 10); }
+                                  } else if (s.includes('up')) {
+                                    const m = s.match(/(\d+)/);
+                                    if (m) { lo = parseInt(m[1], 10); hi = 9999; }
+                                  } else {
+                                    const m = s.match(/(\d+)\s*[-–]\s*(\d+)/);
+                                    if (m) { lo = parseInt(m[1], 10); hi = parseInt(m[2], 10); }
+                                  }
+
+                                  if (lo >= 0 && hi >= 0 && hi > lo) {
+                                    const overlaps = bilBinDefs.filter(b => Math.max(lo, b.lo) < Math.min(hi, b.hi));
+                                    if (overlaps.length > 0) {
+                                      return overlaps.map(b => b.key);
+                                    }
+                                  }
+
+                                  return [productSize]; // Fallback to raw size string
                                 }
 
+                                // Original Fillet range matching logic
                                 if (s.includes('40 down') || s === '40down') return ['40Down'];
                                 if (s.includes('70 up') || s === '70up' || s.includes('60 up') || s === '60up') return ['60_65', '65_70', '70Up'];
                                 const rangeMatch = s.match(/(\d+)\s*[-–]\s*(\d+)/);
@@ -2429,13 +2934,32 @@ const MPSPlan: React.FC = () => {
                               });
 
                               sizedOrders.forEach(o => {
-                                const perBin = o.qty / o.binKeys.length;
-                                o.binKeys.forEach((key: string) => {
-                                  if (!ordersByBin[key]) ordersByBin[key] = [];
-                                  demandByBin[key] = (demandByBin[key] || 0) + perBin;
-                                  supplyRemaining[key] = (supplyRemaining[key] || 0) - perBin;
-                                  ordersByBin[key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: o.size, qty: perBin, type: o.type });
-                                });
+                                let remainingQty = o.qty;
+                                
+                                // Phase 1: Waterfall fill from available supply in overlapping bins
+                                for (const key of o.binKeys) {
+                                  if (remainingQty <= 0) break;
+                                  const avail = Math.max(0, supplyRemaining[key] || 0);
+                                  if (avail > 0) {
+                                    const alloc = Math.min(avail, remainingQty);
+                                    if (!ordersByBin[key]) ordersByBin[key] = [];
+                                    demandByBin[key] = (demandByBin[key] || 0) + alloc;
+                                    supplyRemaining[key] -= alloc;
+                                    remainingQty -= alloc;
+                                    ordersByBin[key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: o.size, qty: alloc, type: o.type });
+                                  }
+                                }
+
+                                // Phase 2: If still short, distribute the shortage evenly among valid bins
+                                if (remainingQty > 0 && o.binKeys.length > 0) {
+                                  const perBin = remainingQty / o.binKeys.length;
+                                  for (const key of o.binKeys) {
+                                    if (!ordersByBin[key]) ordersByBin[key] = [];
+                                    demandByBin[key] = (demandByBin[key] || 0) + perBin;
+                                    supplyRemaining[key] = (supplyRemaining[key] || 0) - perBin;
+                                    ordersByBin[key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: `${o.size} (Shortage)`, qty: perBin, type: o.type });
+                                  }
+                                }
                               });
 
                               // Pass 2: Allocate UNSIZE orders via waterfall (fill remaining capacity per bin)
