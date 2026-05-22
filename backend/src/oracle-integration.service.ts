@@ -1,7 +1,7 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import * as oracledb from 'oracledb';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { StgErpItem } from './stg-erp-item.entity';
 import { StgErpOrderHeader } from './stg-erp-order-header.entity';
 import { StgErpOrderLine } from './stg-erp-order-line.entity';
@@ -567,11 +567,39 @@ export class OracleIntegrationService implements OnModuleDestroy {
    * ดึงข้อมูล Orders สำหรับ Demand Management (Header + Lines + Item Desc จาก stg_erp_items)
    */
   async getDemandOrders(): Promise<any[]> {
+    // Limit to recent 1000 headers to prevent Out of Memory
     const headers = await this.stgErpOrderHeaderRepository.find({
       order: { erpOrderDate: 'DESC' },
+      take: 1000,
     });
-    const lines = await this.stgErpOrderLineRepository.find();
-    const items = await this.stgErpItemRepository.find();
+
+    if (headers.length === 0) return [];
+
+    const headerIds = headers.map(h => h.erpOrderHeaderId);
+
+    // Fetch lines only for these headers in chunks to avoid MS SQL 2100 param limit
+    let lines: any[] = [];
+    const chunkSize = 500;
+    for (let i = 0; i < headerIds.length; i += chunkSize) {
+      const chunkIds = headerIds.slice(i, i + chunkSize);
+      const chunkLines = await this.stgErpOrderLineRepository.find({
+        where: { erpOrderHeaderId: In(chunkIds) }
+      });
+      lines = lines.concat(chunkLines);
+    }
+
+    // Extract unique item codes to fetch descriptions
+    const uniqueItemCodes = [...new Set(lines.map(l => l.erpOrderItemCode))];
+    let items: any[] = [];
+    if (uniqueItemCodes.length > 0) {
+      for (let i = 0; i < uniqueItemCodes.length; i += chunkSize) {
+        const chunkCodes = uniqueItemCodes.slice(i, i + chunkSize);
+        const chunkItems = await this.stgErpItemRepository.find({
+          where: { erpItemCode: In(chunkCodes) }
+        });
+        items = items.concat(chunkItems);
+      }
+    }
 
     // สร้าง Map ของ Item Code -> Item Description
     const itemMap = new Map<string, string>();
