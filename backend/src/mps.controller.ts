@@ -19,6 +19,8 @@ import { ManualOperation } from './manual-operation.entity';
 import { StgErpItem } from './stg-erp-item.entity';
 import { MasterYield } from './master-yield.entity';
 import { MachineConfig } from './machine-config.entity';
+import { BlMpsPlanDaily } from './bl-mps-plan-daily.entity';
+import { ExternalRmSupply } from './external-rm-supply.entity';
 
 @Controller('api/mps')
 export class MpsController {
@@ -44,6 +46,8 @@ export class MpsController {
     private bilWeightDistRepo: Repository<BilWeightDistribution>,
     @InjectRepository(MpsExceptionReport)
     private exceptionRepo: Repository<MpsExceptionReport>,
+    @InjectRepository(ExternalRmSupply)
+    private externalRmRepo: Repository<ExternalRmSupply>,
     @InjectRepository(FilletSizeCalc)
     private filletSizeRepo: Repository<FilletSizeCalc>,
     @InjectRepository(FilletConfig)
@@ -476,6 +480,9 @@ export class MpsController {
     });
 
     const supplyMap = new Map<string, number>();
+    const internalSupplyMap = new Map<string, number>();
+    const externalSupplyMap = new Map<string, number>();
+
     allIntakesExpanded.forEach((intake: any) => {
       const d = parseLocalDate(intake.receive_date);
       if (d) {
@@ -486,9 +493,22 @@ export class MpsController {
         const rmAvailKg = partType === 'fillet' 
           ? intakeKg * 0.9575 * 0.95 * filletYield * 0.907
           : intakeKg * 0.9575 * 0.95 * partYield;
+        internalSupplyMap.set(d, (internalSupplyMap.get(d) || 0) + rmAvailKg);
         supplyMap.set(d, (supplyMap.get(d) || 0) + rmAvailKg);
       }
     });
+
+    if (partType === 'bil') {
+      const allExternalRms = await manager.find(ExternalRmSupply, { where: { partName: 'BIL L/C' }});
+      allExternalRms.forEach((ext: any) => {
+        const d = parseLocalDate(ext.receivedDate);
+        if (d && (d.startsWith(targetMonth) || d.startsWith(prevMonth))) {
+          const extKg = Number(ext.totalWeightKg || 0);
+          externalSupplyMap.set(d, (externalSupplyMap.get(d) || 0) + extKg);
+          supplyMap.set(d, (supplyMap.get(d) || 0) + extKg);
+        }
+      });
+    }
 
     const mainChillOrders: any[] = [];
     const mainFreezeOrders: any[] = [];
@@ -1148,6 +1168,8 @@ export class MpsController {
     const mpsDailiesToSave: MpsPlanDaily[] = [];
     let totalIntakeBirds = 0;
     let totalRmFlKg = 0;
+    let totalInternalRmKg = 0;
+    let totalExternalRmKg = 0;
 
     const dailyDemand = new Map<string, number>();
     const dailyDemandP1 = new Map<string, number>();
@@ -1236,6 +1258,8 @@ export class MpsController {
 
       totalIntakeBirds += intakeBirds;
       totalRmFlKg += originalSupplyKg;
+      totalInternalRmKg += internalSupplyMap.get(dayStr) || 0;
+      totalExternalRmKg += externalSupplyMap.get(dayStr) || 0;
 
       let cuttingStaff = demand > 0 ? (dailyStaff.get(dayStr) || 0) / 10 : 0;
       let supportStaff = demand > 0 ? 28 : 0;
@@ -1361,6 +1385,8 @@ export class MpsController {
         productionDate: new Date(dayStr),
         intakeBirds: intakeBirds,
         rmFlAvailKg: originalSupplyKg,
+        internalRmKg: internalSupplyMap.get(dayStr) || 0,
+        externalRmKg: externalSupplyMap.get(dayStr) || 0,
         demandKg: grossDemandKg,
         cuttingStaff: Math.ceil(cuttingStaff),
         supportStaff,
@@ -1488,6 +1514,8 @@ export class MpsController {
 
     plan.totalIntakeBirds = totalIntakeBirds;
     plan.totalRmFlKg = totalRmFlKg;
+    plan.totalInternalRmKg = totalInternalRmKg;
+    plan.totalExternalRmKg = totalExternalRmKg;
     plan.totalDemandKg = totalDemandKg;
     await manager.save(plan);
 
@@ -1725,7 +1753,8 @@ export class MpsController {
     // 1. Fetch Plan with small relations first
     const plan = await this.mpsPlanRepo.findOne({
       where: { id },
-      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown', 'supplyBreakdown.sizes']
+      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown', 'supplyBreakdown.sizes'],
+      relationLoadStrategy: 'query'
     });
 
     if (!plan) {
@@ -1734,11 +1763,22 @@ export class MpsController {
 
     // 2. Fetch Orders separately to avoid heavy join and serialization crash
     // This also avoids circular references by default
-    const orders = await this.mpsOrderRepo.find({
-      where: { mpsPlan: { id: plan.id } }
-    });
-
-    plan.orders = orders;
+    const orders = await this.mpsOrderRepo.createQueryBuilder('o')
+      .select([
+        'o.id AS id',
+        'o.erpOrderLineId AS erpOrderLineId',
+        'o.soNumber AS soNumber',
+        'o.itemCode AS itemCode',
+        'o.itemDesc AS itemDesc',
+        'o.productType AS productType',
+        'o.quantityKg AS quantityKg',
+        'o.shipDate AS shipDate',
+        'o.plannedProductionDate AS plannedProductionDate',
+        'o.finishedProductionDate AS finishedProductionDate',
+        'o.isManualOverride AS isManualOverride'
+      ])
+      .where('o.mpsPlan = :id', { id: plan.id })
+      .getRawMany();
 
     // Safety: Ensure no leftover circular refs in other relations
     if (plan.dailySummaries) plan.dailySummaries.forEach(d => delete (d as any).mpsPlan);
@@ -1747,6 +1787,8 @@ export class MpsController {
       if (s.sizes) s.sizes.forEach(sz => delete (sz as any).mpsPlanSupply);
     });
     if (plan.exceptions) plan.exceptions.forEach(e => delete (e as any).mpsPlan);
+    
+    plan.orders = orders;
 
     return { success: true, data: plan };
   }
@@ -1818,7 +1860,8 @@ export class MpsController {
   async exportPlan(@Param('id') id: number, @Res() res: express.Response) {
     const plan = await this.mpsPlanRepo.findOne({
       where: { id },
-      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown', 'supplyBreakdown.sizes']
+      relations: ['dailySummaries', 'exceptions', 'supplyBreakdown', 'supplyBreakdown.sizes'],
+      relationLoadStrategy: 'query'
     });
 
     if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
@@ -1832,7 +1875,16 @@ export class MpsController {
     const sheet = workbook.addWorksheet(isBilPlan ? 'BIL MPS Plan' : 'Fillet MPS Plan');
 
     // Fetch Order Headers for Customer Grade mapping
-    const headers = await this.orderHeaderRepo.find();
+    const orderNumbers = [...new Set(orders.map(o => o.soNumber).filter(id => id))];
+    const headers: any[] = [];
+    if (orderNumbers.length > 0) {
+      const chunkSize = 500;
+      for (let i = 0; i < orderNumbers.length; i += chunkSize) {
+        const chunkIds = orderNumbers.slice(i, i + chunkSize);
+        const chunkHeaders = await this.orderHeaderRepo.find({ where: { erpOrderNumber: In(chunkIds) } });
+        headers.push(...chunkHeaders);
+      }
+    }
     const gradeMap = new Map();
     headers.forEach(h => {
       if (h.erpOrderNumber) gradeMap.set(h.erpOrderNumber, h.erpCustomerGrade);
@@ -1866,10 +1918,13 @@ export class MpsController {
       }
     });
 
-    // Fetch Manual Operations (Actual Staff)
+    const specs = await this.specRepo.find();
+
+    // Fetch External RM Supplies for the month
     const [year, month] = plan.targetMonth.split('-').map(Number);
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0);
+    
     const manualOps = await this.manualOpRepo.find({
       where: {
         productionDate: Between(startDate, endDate)
@@ -1881,14 +1936,42 @@ export class MpsController {
       manualOpMap.set(dateKey, op);
     });
 
+    const externalRms = await this.externalRmRepo.find({
+      where: { receivedDate: Between(startDate, endDate), partName: 'BIL L/C' }
+    });
+    const externalRmMap = new Map();
+    externalRms.forEach(ext => {
+      const dateKey = new Date(ext.receivedDate).toISOString().split('T')[0];
+      externalRmMap.set(dateKey, ext);
+    });
+
+    // Fetch BIL to BL mapping
+    const bilWeightDist = await this.bilWeightDistRepo.find();
+    const blColLabelsMap: Record<string, string> = {};
+    bilWeightDist.forEach(w => {
+      if (w.blColLabel) {
+        blColLabelsMap[w.colLabel] = w.blColLabel;
+      }
+    });
+    // Distinct BL Size headers
+    const uniqueBlSizes = [...new Set(Object.values(blColLabelsMap))].sort();
+
     // Get mapping of Item Code -> Item Desc (Pull from StgErpItem to ensure correct ERP_ITEM_DESC is used)
-    const erpItems = await this.itemRepo.find();
+    const itemCodesToFetch = [...new Set([...orders.map(o => o.itemCode), ...specs.map(s => s.erpItemCode)].filter(c => c))];
+    const erpItems: any[] = [];
+    if (itemCodesToFetch.length > 0) {
+      const chunkSize = 500;
+      for (let i = 0; i < itemCodesToFetch.length; i += chunkSize) {
+        const chunkCodes = itemCodesToFetch.slice(i, i + chunkSize);
+        const chunkItems = await this.itemRepo.find({ where: { erpItemCode: In(chunkCodes) }, select: ['erpItemCode', 'erpItemDesc'] });
+        erpItems.push(...chunkItems);
+      }
+    }
     const itemDescMap = new Map();
     erpItems.forEach(i => {
       if (i.erpItemCode) itemDescMap.set(i.erpItemCode, i.erpItemDesc);
     });
 
-    const specs = await this.specRepo.find();
     const specMap = new Map();
     specs.forEach(s => specMap.set(s.erpItemCode, itemDescMap.get(s.erpItemCode) || s.erpItemDesc));
 
@@ -1920,12 +2003,21 @@ export class MpsController {
     const specByCode = new Map();
     allSpecs.forEach(s => specByCode.set(s.erpItemCode, s));
 
-    // ── Get BIL size bin labels from supply breakdown ──
+    // ── Get BIL size bin labels from supply breakdown (internal + external) ──
     const bilSizeLabels: string[] = [];
     if (isBilPlan) {
       const sizeSet = new Set<string>();
       plan.supplyBreakdown.forEach(s => {
         if (s.sizes) s.sizes.forEach((sz: any) => { if (sz.groupSize) sizeSet.add(sz.groupSize); });
+      });
+      // Add external sizes
+      externalRms.forEach(ext => {
+        if (ext.sizeBreakdownJson) {
+          try {
+            const extSizes = JSON.parse(ext.sizeBreakdownJson);
+            Object.keys(extSizes).forEach(k => sizeSet.add(k));
+          } catch (e) {}
+        }
       });
       bilSizeLabels.push(...Array.from(sizeSet).sort());
     }
@@ -1936,29 +2028,31 @@ export class MpsController {
     if (isBilPlan) {
       // ═══ BIL Column Layout ═══
       // Section A: Supply Control (9 cols: 1..9)
-      //   Date | Day | Intake Birds | BIL Pcs (x2) | Avg.Wt | Slaughtered Wt | RM BIL Total | RM Used | RM Balance
       // Section B: Manpower P1 (1 col: 10) | P2 (1 col: 11)
-      // Section C: Process 3 BL Detail — per machine: Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
-      //   Toridas (7 cols: 12..18) | Foodmate (7 cols: 19..25) | Trimming (7 cols: 26..32) | X-Ray (7 cols: 33..39) | P3 Total (1 col: 40)
+      // Section C: Process 3 BL Detail
       // Section D: Total Pax (1 col: 41)
-      // Section E: BL Output (1 col: 42)
+      // Section E: BL Output Total (1 col: 42) + BL Size Breakdown (N cols)
       // Section F: RM BIL by Size (dynamic)
       // Section G: Production Plan (dynamic)
 
-      const supplyEnd = 9;        // cols 1..9
-      const p1Col = 10;
-      const p2Col = 11;
-      const p3Start = 12;
+      const supplyEnd = 11;       // cols 1..11
+      const p1Col = 12;
+      const p2Col = 13;
+      const p3Start = 14;
       const machColsPerMachine = 7; // Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
-      const toridasStart = p3Start;                              // 12
-      const foodmateStart = toridasStart + machColsPerMachine;   // 19
-      const trimmingStart = foodmateStart + machColsPerMachine;  // 26
-      const xrayStart = trimmingStart + machColsPerMachine;      // 33
-      const p3TotalCol = xrayStart + machColsPerMachine;         // 40
-      const p3End = p3TotalCol;                                  // 40
-      const totalCol = p3End + 1;     // 41
-      const blOutputCol = totalCol + 1; // 42
-      const sizeStart = blOutputCol + 1; // 43
+      const toridasStart = p3Start;                              // 14
+      const foodmateStart = toridasStart + machColsPerMachine;   // 21
+      const trimmingStart = foodmateStart + machColsPerMachine;  // 28
+      const xrayStart = trimmingStart + machColsPerMachine;      // 35
+      const p3TotalCol = xrayStart + machColsPerMachine;         // 42
+      const p3End = p3TotalCol;                                  // 42
+      const totalCol = p3End + 1;     // 43
+      
+      const blOutputTotalCol = totalCol + 1; // 44
+      const blOutputSizeStart = blOutputTotalCol + 1;
+      const blOutputSizeEnd = blOutputTotalCol + uniqueBlSizes.length;
+      
+      const sizeStart = blOutputSizeEnd + 1;
       const sizeEnd = sizeStart + bilSizeLabels.length - 1;
       const prodStart = sizeEnd + 1;
       const prodEnd = prodStart + itemCodes.length - 1;
@@ -1972,7 +2066,12 @@ export class MpsController {
       sectionRow.getCell(p3Start).value = 'Process 3: BL — รายละเอียดเครื่องจักร';
       sheet.mergeCells(1, p3Start, 1, p3End);
       sectionRow.getCell(totalCol).value = 'Total';
-      sectionRow.getCell(blOutputCol).value = 'BL Output';
+      
+      sectionRow.getCell(blOutputTotalCol).value = 'BL Output';
+      if (uniqueBlSizes.length > 0) {
+        sheet.mergeCells(1, blOutputTotalCol, 1, blOutputSizeEnd);
+      }
+      
       sectionRow.getCell(sizeStart).value = 'RM BIL by Size';
       if (bilSizeLabels.length > 1) sheet.mergeCells(1, sizeStart, 1, sizeEnd);
       sectionRow.getCell(prodStart).value = 'Production Plan';
@@ -1989,7 +2088,7 @@ export class MpsController {
         { start: xrayStart, end: xrayStart + machColsPerMachine - 1, color: 'FFF0A0BA' },
         { start: p3TotalCol, end: p3TotalCol, color: 'FF880E4F' },
         { start: totalCol, end: totalCol, color: 'FF3F51B5' },
-        { start: blOutputCol, end: blOutputCol, color: 'FF2E7D32' },
+        { start: blOutputTotalCol, end: blOutputSizeEnd, color: 'FF2E7D32' },
         { start: sizeStart, end: sizeEnd, color: 'FFED7D31' },
         { start: prodStart, end: prodEnd, color: 'FF7030A0' }
       ];
@@ -2052,7 +2151,7 @@ export class MpsController {
       // Row 3: Sub-Headers
       const subHeaders = [
         'Date', 'Day', 'Intake Birds', 'BIL Pcs (x2)', 'Avg. Wt (kg)',
-        'Slaughtered Wt', 'RM BIL Total', 'RM Used', 'RM Balance',
+        'Slaughtered Wt', 'Internal RM (kg)', 'External RM (kg)', 'RM BIL Total', 'RM Used', 'RM Balance',
         'P1 Pax', 'P2 Pax',
         ...machSubCols, // Toridas
         ...machSubCols, // Foodmate
@@ -2061,6 +2160,7 @@ export class MpsController {
         'P3 รวมคน',
         'Total Pax',
         'BL Output (kg)',
+        ...uniqueBlSizes, // Breakdown sizes
         ...bilSizeLabels,
         ...itemCodes
       ];
@@ -2094,12 +2194,24 @@ export class MpsController {
         const totalWeight = supply?.totalWeight || 0;
         const avgWeight = supply?.avgWeight || 0;
         const slaughteredWeight = totalWeight * 0.9575 * 0.95;
-        const rmBilTotal = Math.round(s.rmFlAvailKg); // stored as RM BIL in the plan
+        
+        // Add external RM
+        const extDaily = externalRmMap.get(dateStr);
+        let extSizes: Record<string, number> = {};
+        let extTotalKg = 0;
+        if (extDaily && extDaily.sizeBreakdownJson) {
+          try {
+            extSizes = JSON.parse(extDaily.sizeBreakdownJson);
+            Object.values(extSizes).forEach(v => extTotalKg += Number(v) || 0);
+          } catch (e) {}
+        }
+        
+        const rmBilTotal = Math.round(s.rmFlAvailKg + extTotalKg);
         const rmUsed = Math.round(s.demandKg);
         const rmBalance = rmBilTotal - rmUsed;
 
         // ── Pieces-based avg piece weight ──
-        const avgPieceWeight = intakeBirds > 0 ? (rmBilTotal / bilPiecesTotal) : 0;
+        const avgPieceWeight = intakeBirds > 0 ? (s.rmFlAvailKg / bilPiecesTotal) : 0;
         let remainingPieces = bilPiecesTotal; // BIL uses x2
 
         // P1: BIL orders (matched by Master Yield Tree process: 1)
@@ -2188,9 +2300,68 @@ export class MpsController {
 
         // Size bins
         const getSizeKg = (sizeArr: any[] | undefined, groupSize: string): number => {
-          if (!sizeArr) return 0;
-          return sizeArr.filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+          let kg = 0;
+          if (sizeArr) {
+            kg += sizeArr.filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+          }
+          if (extSizes[groupSize]) {
+            kg += Number(extSizes[groupSize]);
+          }
+          return kg;
         };
+        
+        // Calculate BL Output Size Breakdown
+        const blBreakdownArr = uniqueBlSizes.map(() => 0);
+        if (blOutputKg > 0) {
+          const bilSizesRecord: Record<string, number> = {};
+          bilSizeLabels.forEach(label => { bilSizesRecord[label] = getSizeKg(supply?.sizes, label); });
+          
+          const demandKgByBilSize: Record<string, number> = {};
+          dailyOrders.forEach(o => {
+            const oGrade = gradeMap.get(o.soNumber) || 'A';
+            const sizeMatch = (o.itemDesc || '').match(/(\d+-\d+|\d+\s*Up|\d+\s*Down)/i);
+            const oSize = sizeMatch ? sizeMatch[0] : 'Unsized';
+            
+            if (oGrade !== 'B') {
+              if (!demandKgByBilSize[oSize]) demandKgByBilSize[oSize] = 0;
+              const spec = specByCode.get(o.itemCode);
+              const oYield = spec?.productYield && Number(spec.productYield) > 0 ? Number(spec.productYield) : 1;
+              demandKgByBilSize[oSize] += Number(o.quantityKg || 0) / oYield;
+            }
+          });
+          
+          const blBreakdownRecord: Record<string, number> = {};
+          let totalRemaining = 0;
+          Object.keys(bilSizesRecord).forEach(bilSz => {
+            const remaining = Math.max(0, bilSizesRecord[bilSz] - (demandKgByBilSize[bilSz] || 0));
+            const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
+            if (!blBreakdownRecord[blSz]) blBreakdownRecord[blSz] = 0;
+            blBreakdownRecord[blSz] += remaining;
+            totalRemaining += remaining;
+          });
+          
+          if (totalRemaining > 0) {
+            uniqueBlSizes.forEach((blSz, i) => {
+              blBreakdownArr[i] = Math.round(((blBreakdownRecord[blSz] || 0) / totalRemaining) * blOutputKg);
+            });
+          } else {
+            let totalBilSizes = 0;
+            Object.values(bilSizesRecord).forEach(v => totalBilSizes += v);
+            if (totalBilSizes > 0) {
+              uniqueBlSizes.forEach((blSz, i) => {
+                let rKg = 0;
+                Object.keys(bilSizesRecord).forEach(bilSz => {
+                  const mappedSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
+                  if (mappedSz === blSz) {
+                    const ratio = bilSizesRecord[bilSz] / totalBilSizes;
+                    rKg += blOutputKg * ratio;
+                  }
+                });
+                blBreakdownArr[i] = Math.round(rKg);
+              });
+            }
+          }
+        }
 
         const toridasTotalMachines = toridasLinesNeeded * toridasConf.machinesPerLine;
         const foodmateTotalMachines = foodmateLinesNeeded * foodmateConf.machinesPerLine;
@@ -2205,6 +2376,8 @@ export class MpsController {
           bilPiecesTotal,
           avgWeight ? Number(avgWeight).toFixed(2) : '-',
           Math.round(slaughteredWeight),
+          Math.round(s.rmFlAvailKg),
+          Math.round(extTotalKg),
           rmBilTotal,
           rmUsed,
           rmBalance,
@@ -2220,6 +2393,7 @@ export class MpsController {
           p3Total,
           totalPax,
           blOutputKg || '-',
+          ...blBreakdownArr.map(kg => kg || '-'),
           ...bilSizeLabels.map(label => Math.round(getSizeKg(supply?.sizes, label)) || '-'),
           ...itemCodes.map(code => d.orders.has(code) ? Math.round(d.orders.get(code)) : '-')
         ];
@@ -2257,7 +2431,7 @@ export class MpsController {
           } else if (colNumber === totalCol) { // Total
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC5CAE9' } };
             cell.font = { color: { argb: 'FF283593' }, bold: true, size: 10 };
-          } else if (colNumber === blOutputCol && cell.value !== '-') { // BL Output
+          } else if (colNumber >= blOutputTotalCol && colNumber <= blOutputSizeEnd && cell.value !== '-') { // BL Output + Breakdown
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8E6C9' } };
             cell.font = { color: { argb: 'FF1B5E20' }, bold: true, size: 9 };
           } else if (colNumber >= prodStart && cell.value !== '-') { // Production
@@ -2274,9 +2448,11 @@ export class MpsController {
       sheet.getColumn(4).width = 13;  // BIL Pcs
       sheet.getColumn(5).width = 10;  // Avg Wt
       sheet.getColumn(6).width = 16;  // Slaughtered Wt
-      sheet.getColumn(7).width = 14;  // RM BIL Total
-      sheet.getColumn(8).width = 14;  // RM Used
-      sheet.getColumn(9).width = 12;  // RM Balance
+      sheet.getColumn(7).width = 15;  // Internal RM
+      sheet.getColumn(8).width = 15;  // External RM
+      sheet.getColumn(9).width = 14;  // RM BIL Total
+      sheet.getColumn(10).width = 14; // RM Used
+      sheet.getColumn(11).width = 12; // RM Balance
       sheet.getColumn(p1Col).width = 8;
       sheet.getColumn(p2Col).width = 8;
       // Machine detail columns (7 cols each x 4 machines)
@@ -2291,9 +2467,11 @@ export class MpsController {
       }
       sheet.getColumn(p3TotalCol).width = 10;
       sheet.getColumn(totalCol).width = 11;
-      sheet.getColumn(blOutputCol).width = 14;
+      
+      for (let i = blOutputTotalCol; i <= blOutputSizeEnd; i++) sheet.getColumn(i).width = 12;
       for (let i = sizeStart; i <= sizeEnd; i++) sheet.getColumn(i).width = 12;
       for (let i = prodStart; i <= prodEnd; i++) sheet.getColumn(i).width = 15;
+      
       sheet.views = [{ state: 'frozen', xSplit: supplyEnd, ySplit: 3 }];
 
     } else {

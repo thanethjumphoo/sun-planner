@@ -45,6 +45,7 @@ const WeightDistributionPage: React.FC = () => {
   // ─── BIL state ───
   const [bilRowLabels, setBilRowLabels] = useState<string[]>([]);
   const [bilColLabels, setBilColLabels] = useState<string[]>([]);
+  const [blColLabelsMap, setBlColLabelsMap] = useState<Record<string, string>>({});
   const [bilMatrix, setBilMatrix] = useState<Record<string, Record<string, number>>>({});
   const [bilDirty, setBilDirty] = useState(false);
   const [newBilRowInput, setNewBilRowInput] = useState('');
@@ -71,6 +72,7 @@ const WeightDistributionPage: React.FC = () => {
         const d = await bilRes.json();
         setBilRowLabels(d.rowLabels || []);
         setBilColLabels(d.colLabels || []);
+        setBlColLabelsMap(d.blColLabelsMap || {});
         setBilMatrix(d.matrix || {});
         setBilDirty(false);
       }
@@ -212,6 +214,11 @@ const WeightDistributionPage: React.FC = () => {
 
   const removeBilCol = (label: string) => {
     setBilColLabels(prev => prev.filter(c => c !== label));
+    setBlColLabelsMap(prev => {
+      const n = { ...prev };
+      delete n[label];
+      return n;
+    });
     setBilMatrix(prev => {
       const n: Record<string, Record<string, number>> = {};
       for (const row of Object.keys(prev)) {
@@ -230,7 +237,7 @@ const WeightDistributionPage: React.FC = () => {
       const r = await fetch(`${API}/api/bil-weight-distribution/bulk-save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rowLabels: bilRowLabels, colLabels: bilColLabels, matrix: bilMatrix }),
+        body: JSON.stringify({ rowLabels: bilRowLabels, colLabels: bilColLabels, blColLabelsMap, matrix: bilMatrix }),
       });
       const d = await r.json();
       if (d.success) {
@@ -866,12 +873,28 @@ const WeightDistributionPage: React.FC = () => {
                       Live Weight ↓
                     </th>
                     {bilColLabels.map(col => (
-                      <th key={col} className="px-2 py-3 text-center border-b border-orange-200 min-w-[90px]">
-                        <div className="flex flex-col items-center gap-1">
-                          <span className="text-xs font-bold text-orange-900">{col}</span>
-                          <button onClick={() => removeBilCol(col)} className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-red-400 hover:text-red-600 transition-all" title="ลบคอลัมน์">
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                      <th key={col} className="px-2 py-3 text-center border-b border-orange-200 min-w-[100px]">
+                        <div className="flex flex-col items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-gray-500 font-bold uppercase">BIL:</span>
+                            <span className="text-xs font-bold text-orange-900">{col}</span>
+                            <button onClick={() => removeBilCol(col)} className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-red-400 hover:text-red-600 transition-all" title="ลบคอลัมน์">
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1 w-full mt-1">
+                            <span className="text-[10px] text-blue-500 font-bold uppercase">BL:</span>
+                            <input
+                              type="text"
+                              value={blColLabelsMap[col] || ''}
+                              onChange={e => {
+                                setBlColLabelsMap(prev => ({ ...prev, [col]: e.target.value }));
+                                setBilDirty(true);
+                              }}
+                              placeholder="BL Size"
+                              className="w-full text-center text-xs text-blue-700 bg-white border border-blue-200 rounded px-1 py-0.5 outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400"
+                            />
+                          </div>
                         </div>
                       </th>
                     ))}

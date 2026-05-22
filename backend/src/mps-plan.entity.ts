@@ -44,6 +44,24 @@ export class MpsPlan {
   totalRmFlKg: number;
 
   @Column({
+    name: 'total_internal_rm_kg',
+    type: 'decimal',
+    precision: 18,
+    scale: 2,
+    default: 0,
+  })
+  totalInternalRmKg: number;
+
+  @Column({
+    name: 'total_external_rm_kg',
+    type: 'decimal',
+    precision: 18,
+    scale: 2,
+    default: 0,
+  })
+  totalExternalRmKg: number;
+
+  @Column({
     name: 'total_demand_kg',
     type: 'decimal',
     precision: 18,
@@ -98,6 +116,24 @@ export class MpsPlanDaily {
     default: 0,
   })
   rmFlAvailKg: number;
+
+  @Column({
+    name: 'internal_rm_kg',
+    type: 'decimal',
+    precision: 18,
+    scale: 2,
+    default: 0,
+  })
+  internalRmKg: number;
+
+  @Column({
+    name: 'external_rm_kg',
+    type: 'decimal',
+    precision: 18,
+    scale: 2,
+    default: 0,
+  })
+  externalRmKg: number;
 
   @Column({
     name: 'demand_kg',

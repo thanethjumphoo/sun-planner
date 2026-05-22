@@ -80,6 +80,11 @@ const MPSPlan: React.FC = () => {
   const [yieldNodeTypeMap, setYieldNodeTypeMap] = useState<Map<string, string>>(new Map());
   const [yieldTree, setYieldTree] = useState<any[]>([]);
 
+  // BIL Distribution Data
+  const [, setBilMatrix] = useState<Record<string, Record<string, number>>>({});
+  const [blColLabelsMap, setBlColLabelsMap] = useState<Record<string, string>>({});
+  const [bilColLabels, setBilColLabels] = useState<string[]>([]);
+
   const fetchYieldNodes = async () => {
     try {
       const res = await fetch(`${API}/api/master-yield`);
@@ -151,6 +156,9 @@ const MPSPlan: React.FC = () => {
     }
   };
 
+  // External RM Supplies
+  const [externalRmSupplies, setExternalRmSupplies] = useState<any[]>([]);
+
   const initData = async () => {
     setLoading(true);
     setLoadingStartTime(Date.now());
@@ -163,7 +171,9 @@ const MPSPlan: React.FC = () => {
       fetchManpowerData(),
       fetchAllowedItems(),
       fetchYieldNodes(),
-      fetchMachineConfigs()
+      fetchMachineConfigs(),
+      fetchBilData(),
+      fetchExternalRmSupplies()
     ]).catch(e => console.error("Error in initial fetches:", e));
 
     setLoadingPhase({ mode: 'loading', step: 2, message: 'Loading plan drafts...' });
@@ -174,6 +184,35 @@ const MPSPlan: React.FC = () => {
 
     setLoadingPhase({ mode: 'loading', step: 4, message: 'Complete!' });
     setTimeout(() => setLoading(false), 300);
+  };
+
+  const fetchExternalRmSupplies = async () => {
+    try {
+      const res = await fetch(`${API}/api/external-rm-supplies`);
+      if (res.ok) {
+        const json = await res.json();
+        // Filter only supplies in current month
+        const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
+        const supplies = json.data.filter((s: any) => s.receivedDate.startsWith(monthStr) && s.partName === 'BIL L/C');
+        setExternalRmSupplies(supplies);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchBilData = async () => {
+    try {
+      const res = await fetch(`${API}/api/bil-weight-distribution`);
+      if (res.ok) {
+        const d = await res.json();
+        setBilColLabels(d.colLabels || []);
+        setBlColLabelsMap(d.blColLabelsMap || {});
+        setBilMatrix(d.matrix || {});
+      }
+    } catch (e) {
+      console.error('Error fetching bil data:', e);
+    }
   };
 
   const fetchAllowedItems = async () => {
@@ -2343,18 +2382,26 @@ const MPSPlan: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Section 4: Fillet Size Breakdown */}
+                  {/* Section 4: RM Size Breakdown (Internal vs External) */}
                   <div className="space-y-4">
                     <h4 className="text-sm font-bold text-gray-800 flex items-center gap-2">
                       <Package size={16} className="text-orange-500" />
-                      {pc.sizeBreakdownTitle}
+                      {pc.sizeBreakdownTitle} (Internal vs External)
                     </h4>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                       {(() => {
                         const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
                         const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
                         const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
-                        const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+                        const getInternalSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+
+                        // Find External RM for selectedDate
+                        const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(selectedDate));
+                        let extSizes: Record<string, number> = {};
+                        if (extDaily && extDaily.sizeBreakdownJson) {
+                          try { extSizes = JSON.parse(extDaily.sizeBreakdownJson); } catch (e) {}
+                        }
+                        const getExternalSizeKg = (groupSize: string) => extSizes[groupSize] || 0;
 
                         const filletSizeLabels = [
                           { label: '40 Down', color: 'bg-slate-500' },
@@ -2368,36 +2415,51 @@ const MPSPlan: React.FC = () => {
                         ];
 
                         const isBil = currentPlan?.partType === 'bil';
+                        // For BIL, include all sizes from internal and external
+                        const allBilSizes = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
+                        Object.keys(extSizes).forEach(k => allBilSizes.add(k));
+
                         const currentSizeLabels = isBil
-                          ? (Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string))) as string[])
-                            .map((label, idx) => ({
+                          ? (Array.from(allBilSizes) as string[])
+                            .map((label: string, idx: number) => ({
                               label,
                               color: `bg-${['slate', 'blue', 'cyan', 'emerald', 'green', 'amber', 'orange', 'red'][idx % 8]}-500`
                             }))
                           : filletSizeLabels;
 
-                        const totalAll = currentSizeLabels.reduce((sum, s) => sum + getSizeKg(s.label), 0);
 
                         return currentSizeLabels.map((size, idx) => {
-                          const val = getSizeKg(size.label);
-                          const monthVal = getMonthSizeKg(size.label);
-                          const diff = hasWeekly ? val - monthVal : 0;
+                          const internalVal = getInternalSizeKg(size.label as string);
+                          const externalVal = getExternalSizeKg(size.label as string);
+                          const monthVal = getMonthSizeKg(size.label as string);
+                          const diff = hasWeekly ? internalVal - monthVal : 0;
+                          const totalVal = internalVal + externalVal;
+
                           return (
-                            <div key={idx} className="bg-white border border-gray-100 p-3 rounded-xl shadow-sm hover:border-orange-200 transition-all">
-                              <div className="flex justify-between items-start mb-1">
-                                <p className="text-[10px] font-bold text-gray-400 uppercase">{size.label}</p>
+                            <div key={idx} className="bg-white border border-gray-100 p-3 rounded-xl shadow-sm hover:border-orange-200 transition-all flex flex-col justify-between">
+                              <div className="flex justify-between items-start mb-2">
+                                <p className="text-[10px] font-bold text-gray-800 uppercase bg-gray-100 px-1.5 py-0.5 rounded">{String(size.label)}</p>
                                 {hasWeekly && diff !== 0 && (
                                   <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${diff > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
                                     {diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()} kg
                                   </span>
                                 )}
                               </div>
-                              <div className="flex items-baseline gap-1">
-                                <span className="text-lg font-bold text-gray-800">{Number(val || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
-                                <span className="text-[9px] font-bold text-gray-400">kg</span>
+                              <div className="space-y-1 mt-1">
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-gray-500 font-medium">Internal:</span>
+                                  <span className="font-bold text-gray-700">{Number(internalVal || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</span>
+                                </div>
+                                {isBil && (
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-blue-500 font-medium">External:</span>
+                                    <span className="font-bold text-blue-700">{Number(externalVal || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</span>
+                                  </div>
+                                )}
                               </div>
-                              <div className="mt-2 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
-                                <div className={`h-full ${size.color} opacity-80`} style={{ width: `${totalAll > 0 ? (val / totalAll) * 100 : 0}%` }}></div>
+                              <div className="mt-3 pt-2 border-t border-gray-100 flex justify-between items-center">
+                                <span className="text-[10px] font-black text-gray-400">TOTAL</span>
+                                <span className="text-sm font-black text-orange-600">{Number(totalVal || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</span>
                               </div>
                             </div>
                           )
@@ -2414,15 +2476,26 @@ const MPSPlan: React.FC = () => {
                         const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
                         const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
                         const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
-                        const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+                        const getInternalSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+
+                        const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(selectedDate));
+                        let extSizes: Record<string, number> = {};
+                        if (extDaily && extDaily.sizeBreakdownJson) {
+                          try { extSizes = JSON.parse(extDaily.sizeBreakdownJson); } catch (e) {}
+                        }
+                        const getExternalSizeKg = (groupSize: string) => extSizes[groupSize] || 0;
 
                         const isBil = currentPlan?.partType === 'bil';
-                        const sizeNames = isBil
-                          ? (Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string))) as string[])
+                        
+                        const allBilSizes = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
+                        Object.keys(extSizes).forEach(k => allBilSizes.add(k));
+
+                        const sizeNames: string[] = isBil
+                          ? (Array.from(allBilSizes) as string[])
                           : ['40 Down', '40-45', '45-50', '50-55', '55-60', '60-65', '65-70', '70 Up'];
 
-                        const total = sizeNames.reduce((sum, name) => sum + getSizeKg(name), 0);
-                        const monthTotal = sizeNames.reduce((sum, name) => sum + getMonthSizeKg(name), 0);
+                        const total = sizeNames.reduce((sum: number, name: string) => sum + getInternalSizeKg(name) + getExternalSizeKg(name), 0);
+                        const monthTotal = sizeNames.reduce((sum: number, name: string) => sum + getMonthSizeKg(name) + getExternalSizeKg(name), 0);
                         const diff = hasWeekly ? total - monthTotal : 0;
 
                         return (
@@ -2524,8 +2597,86 @@ const MPSPlan: React.FC = () => {
                           return <div className="text-sm text-amber-600 italic col-span-full">No By Products generated for the selected orders.</div>;
                         }
 
+                        const isBil = currentPlan?.partType === 'bil';
                         return items.map((bp, index) => {
                           const roundedQty = Math.round(bp.qty);
+                          
+                          if (bp.name.toUpperCase().includes('BL') && isBil && bilColLabels.length > 0) {
+                            // Calculate Supply by BIL Size
+                            const bilSizes: Record<string, number> = {};
+                            (selectedSupply.sizes || []).forEach((sz: any) => {
+                              bilSizes[sz.groupSize] = (bilSizes[sz.groupSize] || 0) + Number(sz.quantityKg || 0);
+                            });
+
+                            // Calculate Demand by BIL Size for this month
+                            const demandKgByBilSize: Record<string, number> = {};
+                            const allOrders = currentPlan?.dailyPlans?.flatMap((dp: any) => dp.orders || []) || [];
+                            
+                            allOrders.forEach((o: any) => {
+                              if (!isGradeB(o.itemCode || '')) {
+                                if (!demandKgByBilSize[o.size]) demandKgByBilSize[o.size] = 0;
+                                // RM Used = Net Qty / Yield
+                                const oYield = o.yield && o.yield > 0 ? o.yield : 1;
+                                demandKgByBilSize[o.size] += Number(o.qty || 0) / oYield;
+                              }
+                            });
+
+                            // Calculate Remaining
+                            const blBreakdown: Record<string, number> = {};
+                            let totalRemaining = 0;
+                            Object.keys(bilSizes).forEach(bilSz => {
+                              const remaining = Math.max(0, bilSizes[bilSz] - (demandKgByBilSize[bilSz] || 0));
+                              const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
+                              if (!blBreakdown[blSz]) blBreakdown[blSz] = 0;
+                              blBreakdown[blSz] += remaining;
+                              totalRemaining += remaining;
+                            });
+
+                            // Normalize to exactly bp.qty
+                            if (totalRemaining > 0) {
+                              Object.keys(blBreakdown).forEach(blSz => {
+                                blBreakdown[blSz] = (blBreakdown[blSz] / totalRemaining) * bp.qty;
+                              });
+                            } else {
+                              // Fallback: If demand mathematically exceeds supply in this draft,
+                              // distribute bp.qty using the original supply proportions so it's not empty.
+                              let totalBilSizes = 0;
+                              Object.values(bilSizes).forEach(v => totalBilSizes += v);
+                              if (totalBilSizes > 0) {
+                                Object.keys(bilSizes).forEach(bilSz => {
+                                  const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
+                                  const ratio = bilSizes[bilSz] / totalBilSizes;
+                                  if (!blBreakdown[blSz]) blBreakdown[blSz] = 0;
+                                  blBreakdown[blSz] += bp.qty * ratio;
+                                });
+                              }
+                            }
+
+                            return (
+                              <div key={index} className="bg-gradient-to-br from-blue-50 to-indigo-50 col-span-full p-4 rounded-xl border border-blue-200 shadow-sm">
+                                <div className="flex justify-between items-center mb-4 border-b border-blue-100 pb-3">
+                                  <div>
+                                    <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">BL (Debone) - Process 3</p>
+                                    <p className="text-[10px] text-blue-500">Output ส่งต่อแผนก BL</p>
+                                  </div>
+                                  <div className="flex items-baseline gap-1 text-right">
+                                    <span className="text-3xl font-black text-blue-900">{roundedQty.toLocaleString()}</span>
+                                    <span className="text-xs font-bold text-blue-500">kg</span>
+                                  </div>
+                                </div>
+                                
+                                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                                  {Object.entries(blBreakdown).filter(([_, val]) => val > 1).map(([size, val], i) => (
+                                    <div key={i} className="bg-white p-2.5 rounded-lg border border-blue-100 shadow-sm hover:border-blue-300 transition-colors">
+                                      <p className="text-[10px] font-bold text-gray-500 uppercase">{size}</p>
+                                      <p className="text-sm font-black text-blue-700">{Math.round(val).toLocaleString()} <span className="text-[9px] font-normal text-gray-400">kg</span></p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          }
+
                           return (
                             <div key={index} className="bg-white p-4 rounded-xl border border-amber-200 shadow-sm hover:shadow hover:border-amber-400 transition-all">
                               <p className="text-[10px] font-bold text-gray-400 uppercase mb-1 tracking-wider">{bp.name}</p>

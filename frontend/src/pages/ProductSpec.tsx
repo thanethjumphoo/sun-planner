@@ -40,7 +40,7 @@ interface ErpItem {
 interface Spec {
   id: number; erpItemId: number; erpItemCode: string; erpItemDesc: string; erpItemType: string;
   productType: string; productSize: string; productYield: number; productWeight: number;
-  productSpeed: number; productLead: number; createdAt: string; updatedAt: string;
+  productSpeed: number; productLead: number; isExternalRmAllowed: boolean; createdAt: string; updatedAt: string;
 }
 
 const ProductSpec: React.FC = () => {
@@ -56,7 +56,7 @@ const ProductSpec: React.FC = () => {
 
   // New spec form
   const [selectedItem, setSelectedItem] = useState<ErpItem | null>(null);
-  const [form, setForm] = useState({ productType: 'chilled', productSize: 'unsize', productYield: 0.84, productWeight: 2, productSpeed: 45, productLead: 1 });
+  const [form, setForm] = useState({ productType: 'chilled', productSize: 'unsize', productYield: 0.84, productWeight: 2, productSpeed: 45, productLead: 1, isExternalRmAllowed: false });
   const [formSizePattern, setFormSizePattern] = useState<SizePatternId>('unsize');
   const [formSizeNum1, setFormSizeNum1] = useState('');
   const [formSizeNum2, setFormSizeNum2] = useState('');
@@ -74,7 +74,7 @@ const ProductSpec: React.FC = () => {
     try { const r = await fetch(`${API}/api/product-spec/erp-items`); if (r.ok) setErpItems(await r.json()); } catch (e) { console.error(e); }
   };
 
-  const openAddModal = () => { fetchErpItems(); setSelectedItem(null); setForm({ productType: 'chilled', productSize: 'unsize', productYield: 0.84, productWeight: 2, productSpeed: 45, productLead: 1 }); setFormSizePattern('unsize'); setFormSizeNum1(''); setFormSizeNum2(''); setItemSearch(''); setIsModalOpen(true); };
+  const openAddModal = () => { fetchErpItems(); setSelectedItem(null); setForm({ productType: 'chilled', productSize: 'unsize', productYield: 0.84, productWeight: 2, productSpeed: 45, productLead: 1, isExternalRmAllowed: false }); setFormSizePattern('unsize'); setFormSizeNum1(''); setFormSizeNum2(''); setItemSearch(''); setIsModalOpen(true); };
 
   const updateFormSize = (pattern: SizePatternId, n1: string, n2: string) => {
     setFormSizePattern(pattern); setFormSizeNum1(n1); setFormSizeNum2(n2);
@@ -102,7 +102,7 @@ const ProductSpec: React.FC = () => {
 
   const startEdit = (spec: Spec) => {
     setEditingId(spec.id);
-    setEditData({ productType: spec.productType, productSize: spec.productSize, productYield: spec.productYield, productWeight: spec.productWeight, productSpeed: spec.productSpeed, productLead: spec.productLead });
+    setEditData({ productType: spec.productType, productSize: spec.productSize, productYield: spec.productYield, productWeight: spec.productWeight, productSpeed: spec.productSpeed, productLead: spec.productLead, isExternalRmAllowed: spec.isExternalRmAllowed });
     const parsed = parseSizePattern(spec.productSize);
     setEditSizePattern(parsed.pattern); setEditSizeNum1(parsed.num1); setEditSizeNum2(parsed.num2);
   };
@@ -193,12 +193,13 @@ const ProductSpec: React.FC = () => {
                 <th className="px-4 py-3 text-center">Weight (kg)</th>
                 <th className="px-4 py-3 text-center">Speed</th>
                 <th className="px-4 py-3 text-center">Lead (days)</th>
+                <th className="px-4 py-3 text-center">Ext. RM</th>
                 <th className="px-4 py-3 text-center">Action</th>
               </tr>
             </thead>
             <tbody>
               {filteredSpecs.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-16 text-center text-gray-400">
+                <tr><td colSpan={11} className="px-4 py-16 text-center text-gray-400">
                   <Package className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                   <p className="font-medium">ยังไม่มีข้อมูล Product Spec</p>
                   <p className="text-xs mt-1">คลิก "เพิ่ม Product Spec" เพื่อเริ่มต้น</p>
@@ -224,6 +225,7 @@ const ProductSpec: React.FC = () => {
                       <td className="px-4 py-3 text-center"><input type="number" step="0.1" value={editData.productWeight ?? ''} onChange={e => setEditData(d => ({...d, productWeight: parseFloat(e.target.value)}))} className="w-16 border border-gray-300 rounded-lg px-2 py-1 text-xs text-center bg-white focus:ring-2 focus:ring-orange-300 outline-none" /></td>
                       <td className="px-4 py-3 text-center"><input type="number" step="1" value={editData.productSpeed ?? ''} onChange={e => setEditData(d => ({...d, productSpeed: parseFloat(e.target.value)}))} className="w-16 border border-gray-300 rounded-lg px-2 py-1 text-xs text-center bg-white focus:ring-2 focus:ring-orange-300 outline-none" /></td>
                       <td className="px-4 py-3 text-center"><input type="number" step="1" value={editData.productLead ?? ''} onChange={e => setEditData(d => ({...d, productLead: parseInt(e.target.value)}))} className="w-14 border border-gray-300 rounded-lg px-2 py-1 text-xs text-center bg-white focus:ring-2 focus:ring-orange-300 outline-none" /></td>
+                      <td className="px-4 py-3 text-center"><input type="checkbox" checked={!!editData.isExternalRmAllowed} onChange={e => setEditData(d => ({...d, isExternalRmAllowed: e.target.checked}))} className="w-4 h-4 text-orange-500 border-gray-300 rounded focus:ring-orange-500" /></td>
                       <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => saveEdit(spec.id)} disabled={saving} className="p-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white transition-colors"><Save className="w-3.5 h-3.5" /></button>
@@ -237,6 +239,7 @@ const ProductSpec: React.FC = () => {
                       <td className="px-4 py-3 text-center font-medium text-gray-800">{Number(spec.productWeight).toFixed(1)}</td>
                       <td className="px-4 py-3 text-center font-medium text-gray-800">{spec.productSpeed}</td>
                       <td className="px-4 py-3 text-center font-medium text-gray-800">{spec.productLead}</td>
+                      <td className="px-4 py-3 text-center"><input type="checkbox" checked={!!spec.isExternalRmAllowed} readOnly className="w-4 h-4 text-orange-500 border-gray-300 rounded focus:ring-orange-500 opacity-80" /></td>
                       <td className="px-4 py-3 text-center">
                         <button onClick={() => startEdit(spec)} className="p-1.5 rounded-lg hover:bg-orange-100 text-orange-500 hover:text-orange-700 transition-colors" title="แก้ไข"><Edit3 className="w-4 h-4" /></button>
                       </td>
@@ -336,6 +339,10 @@ const ProductSpec: React.FC = () => {
                     <FormField label="Product Weight (kg)" value={form.productWeight} step="0.1" onChange={v => setForm(f => ({...f, productWeight: v}))} />
                     <FormField label="Product Speed" value={form.productSpeed} step="1" onChange={v => setForm(f => ({...f, productSpeed: v}))} />
                     <FormField label="Product Lead (days)" value={form.productLead} step="1" onChange={v => setForm(f => ({...f, productLead: v}))} hint={form.productType === 'chilled' ? 'Default: 1 (Chilled)' : 'Default: 5 (Freeze)'} />
+                    <div className="flex items-center gap-2 mt-4 ml-1 col-span-2 bg-orange-50 p-3 rounded-xl border border-orange-100">
+                      <input type="checkbox" id="extRm" checked={form.isExternalRmAllowed} onChange={e => setForm(f => ({...f, isExternalRmAllowed: e.target.checked}))} className="w-4 h-4 text-orange-500 border-orange-300 rounded focus:ring-orange-500" />
+                      <label htmlFor="extRm" className="text-sm font-semibold text-orange-800 cursor-pointer select-none">Allow usage of External RM Supply</label>
+                    </div>
                   </div>
                 </div>
               </div>

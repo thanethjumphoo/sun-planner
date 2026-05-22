@@ -17,6 +17,9 @@ export class BilWeightDistribution {
   @Column({ name: 'COL_LABEL', type: 'varchar', length: 50 })
   colLabel: string;
 
+  @Column({ name: 'BL_COL_LABEL', type: 'varchar', length: 50, nullable: true })
+  blColLabel: string;
+
   @Column({
     name: 'DIST_VALUE',
     type: 'decimal',

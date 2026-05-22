@@ -11,6 +11,8 @@ import DPSPlan from './pages/DPSPlan';
 import ManualOperation from './pages/ManualOperation';
 import MasterYield from './pages/MasterYield';
 import MachineSetup from './pages/MachineSetup';
+import BLPlan from './pages/BLPlan';
+import ExternalRmInput from './pages/ExternalRmInput';
 import MainLayout from './components/layout/MainLayout';
 function App() {
   return (
@@ -27,10 +29,12 @@ function App() {
           <Route path="/product-spec" element={<ProductSpec />} />
           <Route path="/weight-distribution" element={<WeightDistribution />} />
           <Route path="/:partId/mps" element={<MPSPlan />} />
+          <Route path="/bil/bl-mps" element={<BLPlan />} />
           <Route path="/:partId/dps" element={<DPSPlan />} />
           <Route path="/:partId/manual-operation" element={<ManualOperation />} />
           <Route path="/master-yield" element={<MasterYield />} />
           <Route path="/machine-setup" element={<MachineSetup />} />
+          <Route path="/external-rm" element={<ExternalRmInput />} />
         </Route>
 
         {/* Redirect empty path to login */}

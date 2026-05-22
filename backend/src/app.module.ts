@@ -35,6 +35,12 @@ import { FilletConfig, FilletGroup, FilletSizeCalc } from './fillet-size.entity'
 import { FilletSizeController } from './fillet-size.controller';
 import { MasterYield } from './master-yield.entity';
 import { MasterYieldController } from './master-yield.controller';
+import { ExternalRmSupply } from './external-rm-supply.entity';
+import { ExternalRmSupplyController } from './external-rm-supply.controller';
+import { BlMpsController } from './bl-mps.controller';
+import { BlMpsPlan } from './bl-mps-plan.entity';
+import { BlMpsPlanDaily } from './bl-mps-plan-daily.entity';
+import { ICutMaster } from './icut-master.entity';
 
 @Module({
   imports: [
@@ -67,10 +73,11 @@ import { MasterYieldController } from './master-yield.controller';
       StgErpItem, StgErpOrderHeader, StgErpOrderLine, TargetSyncItem, ProductSpec, 
       WeightDistribution, BilWeightDistribution, MpsPlan, MpsPlanDaily, MpsPlanOrder, MpsPlanSupply, MpsPlanSupplySize, MpsExceptionReport,
       DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation, ManualOperation,
-      FilletConfig, FilletGroup, FilletSizeCalc, MasterYield, ChickenReceivingWeeklySize, MachineConfig
+      FilletConfig, FilletGroup, FilletSizeCalc, MasterYield, ChickenReceivingWeeklySize, MachineConfig, ExternalRmSupply,
+      BlMpsPlan, BlMpsPlanDaily, ICutMaster
     ]),
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, BilWeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController, MachineConfigController],
+  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, BilWeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController, MachineConfigController, ExternalRmSupplyController, BlMpsController],
   providers: [AppService, OracleIntegrationService],
 })
 export class AppModule { }

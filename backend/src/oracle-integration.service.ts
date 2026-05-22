@@ -184,7 +184,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
    * ดึงข้อมูล Item ทั้งหมดจาก Local DB
    */
   async getLocalItems(): Promise<StgErpItem[]> {
-    return this.stgErpItemRepository.find({ order: { erpItemCode: 'ASC' } });
+    return this.stgErpItemRepository.find({ order: { erpItemCode: 'ASC' }, take: 1000 });
   }
 
   /**
@@ -213,7 +213,8 @@ export class OracleIntegrationService implements OnModuleDestroy {
               JOIN OE_ORDER_LINES_ALL ODL ON ODL.HEADER_ID = ODH.HEADER_ID
               JOIN OE_TRANSACTION_TYPES_TL ODT ON ODT.TRANSACTION_TYPE_ID = ODH.ORDER_TYPE_ID
               JOIN AR_CUSTOMERS CUS ON CUS.CUSTOMER_ID = ODH.SOLD_TO_ORG_ID
-        WHERE  ODT.NAME LIKE 'SFO%SO'
+        WHERE (ODT.NAME LIKE 'SFO%SO'
+                OR ODT.NAME LIKE 'SFO%F')
         AND    EXTRACT(MONTH FROM ODL.SCHEDULE_SHIP_DATE) >= 5
         AND    ODH.CANCELLED_FLAG = 'N'
         AND    ODH.ORG_ID = 82
@@ -277,6 +278,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
   async getLocalOrderHeaders(): Promise<StgErpOrderHeader[]> {
     return this.stgErpOrderHeaderRepository.find({
       order: { erpOrderDate: 'DESC' },
+      take: 1000
     });
   }
 
@@ -436,6 +438,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
   async getLocalOrderLines(): Promise<StgErpOrderLine[]> {
     return this.stgErpOrderLineRepository.find({
       order: { erpOrderHeaderId: 'DESC', erpOrderLineNumber: 'ASC' },
+      take: 2000
     });
   }
 
@@ -585,7 +588,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
       const chunkLines = await this.stgErpOrderLineRepository.find({
         where: { erpOrderHeaderId: In(chunkIds) }
       });
-      lines = lines.concat(chunkLines);
+      lines.push(...chunkLines);
     }
 
     // Extract unique item codes to fetch descriptions
@@ -597,7 +600,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
         const chunkItems = await this.stgErpItemRepository.find({
           where: { erpItemCode: In(chunkCodes) }
         });
-        items = items.concat(chunkItems);
+        items.push(...chunkItems);
       }
     }
 

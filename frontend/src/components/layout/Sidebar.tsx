@@ -42,6 +42,7 @@ const menuGroups: MenuGroup[] = [
         icon: Scissors,
         subItems: [
           { title: "MPS", icon: CalendarDays, path: "/bil/mps" },
+          { title: "BL MPS Plan", icon: CalendarDays, path: "/bil/bl-mps" },
           { title: "DPS", icon: Activity, path: "/bil/dps" },
           { title: "Manual Operation", icon: Users, path: "/bil/manual-operation" }
         ]
@@ -51,6 +52,7 @@ const menuGroups: MenuGroup[] = [
   {
     label: "Supply Chain",
     items: [
+      { title: "Purchased RM Receiving", icon: Truck, path: "/external-rm" },
       { title: "Master Yield", icon: PieChart, path: "/master-yield" },
       { title: "Weight Distribution", icon: Scale, path: "/weight-distribution" },
       { title: "Product Spec", icon: ClipboardList, path: "/product-spec" },

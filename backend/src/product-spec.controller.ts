@@ -42,7 +42,19 @@ export class ProductSpecController {
     });
 
     // Enrich description from StgErpItem if missing
-    const items = await this.stgItemRepo.find();
+    const specCodes = [...new Set(specs.map(s => s.erpItemCode).filter(c => c))];
+    let items: any[] = [];
+    if (specCodes.length > 0) {
+      const chunkSize = 500;
+      for (let i = 0; i < specCodes.length; i += chunkSize) {
+        const chunkCodes = specCodes.slice(i, i + chunkSize);
+        const chunkItems = await this.stgItemRepo.find({
+          where: { erpItemCode: In(chunkCodes) },
+          select: ['erpItemCode', 'erpItemDesc']
+        });
+        items = items.concat(chunkItems);
+      }
+    }
     const itemMap = new Map<string, string>();
     items.forEach((i) => {
       if (i.erpItemCode) itemMap.set(i.erpItemCode, i.erpItemDesc);

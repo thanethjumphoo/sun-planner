@@ -71,6 +71,9 @@ export class ProductSpec {
   @Column({ name: 'PRODUCT_LEAD', type: 'int', nullable: true })
   productLead: number; // Default: chilled=1, freeze=5
 
+  @Column({ name: 'IS_EXTERNAL_RM_ALLOWED', type: 'bit', default: 0 })
+  isExternalRmAllowed: boolean; // Flag to allow usage of external purchased RM
+
   @Column({
     name: 'MASTER_YIELD_IDS',
     type: 'varchar',
