@@ -75,6 +75,7 @@ export class ProductSpecController {
       productWeight: number;
       productSpeed: number;
       productLead: number;
+      isExternalRmAllowed: boolean;
     },
   ) {
     // Check if spec already exists for this item code
@@ -108,6 +109,7 @@ export class ProductSpecController {
       productWeight: body.productWeight,
       productSpeed: body.productSpeed,
       productLead: body.productLead,
+      isExternalRmAllowed: body.isExternalRmAllowed || false,
     });
 
     const saved = await this.productSpecRepo.save(spec);
@@ -126,6 +128,7 @@ export class ProductSpecController {
       productWeight?: number;
       productSpeed?: number;
       productLead?: number;
+      isExternalRmAllowed?: boolean;
     },
   ) {
     const spec = await this.productSpecRepo.findOne({ where: { id } });
@@ -141,6 +144,7 @@ export class ProductSpecController {
       spec.productWeight = body.productWeight;
     if (body.productSpeed !== undefined) spec.productSpeed = body.productSpeed;
     if (body.productLead !== undefined) spec.productLead = body.productLead;
+    if (body.isExternalRmAllowed !== undefined) spec.isExternalRmAllowed = body.isExternalRmAllowed;
 
     const saved = await this.productSpecRepo.save(spec);
     return { success: true, data: saved };
@@ -163,6 +167,7 @@ export class ProductSpecController {
       productWeight: number;
       productSpeed: number;
       productLead: number;
+      isExternalRmAllowed?: boolean;
     },
   ) {
     const results = [];
@@ -199,6 +204,7 @@ export class ProductSpecController {
         productWeight: body.productWeight,
         productSpeed: body.productSpeed,
         productLead: body.productLead,
+        isExternalRmAllowed: body.isExternalRmAllowed || false,
       });
 
       const saved = await this.productSpecRepo.save(spec);
@@ -224,6 +230,7 @@ export class ProductSpecController {
         productWeight?: number;
         productSpeed?: number;
         productLead?: number;
+        isExternalRmAllowed?: boolean;
       }>;
     },
   ) {
@@ -256,6 +263,8 @@ export class ProductSpecController {
           existing.productSpeed = row.productSpeed;
         if (row.productLead !== undefined)
           existing.productLead = row.productLead;
+        if (row.isExternalRmAllowed !== undefined)
+          existing.isExternalRmAllowed = row.isExternalRmAllowed;
         await this.productSpecRepo.save(existing);
         results.push({ itemCode: row.erpItemCode, status: 'updated' });
       } else {
@@ -275,6 +284,7 @@ export class ProductSpecController {
           productSpeed: row.productSpeed ?? 45,
           productLead:
             row.productLead ?? (row.productType === 'freeze' ? 5 : 1),
+          isExternalRmAllowed: row.isExternalRmAllowed || false,
         });
         await this.productSpecRepo.save(spec);
         results.push({ itemCode: row.erpItemCode, status: 'created' });
@@ -321,7 +331,11 @@ export class ProductSpecController {
       }
     }
 
-    await this.productSpecRepo.save(specs);
+    const saveChunkSize = 50;
+    for (let k = 0; k < specs.length; k += saveChunkSize) {
+      const chunkToSave = specs.slice(k, k + saveChunkSize);
+      await this.productSpecRepo.save(chunkToSave);
+    }
     return { success: true };
   }
 
@@ -342,7 +356,11 @@ export class ProductSpecController {
         spec.masterYieldIds = ids.length > 0 ? ids.join(',') : null;
       }
     }
-    await this.productSpecRepo.save(specs);
+    const saveChunkSize = 50;
+    for (let k = 0; k < specs.length; k += saveChunkSize) {
+      const chunkToSave = specs.slice(k, k + saveChunkSize);
+      await this.productSpecRepo.save(chunkToSave);
+    }
     return { success: true };
   }
 }

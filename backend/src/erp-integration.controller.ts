@@ -23,7 +23,8 @@ export class ErpIntegrationController {
     const items = await this.targetItemRepo.find({
       order: { createdAt: 'DESC' },
     });
-    return items.map((item) => item.itemCode);
+    // Return full items instead of just item codes
+    return items;
   }
 
   // Add new item codes
@@ -59,6 +60,24 @@ export class ErpIntegrationController {
     if (codes.length === 0) return { message: 'No item codes to sync' };
 
     const syncedItems = await this.oracleService.syncItems(codes);
+    const syncedCodes = new Set(syncedItems.map((i: any) => i.erpItemCode));
+    
+    // Update sync status
+    for (const item of items) {
+      item.lastSyncDate = new Date();
+      if (syncedCodes.has(item.itemCode)) {
+        item.lastSyncStatus = 'SUCCESS';
+      } else {
+        item.lastSyncStatus = 'FAILED';
+      }
+    }
+    // Chunk the save to avoid MS SQL 2100 parameter limit
+    const saveChunkSize = 50;
+    for (let k = 0; k < items.length; k += saveChunkSize) {
+      const chunkToSave = items.slice(k, k + saveChunkSize);
+      await this.targetItemRepo.save(chunkToSave);
+    }
+
     return { success: true, count: syncedItems.length, data: syncedItems };
   }
 
