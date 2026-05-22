@@ -21,13 +21,17 @@ export class BilWeightDistributionController {
     const rowLabels = [...new Set(rows.map((r) => r.rowLabel))];
     const colLabels = [...new Set(rows.map((r) => r.colLabel))];
     const matrix: Record<string, Record<string, number>> = {};
+    const blColLabelsMap: Record<string, string> = {};
 
     for (const r of rows) {
       if (!matrix[r.rowLabel]) matrix[r.rowLabel] = {};
       matrix[r.rowLabel][r.colLabel] = Number(r.distValue);
+      if (r.blColLabel && !blColLabelsMap[r.colLabel]) {
+        blColLabelsMap[r.colLabel] = r.blColLabel;
+      }
     }
 
-    return { rowLabels, colLabels, matrix, totalRecords: rows.length };
+    return { rowLabels, colLabels, blColLabelsMap, matrix, totalRecords: rows.length };
   }
 
   // ─── Bulk save (Delete all & re-insert) ───
@@ -37,6 +41,7 @@ export class BilWeightDistributionController {
     body: {
       rowLabels: string[];
       colLabels: string[];
+      blColLabelsMap?: Record<string, string>;
       matrix: Record<string, Record<string, number>>;
     },
   ) {
@@ -48,16 +53,18 @@ export class BilWeightDistributionController {
     for (const rowLabel of body.rowLabels) {
       for (const colLabel of body.colLabels) {
         const val = body.matrix?.[rowLabel]?.[colLabel] ?? 0;
+        const blColLabel = body.blColLabelsMap?.[colLabel] || undefined;
         const entity = this.wdRepo.create({
           rowLabel,
           colLabel,
+          blColLabel,
           distValue: val,
         });
         entities.push(entity);
       }
     }
 
-    const saved = await this.wdRepo.save(entities, { chunk: 500 });
+    const saved = await this.wdRepo.save(entities, { chunk: 100 });
     return { success: true, count: saved.length };
   }
 }

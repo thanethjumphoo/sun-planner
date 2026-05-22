@@ -57,7 +57,7 @@ export class WeightDistributionController {
       }
     }
 
-    const saved = await this.wdRepo.save(entities, { chunk: 500 });
+    const saved = await this.wdRepo.save(entities, { chunk: 100 });
     return { success: true, count: saved.length };
   }
 }
