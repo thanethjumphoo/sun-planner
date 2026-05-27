@@ -61,6 +61,28 @@ export class MachineConfigController {
         machinesPerLine: 1,
         workersPerUnit: 5, // 5 pax per machine
         isActive: true,
+      },
+      {
+        machineKey: 'icut',
+        machineName: 'I-CUT Machine',
+        machineType: 'BL_PROCESSING',
+        capacityPcsPerHour: 1250, // e.g. 1250 kg/hr * 8 hrs = 10,000 kg/day
+        yieldPercentage: 0.95,
+        defaultLines: 1,
+        machinesPerLine: 1,
+        workersPerUnit: 2,
+        isActive: true,
+      },
+      {
+        machineKey: 'manual_trim',
+        machineName: 'Manual Trimming (BL)',
+        machineType: 'BL_PROCESSING',
+        capacityPcsPerHour: 100, // e.g. kg per hr per worker
+        yieldPercentage: 0.90,
+        defaultLines: 1,
+        machinesPerLine: 1,
+        workersPerUnit: 10,
+        isActive: true,
       }
     ];
 

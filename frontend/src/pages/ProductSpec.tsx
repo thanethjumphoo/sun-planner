@@ -40,7 +40,7 @@ interface ErpItem {
 interface Spec {
   id: number; erpItemId: number; erpItemCode: string; erpItemDesc: string; erpItemType: string;
   productType: string; productSize: string; productYield: number; productWeight: number;
-  productSpeed: number; productLead: number; isExternalRmAllowed: boolean; createdAt: string; updatedAt: string;
+  productSpeed: number; icutSpeed: number; minProductLead: number; maxProductLead: number; isExternalRmAllowed: boolean; createdAt: string; updatedAt: string;
 }
 
 const ProductSpec: React.FC = () => {
@@ -56,7 +56,7 @@ const ProductSpec: React.FC = () => {
 
   // New spec form
   const [selectedItem, setSelectedItem] = useState<ErpItem | null>(null);
-  const [form, setForm] = useState({ productType: 'chilled', productSize: 'unsize', productYield: 0.84, productWeight: 2, productSpeed: 45, productLead: 1, isExternalRmAllowed: false });
+  const [form, setForm] = useState({ productType: 'chilled', productSize: 'unsize', productYield: 0.84, productWeight: 2, productSpeed: 45, icutSpeed: 0, minProductLead: 1, maxProductLead: 3, isExternalRmAllowed: false });
   const [formSizePattern, setFormSizePattern] = useState<SizePatternId>('unsize');
   const [formSizeNum1, setFormSizeNum1] = useState('');
   const [formSizeNum2, setFormSizeNum2] = useState('');
@@ -74,7 +74,7 @@ const ProductSpec: React.FC = () => {
     try { const r = await fetch(`${API}/api/product-spec/erp-items`); if (r.ok) setErpItems(await r.json()); } catch (e) { console.error(e); }
   };
 
-  const openAddModal = () => { fetchErpItems(); setSelectedItem(null); setForm({ productType: 'chilled', productSize: 'unsize', productYield: 0.84, productWeight: 2, productSpeed: 45, productLead: 1, isExternalRmAllowed: false }); setFormSizePattern('unsize'); setFormSizeNum1(''); setFormSizeNum2(''); setItemSearch(''); setIsModalOpen(true); };
+  const openAddModal = () => { fetchErpItems(); setSelectedItem(null); setForm({ productType: 'chilled', productSize: 'unsize', productYield: 0.84, productWeight: 2, productSpeed: 45, icutSpeed: 0, minProductLead: 1, maxProductLead: 3, isExternalRmAllowed: false }); setFormSizePattern('unsize'); setFormSizeNum1(''); setFormSizeNum2(''); setItemSearch(''); setIsModalOpen(true); };
 
   const updateFormSize = (pattern: SizePatternId, n1: string, n2: string) => {
     setFormSizePattern(pattern); setFormSizeNum1(n1); setFormSizeNum2(n2);
@@ -82,8 +82,9 @@ const ProductSpec: React.FC = () => {
   };
 
   const handleTypeChange = (type: string) => {
-    const lead = type === 'chilled' ? 1 : 5;
-    setForm(f => ({ ...f, productType: type, productLead: lead }));
+    const minLead = type === 'chilled' ? 1 : 5;
+    const maxLead = type === 'chilled' ? 3 : 30;
+    setForm(f => ({ ...f, productType: type, minProductLead: minLead, maxProductLead: maxLead }));
   };
 
   const handleSave = async () => {
@@ -102,7 +103,7 @@ const ProductSpec: React.FC = () => {
 
   const startEdit = (spec: Spec) => {
     setEditingId(spec.id);
-    setEditData({ productType: spec.productType, productSize: spec.productSize, productYield: spec.productYield, productWeight: spec.productWeight, productSpeed: spec.productSpeed, productLead: spec.productLead, isExternalRmAllowed: spec.isExternalRmAllowed });
+    setEditData({ productType: spec.productType, productSize: spec.productSize, productYield: spec.productYield, productWeight: spec.productWeight, productSpeed: spec.productSpeed, icutSpeed: spec.icutSpeed, minProductLead: spec.minProductLead, maxProductLead: spec.maxProductLead, isExternalRmAllowed: spec.isExternalRmAllowed });
     const parsed = parseSizePattern(spec.productSize);
     setEditSizePattern(parsed.pattern); setEditSizeNum1(parsed.num1); setEditSizeNum2(parsed.num2);
   };
@@ -113,8 +114,9 @@ const ProductSpec: React.FC = () => {
   };
 
   const handleEditTypeChange = (type: string) => {
-    const lead = type === 'chilled' ? 1 : 5;
-    setEditData(d => ({ ...d, productType: type, productLead: lead }));
+    const minLead = type === 'chilled' ? 1 : 5;
+    const maxLead = type === 'chilled' ? 3 : 30;
+    setEditData(d => ({ ...d, productType: type, minProductLead: minLead, maxProductLead: maxLead }));
   };
 
   const saveEdit = async (id: number) => {
@@ -192,7 +194,8 @@ const ProductSpec: React.FC = () => {
                 <th className="px-4 py-3 text-center">Yield</th>
                 <th className="px-4 py-3 text-center">Weight (kg)</th>
                 <th className="px-4 py-3 text-center">Speed</th>
-                <th className="px-4 py-3 text-center">Lead (days)</th>
+                <th className="px-4 py-3 text-center bg-blue-50/50 text-blue-800">I-Cut Speed (kg/h)</th>
+                <th className="px-4 py-3 text-center">Lead Range (days)</th>
                 <th className="px-4 py-3 text-center">Ext. RM</th>
                 <th className="px-4 py-3 text-center">Action</th>
               </tr>
@@ -205,45 +208,23 @@ const ProductSpec: React.FC = () => {
                   <p className="text-xs mt-1">คลิก "เพิ่ม Product Spec" เพื่อเริ่มต้น</p>
                 </td></tr>
               ) : filteredSpecs.map(spec => {
-                const isEditing = editingId === spec.id;
                 return (
                   <tr key={spec.id} className="border-b border-gray-100 hover:bg-orange-50/30 transition-colors">
                     <td className="px-4 py-3 font-semibold text-blue-700">{spec.erpItemCode}</td>
                     <td className="px-4 py-3 text-gray-700 max-w-[220px] truncate" title={spec.erpItemDesc}>{spec.erpItemDesc || '-'}</td>
                     <td className="px-4 py-3"><span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{spec.erpItemType || '-'}</span></td>
 
-                    {isEditing ? (<>
-                      <td className="px-4 py-3 text-center">
-                        <select value={editData.productType} onChange={e => handleEditTypeChange(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1 text-xs bg-white focus:ring-2 focus:ring-orange-300 outline-none">
-                          {PRODUCT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <SizeBuilder pattern={editSizePattern} num1={editSizeNum1} num2={editSizeNum2} onChange={updateEditSize} compact />
-                      </td>
-                      <td className="px-4 py-3 text-center"><input type="number" step="0.01" value={editData.productYield ?? ''} onChange={e => setEditData(d => ({...d, productYield: parseFloat(e.target.value)}))} className="w-16 border border-gray-300 rounded-lg px-2 py-1 text-xs text-center bg-white focus:ring-2 focus:ring-orange-300 outline-none" /></td>
-                      <td className="px-4 py-3 text-center"><input type="number" step="0.1" value={editData.productWeight ?? ''} onChange={e => setEditData(d => ({...d, productWeight: parseFloat(e.target.value)}))} className="w-16 border border-gray-300 rounded-lg px-2 py-1 text-xs text-center bg-white focus:ring-2 focus:ring-orange-300 outline-none" /></td>
-                      <td className="px-4 py-3 text-center"><input type="number" step="1" value={editData.productSpeed ?? ''} onChange={e => setEditData(d => ({...d, productSpeed: parseFloat(e.target.value)}))} className="w-16 border border-gray-300 rounded-lg px-2 py-1 text-xs text-center bg-white focus:ring-2 focus:ring-orange-300 outline-none" /></td>
-                      <td className="px-4 py-3 text-center"><input type="number" step="1" value={editData.productLead ?? ''} onChange={e => setEditData(d => ({...d, productLead: parseInt(e.target.value)}))} className="w-14 border border-gray-300 rounded-lg px-2 py-1 text-xs text-center bg-white focus:ring-2 focus:ring-orange-300 outline-none" /></td>
-                      <td className="px-4 py-3 text-center"><input type="checkbox" checked={!!editData.isExternalRmAllowed} onChange={e => setEditData(d => ({...d, isExternalRmAllowed: e.target.checked}))} className="w-4 h-4 text-orange-500 border-gray-300 rounded focus:ring-orange-500" /></td>
-                      <td className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => saveEdit(spec.id)} disabled={saving} className="p-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white transition-colors"><Save className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => setEditingId(null)} className="p-1.5 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-600 transition-colors"><X className="w-3.5 h-3.5" /></button>
-                        </div>
-                      </td>
-                    </>) : (<>
                       <td className="px-4 py-3 text-center"><TypeBadge type={spec.productType} /></td>
                       <td className="px-4 py-3 text-center"><span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700">{spec.productSize}</span></td>
                       <td className="px-4 py-3 text-center font-medium text-gray-800">{Number(spec.productYield).toFixed(2)}</td>
                       <td className="px-4 py-3 text-center font-medium text-gray-800">{Number(spec.productWeight).toFixed(1)}</td>
                       <td className="px-4 py-3 text-center font-medium text-gray-800">{spec.productSpeed}</td>
-                      <td className="px-4 py-3 text-center font-medium text-gray-800">{spec.productLead}</td>
+                      <td className="px-4 py-3 text-center font-medium text-blue-600 bg-blue-50/50">{spec.icutSpeed > 0 ? spec.icutSpeed : '-'}</td>
+                      <td className="px-4 py-3 text-center font-medium text-gray-800">{spec.minProductLead} - {spec.maxProductLead}</td>
                       <td className="px-4 py-3 text-center"><input type="checkbox" checked={!!spec.isExternalRmAllowed} readOnly className="w-4 h-4 text-orange-500 border-gray-300 rounded focus:ring-orange-500 opacity-80" /></td>
                       <td className="px-4 py-3 text-center">
                         <button onClick={() => startEdit(spec)} className="p-1.5 rounded-lg hover:bg-orange-100 text-orange-500 hover:text-orange-700 transition-colors" title="แก้ไข"><Edit3 className="w-4 h-4" /></button>
                       </td>
-                    </>)}
                   </tr>
                 );
               })}
@@ -337,8 +318,10 @@ const ProductSpec: React.FC = () => {
                     {/* Numeric fields */}
                     <FormField label="Product Yield" value={form.productYield} step="0.01" onChange={v => setForm(f => ({...f, productYield: v}))} />
                     <FormField label="Product Weight (kg)" value={form.productWeight} step="0.1" onChange={v => setForm(f => ({...f, productWeight: v}))} />
-                    <FormField label="Product Speed" value={form.productSpeed} step="1" onChange={v => setForm(f => ({...f, productSpeed: v}))} />
-                    <FormField label="Product Lead (days)" value={form.productLead} step="1" onChange={v => setForm(f => ({...f, productLead: v}))} hint={form.productType === 'chilled' ? 'Default: 1 (Chilled)' : 'Default: 5 (Freeze)'} />
+                    <FormField label="Line Speed" value={form.productSpeed} step="1" onChange={v => setForm(f => ({...f, productSpeed: v}))} />
+                    <FormField label="I-Cut Speed (kg/h)" value={form.icutSpeed} step="1" onChange={v => setForm(f => ({...f, icutSpeed: v}))} hint="ใส่ 0 ถ้าไม่ได้ใช้ I-Cut" />
+                    <FormField label="Min Lead (days)" value={form.minProductLead} step="1" onChange={v => setForm(f => ({...f, minProductLead: v}))} hint={form.productType === 'chilled' ? 'Default: 1 (Chilled)' : 'Default: 5 (Freeze)'} />
+                    <FormField label="Max Lead (days)" value={form.maxProductLead} step="1" onChange={v => setForm(f => ({...f, maxProductLead: v}))} hint={form.productType === 'chilled' ? 'Default: 3 (Chilled)' : 'Default: 30 (Freeze)'} />
                     <div className="flex items-center gap-2 mt-4 ml-1 col-span-2 bg-orange-50 p-3 rounded-xl border border-orange-100">
                       <input type="checkbox" id="extRm" checked={form.isExternalRmAllowed} onChange={e => setForm(f => ({...f, isExternalRmAllowed: e.target.checked}))} className="w-4 h-4 text-orange-500 border-orange-300 rounded focus:ring-orange-500" />
                       <label htmlFor="extRm" className="text-sm font-semibold text-orange-800 cursor-pointer select-none">Allow usage of External RM Supply</label>
@@ -360,6 +343,81 @@ const ProductSpec: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
+
+      {/* ═══ EDIT MODAL ═══ */}
+      <AnimatePresence>
+        {editingId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl border border-gray-200 w-full max-w-2xl overflow-hidden max-h-[90vh] flex flex-col">
+              {/* Modal Header */}
+              <div className="p-5 border-b border-gray-200 bg-gradient-to-r from-orange-50 to-red-50 flex justify-between items-center shrink-0">
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">แก้ไข Product Spec</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Item: {specs.find(s => s.id === editingId)?.erpItemCode}</p>
+                </div>
+                <button onClick={() => setEditingId(null)} className="p-1.5 rounded-lg hover:bg-white/70 text-gray-500"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="p-5 space-y-5 overflow-y-auto flex-1">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-3">แก้ไข Product Specification</label>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Product Type */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1.5">Product Type</label>
+                      <div className="flex gap-2">
+                        {PRODUCT_TYPES.map(t => (
+                          <button key={t} onClick={() => handleEditTypeChange(t)}
+                            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${
+                              editData.productType === t
+                                ? t === 'chilled' ? 'border-green-500 bg-green-50 text-green-700' : 'border-cyan-500 bg-cyan-50 text-cyan-700'
+                                : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'}`}>
+                            {t === 'chilled' ? <Thermometer className="w-4 h-4" /> : <Snowflake className="w-4 h-4" />}
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Product Size */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1.5">Product Size</label>
+                      <SizeBuilder pattern={editSizePattern} num1={editSizeNum1} num2={editSizeNum2} onChange={updateEditSize} />
+                      {editData.productSize && editData.productSize !== 'unsize' && (
+                        <p className="text-xs text-indigo-500 mt-1.5 font-medium">ผลลัพธ์: {editData.productSize}</p>
+                      )}
+                    </div>
+
+                    {/* Numeric fields */}
+                    <FormField label="Product Yield" value={editData.productYield || 0} step="0.01" onChange={v => setEditData(d => ({...d, productYield: v}))} />
+                    <FormField label="Product Weight (kg)" value={editData.productWeight || 0} step="0.1" onChange={v => setEditData(d => ({...d, productWeight: v}))} />
+                    <FormField label="Line Speed" value={editData.productSpeed || 0} step="1" onChange={v => setEditData(d => ({...d, productSpeed: v}))} />
+                    <FormField label="I-Cut Speed (kg/h)" value={editData.icutSpeed || 0} step="1" onChange={v => setEditData(d => ({...d, icutSpeed: v}))} hint="ใส่ 0 ถ้าไม่ได้ใช้ I-Cut" />
+                    <FormField label="Min Lead (days)" value={editData.minProductLead || 0} step="1" onChange={v => setEditData(d => ({...d, minProductLead: v}))} hint={editData.productType === 'chilled' ? 'Default: 1 (Chilled)' : 'Default: 5 (Freeze)'} />
+                    <FormField label="Max Lead (days)" value={editData.maxProductLead || 0} step="1" onChange={v => setEditData(d => ({...d, maxProductLead: v}))} hint={editData.productType === 'chilled' ? 'Default: 3 (Chilled)' : 'Default: 30 (Freeze)'} />
+                    <div className="flex items-center gap-2 mt-4 ml-1 col-span-2 bg-orange-50 p-3 rounded-xl border border-orange-100">
+                      <input type="checkbox" id="editExtRm" checked={!!editData.isExternalRmAllowed} onChange={e => setEditData(d => ({...d, isExternalRmAllowed: e.target.checked}))} className="w-4 h-4 text-orange-500 border-orange-300 rounded focus:ring-orange-500" />
+                      <label htmlFor="editExtRm" className="text-sm font-semibold text-orange-800 cursor-pointer select-none">Allow usage of External RM Supply</label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-5 border-t border-gray-200 bg-gray-50 flex justify-end gap-3 shrink-0">
+                <button onClick={() => setEditingId(null)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50">ยกเลิก</button>
+                <button onClick={() => saveEdit(editingId)} disabled={saving}
+                  className={`flex items-center gap-2 px-5 py-2 text-sm font-semibold rounded-xl shadow-sm transition-all ${
+                    !saving ? 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white shadow-orange-200' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} บันทึก
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
 
       {/* Toast */}
       <AnimatePresence>

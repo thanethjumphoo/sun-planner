@@ -42,9 +42,17 @@ const menuGroups: MenuGroup[] = [
         icon: Scissors,
         subItems: [
           { title: "MPS", icon: CalendarDays, path: "/bil/mps" },
-          { title: "BL MPS Plan", icon: CalendarDays, path: "/bil/bl-mps" },
           { title: "DPS", icon: Activity, path: "/bil/dps" },
           { title: "Manual Operation", icon: Users, path: "/bil/manual-operation" }
+        ]
+      },
+      {
+        title: "BL Processing",
+        icon: Scissors,
+        subItems: [
+          { title: "MPS", icon: CalendarDays, path: "/bl/mps" },
+          { title: "DPS", icon: Activity, path: "/bl/dps" },
+          { title: "Manual Operation", icon: Users, path: "/bl/manual-operation" }
         ]
       }
     ]
@@ -62,7 +70,8 @@ const menuGroups: MenuGroup[] = [
     label: "System Data",
     items: [
       { title: "ERP Integration Hub", icon: RefreshCw, path: "/erp-integration" },
-      { title: "Machine & Flow Setup", icon: Settings, path: "/machine-setup" }
+      { title: "Machine & Flow Setup", icon: Settings, path: "/machine-setup" },
+      { title: "BL Belt Gate Matrix", icon: Settings, path: "/bl-belt-gate-matrix" }
       /*{ title: "Reports & Analytics", icon: BarChart3, path: "/reports" },
       { title: "Master Data", icon: Database, path: "/master-data" },
       { title: "Workflow & Alerts", icon: Bell, path: "/workflow" },

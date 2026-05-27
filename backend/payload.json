@@ -1,0 +1,44 @@
+{
+  "data": [
+    {"targetProduct": "BLK 25-30", "priority": 1, "rmSize": "225-243", "yieldPct": 83.40},
+    {"targetProduct": "BLK 25-30", "priority": 3, "rmSize": "260-280", "yieldPct": 80.36},
+    {"targetProduct": "BLK 25-30", "priority": 2, "rmSize": "360-380", "yieldPct": 80.25},
+    {"targetProduct": "BLK 25-30", "priority": 4, "rmSize": "300-320", "yieldPct": 80.19},
+    {"targetProduct": "BLK 25-30", "priority": 5, "rmSize": "340-360", "yieldPct": 79.62},
+    {"targetProduct": "BLK 25-30", "priority": 6, "rmSize": "320-340", "yieldPct": 79.43},
+    {"targetProduct": "BLK 25-30", "priority": 7, "rmSize": "270-280", "yieldPct": 77.39},
+
+    {"targetProduct": "BLK 25-29", "priority": 1, "rmSize": "225-243", "yieldPct": 83.40},
+    {"targetProduct": "BLK 25-29", "priority": 3, "rmSize": "260-280", "yieldPct": 80.36},
+    {"targetProduct": "BLK 25-29", "priority": 2, "rmSize": "360-380", "yieldPct": 80.25},
+    {"targetProduct": "BLK 25-29", "priority": 4, "rmSize": "300-320", "yieldPct": 80.19},
+    {"targetProduct": "BLK 25-29", "priority": 5, "rmSize": "340-360", "yieldPct": 79.62},
+    {"targetProduct": "BLK 25-29", "priority": 6, "rmSize": "320-340", "yieldPct": 79.43},
+    {"targetProduct": "BLK 25-29", "priority": 7, "rmSize": "270-280", "yieldPct": 77.39},
+
+    {"targetProduct": "BLK 30-40", "priority": 1, "rmSize": "300-320", "yieldPct": 83.40},
+    {"targetProduct": "BLK 30-40", "priority": 2, "rmSize": "260-280", "yieldPct": 82.06},
+    {"targetProduct": "BLK 30-40", "priority": 3, "rmSize": "340-360", "yieldPct": 80.36},
+    {"targetProduct": "BLK 30-40", "priority": 4, "rmSize": "280-300", "yieldPct": 80.19},
+    {"targetProduct": "BLK 30-40", "priority": 5, "rmSize": "320-340", "yieldPct": 79.43},
+    {"targetProduct": "BLK 30-40", "priority": 6, "rmSize": "360-380", "yieldPct": 78.39},
+
+    {"targetProduct": "BLK 20-25", "priority": 1, "rmSize": "280-300", "yieldPct": 80.81},
+    {"targetProduct": "BLK 20-25", "priority": 2, "rmSize": "260-280", "yieldPct": 79.81},
+
+    {"targetProduct": "BLK 35-45", "priority": 1, "rmSize": "340-360", "yieldPct": 78.00},
+    {"targetProduct": "BLK 35-45", "priority": 2, "rmSize": "220-240", "yieldPct": 77.00},
+
+    {"targetProduct": "BLK 8-12", "priority": 1, "rmSize": "260-280", "yieldPct": 78.00},
+    {"targetProduct": "BLK 8-12", "priority": 2, "rmSize": "280-300", "yieldPct": 73.75},
+    {"targetProduct": "BLK 8-12", "priority": 3, "rmSize": "300-325", "yieldPct": 72.37},
+
+    {"targetProduct": "BLK 53-58", "priority": 1, "rmSize": "260-280", "yieldPct": 77.43},
+    {"targetProduct": "BLK 53-58", "priority": 2, "rmSize": "340-360", "yieldPct": 76.05},
+    {"targetProduct": "BLK 53-58", "priority": 3, "rmSize": "320-340", "yieldPct": 76.02},
+
+    {"targetProduct": "BLK 30-35", "priority": 1, "rmSize": "300-320", "yieldPct": 80.90},
+    {"targetProduct": "BLK 30-35", "priority": 2, "rmSize": "330-340", "yieldPct": 78.50},
+    {"targetProduct": "BLK 30-35", "priority": 3, "rmSize": "260-280", "yieldPct": 78.00}
+  ]
+}

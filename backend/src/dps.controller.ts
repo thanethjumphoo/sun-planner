@@ -418,31 +418,50 @@ export class DpsController {
     });
     currentDetailRow++;
 
-    plan.allocations.sort((a, b) => {
-      const sA = a.sourceBin?.sublot?.sublotNumber || '';
-      const sB = b.sourceBin?.sublot?.sublotNumber || '';
-      return sA.localeCompare(sB, undefined, { numeric: true });
-    }).forEach(alloc => {
+    const allocMap = new Map<string, any>();
+    plan.allocations.forEach(alloc => {
       const sublot = alloc.sourceBin?.sublot;
       const order = alloc.targetOrder;
-      if (!order) return;
+      if (!sublot || !order) return;
 
-      let cleanDesc = order.itemDesc || '-';
-      if (cleanDesc.startsWith(`${order.itemCode} - `)) {
-        cleanDesc = cleanDesc.replace(`${order.itemCode} - `, '');
-      } else if (cleanDesc === order.itemCode) {
-        cleanDesc = '-';
+      const key = `${sublot.sublotNumber}_${order.itemCode}`;
+      if (!allocMap.has(key)) {
+        let cleanDesc = order.itemDesc || '-';
+        if (cleanDesc.startsWith(`${order.itemCode} - `)) {
+          cleanDesc = cleanDesc.replace(`${order.itemCode} - `, '');
+        } else if (cleanDesc === order.itemCode) {
+          cleanDesc = '-';
+        }
+
+        allocMap.set(key, {
+          sublotNumber: sublot.sublotNumber || '-',
+          farmName: sublot.farmName || '-',
+          shift: (sublot.shift || 'A').toUpperCase(),
+          itemCode: order.itemCode,
+          itemDesc: cleanDesc,
+          productSize: order.productSize || '-',
+          allocatedKg: 0,
+          allocationPass: alloc.allocationPass || 'Auto'
+        });
       }
+      allocMap.get(key).allocatedKg += Number(alloc.allocatedKg);
+    });
 
+    const groupedAllocs = Array.from(allocMap.values());
+    groupedAllocs.sort((a, b) => {
+      const sA = a.sublotNumber;
+      const sB = b.sublotNumber;
+      return sA.localeCompare(sB, undefined, { numeric: true });
+    }).forEach(alloc => {
       const row = detailSheet.addRow([
-        sublot?.sublotNumber || '-',
-        sublot?.farmName || '-',
-        (sublot?.shift || 'A').toUpperCase(),
-        order.itemCode,
-        cleanDesc,
-        order.productSize || '-',
-        Number(alloc.allocatedKg),
-        alloc.allocationPass || 'Auto'
+        alloc.sublotNumber,
+        alloc.farmName,
+        alloc.shift,
+        alloc.itemCode,
+        alloc.itemDesc,
+        alloc.productSize,
+        alloc.allocatedKg,
+        alloc.allocationPass
       ]);
       row.height = 20;
       row.eachCell((cell, colNum) => {

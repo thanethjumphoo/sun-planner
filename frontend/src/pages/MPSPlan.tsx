@@ -10,6 +10,7 @@ interface Spec {
   productType: string;
   productYield: number;
   productSpeed: number;
+  icutSpeed?: number;
   productSize: string;
   masterYieldIds?: string;
   erpItemDesc?: string;
@@ -36,6 +37,13 @@ const PART_CONFIGS: Record<string, {
     yieldLabel: 'BIL Yield',
     sizeBreakdownTitle: 'BIL Size Breakdown',
     netLabel: 'Net BIL Available',
+  },
+  bl: {
+    title: 'BL Processing',
+    rmPrefix: 'RM BL',
+    yieldLabel: 'BL Yield',
+    sizeBreakdownTitle: 'BL Size Breakdown',
+    netLabel: 'Net BL Available',
   },
 };
 
@@ -251,7 +259,7 @@ const MPSPlan: React.FC = () => {
 
   const isByproductSpec = (itemCode: string): boolean => {
     const type = getProductType(itemCode);
-    return type === 'coproduct' || type === 'byproduct';
+    return type === 'byproduct';
   };
 
   const fetchDemandOrders = async () => {
@@ -351,6 +359,7 @@ const MPSPlan: React.FC = () => {
             productType: s.productType,
             productYield: Number(s.productYield || 0),
             productSpeed: Number(s.productSpeed || 1),
+            icutSpeed: Number(s.icutSpeed || 0),
             productSize: s.productSize || 'unsize',
             masterYieldIds: s.masterYieldIds,
             erpItemDesc: s.erpItemDesc
@@ -451,6 +460,15 @@ const MPSPlan: React.FC = () => {
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+  };
+
+  const parseSafeDate = (dateVal: any) => {
+    if (!dateVal) return '';
+    if (dateVal instanceof Date) return formatLocalDate(dateVal);
+    const d = new Date(dateVal);
+    if (!isNaN(d.getTime())) return formatLocalDate(d);
+    if (typeof dateVal === 'string') return dateVal.split('T')[0];
+    return String(dateVal).split('T')[0];
   };
   const getTodayStr = () => formatLocalDate(new Date());
 
@@ -650,10 +668,7 @@ const MPSPlan: React.FC = () => {
     }
 
     const formatDBDate = (dateVal: any) => {
-      if (!dateVal) return null;
-      if (typeof dateVal === 'string') return dateVal.split('T')[0];
-      if (dateVal instanceof Date) return formatLocalDate(dateVal);
-      return String(dateVal).split('T')[0];
+      return parseSafeDate(dateVal);
     };
 
     const dailySummary = currentPlan.dailySummaries?.find((d: any) => formatDBDate(d.productionDate) === date);
@@ -950,6 +965,19 @@ const MPSPlan: React.FC = () => {
   });
   const avgManpower = activeDaysCount > 0 ? Math.round(totalManpowerSum / activeDaysCount) : 0;
 
+  // Calculate I-Cut utilization for BL Plan
+  const icutTotalHours = currentPlan?.orders?.reduce((sum: number, o: any) => {
+    const spec = specs[o.itemCode];
+    if (spec && spec.icutSpeed && Number(spec.icutSpeed) > 0) {
+      return sum + (Number(o.quantityKg || 0) / Number(spec.icutSpeed));
+    }
+    return sum;
+  }, 0) || 0;
+  const icutCapacity = 37; // 4 machines * 9.25 hrs
+  const icutUtilization = icutCapacity > 0 ? (icutTotalHours / icutCapacity) * 100 : 0;
+  const icutDisplayValue = partId === 'bl' ? `${icutTotalHours.toFixed(1)} / ${icutCapacity}` : avgManpower.toString();
+  const icutDisplayUnit = partId === 'bl' ? `hrs (${icutUtilization.toFixed(1)}%)` : "People";
+
   // Calculate Monthly Totals for Grade B and other By-Products
   let totalGradeB = 0;
   const byProductTotals: Record<string, number> = {};
@@ -971,7 +999,7 @@ const MPSPlan: React.FC = () => {
       }
 
       const yieldTreeGradeB = Object.values(dailyByProducts)
-        .filter((bp: any) => bp.name === 'สันในเกรด B' || bp.name.includes('เกรด B') || bp.name.toLowerCase().includes('grade b'))
+        .filter((bp: any) => bp.name && (bp.name === 'สันในเกรด B' || bp.name.includes('เกรด B') || bp.name.toLowerCase().includes('grade b')))
         .reduce((sum: number, bp: any) => sum + Number(bp.qty || 0), 0);
 
       const rmFlGradeB = yieldTreeGradeB > 0 ? yieldTreeGradeB : rmFlTotal * 0.093;
@@ -979,6 +1007,7 @@ const MPSPlan: React.FC = () => {
 
       // 2. Aggregate other by-products
       Object.values(dailyByProducts).forEach((bp: any) => {
+        if (!bp.name) return; // skip entries without name (e.g. BL format { kg, sizes })
         const isGb = bp.name === 'สันในเกรด B' || bp.name.includes('เกรด B') || bp.name.toLowerCase().includes('grade b');
         if (isGb) return; // skip Grade B
 
@@ -1344,7 +1373,13 @@ const MPSPlan: React.FC = () => {
                 <StatCard label="Total Monthly Intake" value={totalIntakeBirds.toLocaleString()} unit="Birds" icon={Activity} color="blue" />
                 <StatCard label="Total Orders" value={totalOrdersQty.toLocaleString()} unit="kg" icon={Package} color="orange" />
                 <StatCard label="Estimated Total Yield" value={Math.round(totalRmFlAvail).toLocaleString()} unit="kg" icon={Scale} color="green" />
-                <StatCard label="Avg. Daily Manpower" value={avgManpower.toString()} unit="People" icon={Users} color="purple" />
+                <StatCard 
+                  label={partId === 'bl' ? "I-CUT Utilization (Total)" : "Avg. Daily Manpower"} 
+                  value={icutDisplayValue} 
+                  unit={icutDisplayUnit} 
+                  icon={partId === 'bl' ? Zap : Users} 
+                  color={partId === 'bl' ? (icutUtilization > 100 ? "red" : "purple") : "purple"} 
+                />
               </div>
 
               {/* Monthly Grade B & By-Products Summary Box */}
@@ -1459,7 +1494,7 @@ const MPSPlan: React.FC = () => {
                     const dayNum = i + 1;
                     const todayDateStr = getTodayStr();
                     const isToday = date === todayDateStr;
-                    const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === date : false);
+                    const hasWeekly = weeklySizes.some((sz: any) => parseSafeDate(sz.receiveDate) === date);
 
                     return (
                       <div
@@ -1493,12 +1528,14 @@ const MPSPlan: React.FC = () => {
                               </span>
                             )}
                           </div>
-                          {metrics.intake > 0 && (
+                          {(metrics.intake > 0 || metrics.rmFlAvailable > 0) && (
                             <div className="flex flex-col items-end gap-1">
-                              <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                🐔 {metrics.intake.toLocaleString()}
-                              </span>
                               {metrics.intake > 0 && (
+                                <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                  🐔 {metrics.intake.toLocaleString()}
+                                </span>
+                              )}
+                              {(metrics.rmFlAvailable > 0 || metrics.totalOrderQty > 0) && (
                                 <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase ${Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) !== 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
                                   {Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) < 0 ? <AlertTriangle size={10} /> : (Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) > 0 ? <Info size={10} /> : <CheckCircle2 size={10} />)}
                                   {Math.abs(Math.round(metrics.rmFlAvailable - metrics.totalOrderQty)).toLocaleString()}
@@ -1509,7 +1546,7 @@ const MPSPlan: React.FC = () => {
                         </div>
 
                         {/* Metrics Summary (if activity exists) */}
-                        {(metrics.intake > 0 || metrics.totalOrderQty > 0) && (
+                        {(metrics.intake > 0 || metrics.rmFlAvailable > 0 || metrics.totalOrderQty > 0) && (
                           <div className="bg-slate-50/50 backdrop-blur-sm rounded-xl p-2.5 text-[10px] space-y-2 border border-slate-100 shadow-sm">
                             <div className="flex justify-between items-center">
                               <span className="text-slate-500 font-bold uppercase tracking-tighter">RM Available</span>
@@ -1564,38 +1601,54 @@ const MPSPlan: React.FC = () => {
                           </div>
                         )}
 
-                        {/* Orders Dropzone */}
                         <div className="flex-1 space-y-1.5 overflow-y-auto pr-1 custom-scrollbar">
-                          {metrics.dailyOrders.map((order: any) => (
-                            <motion.div
-                              layoutId={order.id}
-                              draggable={currentPlan?.status !== 'APPROVED'}
-                              onDragStart={currentPlan?.status !== 'APPROVED' ? (e: any) => handleDragStart(e, order.id) : undefined}
-                              onClick={() => setHighlightedSoNumber(highlightedSoNumber === order.soNumber ? null : order.soNumber)}
-                              key={order.id}
-                              className={`p-2 rounded-lg text-xs border shadow-sm transition-all
-                            ${currentPlan?.status === 'APPROVED' ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}
-                            ${order.type === 'chilled' ? 'bg-orange-50 border-orange-200' : 'bg-cyan-50 border-cyan-200'}
-                            ${highlightedSoNumber && highlightedSoNumber !== order.soNumber ? 'opacity-40 grayscale-[50%]' : ''}
-                            ${highlightedSoNumber === order.soNumber ? 'ring-2 ring-orange-500 shadow-orange-500/50 shadow-lg scale-[1.02] z-10' : ''}
-                          `}
-                            >
-                              <div className="flex justify-between font-bold mb-1">
-                                <span className="truncate pr-2 text-gray-800" title={order.itemDesc}>{order.itemDesc}</span>
-                                <Move className="w-3 h-3 text-gray-400 opacity-50" />
-                              </div>
-                              <div className="flex justify-between items-center mb-0.5">
-                                <span className="text-[9px] font-bold text-gray-500 uppercase">SO: <span className="text-gray-800">{order.soNumber}</span></span>
-                                <span className="text-[9px] font-bold text-gray-500 uppercase">Ship: <span className="text-gray-800">{order.shipDate}</span></span>
-                              </div>
-                              <div className="flex justify-between items-center">
-                                <span className="text-[10px] text-gray-500 font-medium">{order.itemCode}</span>
-                                <span className={`font-bold ${order.type === 'chilled' ? 'text-orange-700' : 'text-cyan-700'}`}>
-                                  {Math.round(order.qty).toLocaleString()}kg
-                                </span>
-                              </div>
-                            </motion.div>
-                          ))}
+                          {Object.values(metrics.dailyOrders.reduce((acc: any, order: any) => {
+                            const key = `${order.itemCode}_${order.type}`;
+                            if (!acc[key]) {
+                              acc[key] = { ...order, qty: 0, soNumbers: new Set(), shipDates: new Set() };
+                            }
+                            acc[key].qty += Number(order.qty || 0);
+                            acc[key].soNumbers.add(order.soNumber);
+                            acc[key].shipDates.add(order.shipDate);
+                            return acc;
+                          }, {})).map((order: any, idx: number) => {
+                            const soList = Array.from(order.soNumbers);
+                            const shipList = Array.from(order.shipDates);
+                            const soDisplay = soList.length > 1 ? 'Multiple' : soList[0];
+                            const shipDisplay = shipList.length > 1 ? 'Multiple' : shipList[0];
+                            const isHighlighted = highlightedSoNumber && soList.includes(highlightedSoNumber);
+                            
+                            return (
+                              <motion.div
+                                layoutId={`grouped_${order.itemCode}_${order.type}_${dayNum}`}
+                                draggable={currentPlan?.status !== 'APPROVED'}
+                                onDragStart={currentPlan?.status !== 'APPROVED' ? (e: any) => handleDragStart(e, order.id) : undefined}
+                                onClick={() => setHighlightedSoNumber(isHighlighted ? null : (soList[0] as string))}
+                                key={`grouped_${order.itemCode}_${order.type}_${idx}`}
+                                className={`p-2 rounded-lg text-xs border shadow-sm transition-all
+                              ${currentPlan?.status === 'APPROVED' ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}
+                              ${order.type === 'chilled' ? 'bg-orange-50 border-orange-200' : 'bg-cyan-50 border-cyan-200'}
+                              ${highlightedSoNumber && !isHighlighted ? 'opacity-40 grayscale-[50%]' : ''}
+                              ${isHighlighted ? 'ring-2 ring-orange-500 shadow-orange-500/50 shadow-lg scale-[1.02] z-10' : ''}
+                            `}
+                              >
+                                <div className="flex justify-between font-bold mb-1">
+                                  <span className="truncate pr-2 text-gray-800" title={order.itemDesc}>{order.itemDesc}</span>
+                                  <Move className="w-3 h-3 text-gray-400 opacity-50" />
+                                </div>
+                                <div className="flex justify-between items-center mb-0.5">
+                                  <span className="text-[9px] font-bold text-gray-500 uppercase">SO: <span className="text-gray-800" title={soList.join(', ')}>{soDisplay as string}</span></span>
+                                  <span className="text-[9px] font-bold text-gray-500 uppercase">Ship: <span className="text-gray-800" title={shipList.join(', ')}>{shipDisplay as string}</span></span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                  <span className="text-[10px] text-gray-500 font-medium">{order.itemCode}</span>
+                                  <span className={`font-bold ${order.type === 'chilled' ? 'text-orange-700' : 'text-cyan-700'}`}>
+                                    {Math.round(order.qty).toLocaleString()}kg
+                                  </span>
+                                </div>
+                              </motion.div>
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -2046,7 +2099,31 @@ const MPSPlan: React.FC = () => {
 
                   {/* Top Summary Chips */}
                   <div className="grid grid-cols-2 gap-3">
-                    {[
+                    {partId === 'bl' ? (() => {
+                      // Parse BL supply from byProducts JSON
+                      let blBp: any = {};
+                      try { blBp = JSON.parse(selectedSupply.byProducts || '{}'); } catch(e) {}
+                      const blKg = Number(blBp['BL']?.kg || blBp['BL-DEBONE']?.qty || 0);
+                      const blThKg = Number(blBp['BL-TH']?.kg || 0);
+                      const blDrKg = Number(blBp['BL-DR']?.kg || 0);
+                      const totalBl = blKg + blThKg + blDrKg;
+                      return [
+                        { label: 'RM BL (ทั้งชิ้น)', val: blKg, unit: 'kg', color: 'blue' },
+                        { label: 'RM BL-TH (สะโพก)', val: blThKg, unit: 'kg', color: 'purple' },
+                        { label: 'RM BL-DR (น่อง)', val: blDrKg, unit: 'kg', color: 'pink' },
+                        { label: 'Total RM BL', val: totalBl, unit: 'kg', color: 'orange' },
+                      ].map((stat, i) => (
+                        <div key={i} className="bg-gray-50 border border-gray-100 p-4 rounded-xl">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{stat.label}</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-xl font-bold text-gray-800">
+                              {Math.round(Number(stat.val)).toLocaleString()}
+                            </span>
+                            <span className="text-[9px] font-medium text-gray-400 uppercase">{stat.unit}</span>
+                          </div>
+                        </div>
+                      ));
+                    })() : [
                       { label: 'Intake Birds', val: selectedSupply.intakeBirds, unit: 'Birds', color: 'blue' },
                       { label: 'Total Weight', val: selectedSupply.totalWeight, unit: 'kg', color: 'slate' },
                       { label: 'Avg. Weight', val: selectedSupply.avgWeight, unit: 'kg/pc', color: 'emerald', precision: 3 },
@@ -2064,8 +2141,45 @@ const MPSPlan: React.FC = () => {
                     ))}
                   </div>
 
-                  {/* Section 2: Manpower Planning & Actual */}
-                  {selectedManpower && (
+                  {/* Section 2: Manpower / I-CUT Capacity */}
+                  {partId === 'bl' ? (
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
+                      <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
+                        <Zap size={16} className="text-indigo-500" />
+                        I-CUT Capacity & Manual Trimming
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm">
+                          <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">I-CUT ที่ใช้</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-indigo-900">0</span>
+                            <span className="text-[9px] font-bold text-indigo-400">kg</span>
+                          </div>
+                        </div>
+                        <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm">
+                          <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">I-CUT Cap/Day</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-indigo-900">10,000</span>
+                            <span className="text-[9px] font-bold text-indigo-400">kg</span>
+                          </div>
+                        </div>
+                        <div className="bg-white/80 p-3 rounded-xl border border-amber-200 shadow-sm">
+                          <p className="text-[10px] font-bold text-amber-500 uppercase mb-1">Manual Trim</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-amber-900">0</span>
+                            <span className="text-[9px] font-bold text-amber-400">kg</span>
+                          </div>
+                        </div>
+                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm">
+                          <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">I-CUT Utilization</p>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-black text-emerald-900">0</span>
+                            <span className="text-[9px] font-bold text-emerald-500">%</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : selectedManpower && (
                     <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
                       <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
                         <Users size={16} className="text-indigo-500" />
@@ -2299,88 +2413,90 @@ const MPSPlan: React.FC = () => {
                   )}
 
                   {/* Section 3: RM FL Summary (Fillet Yield) */}
-                  <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
-                    <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
-                      <Activity size={16} className="text-orange-500" />
-                      {pc.rmPrefix} Summary ({pc.yieldLabel})
-                    </h4>
-                    <div className={partId === 'bil' ? "grid grid-cols-1 gap-6" : "grid grid-cols-1 md:grid-cols-3 gap-6"}>
-                      {(() => {
-                        const slaughtered = Number(selectedSupply.slaughteredWeight || 0);
+                  {partId !== 'bl' && (
+                    <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
+                      <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
+                        <Activity size={16} className="text-orange-500" />
+                        {pc.rmPrefix} Summary ({pc.yieldLabel})
+                      </h4>
+                      <div className={partId === 'bil' ? "grid grid-cols-1 gap-6" : "grid grid-cols-1 md:grid-cols-3 gap-6"}>
+                        {(() => {
+                          const slaughtered = Number(selectedSupply.slaughteredWeight || 0);
 
-                        if (partId === 'bil') {
-                          const rmBilTotal = slaughtered * 0.25;
-                          return (
-                            <div className="bg-orange-500 p-5 rounded-xl shadow-md flex justify-between items-center text-white">
-                              <div>
-                                <p className="text-[10px] font-bold text-white/90 uppercase tracking-wider mb-1">RM BIL Total</p>
-                                <div className="flex items-baseline gap-1.5">
-                                  <span className="text-3xl font-black text-white">{Math.round(rmBilTotal).toLocaleString()}</span>
-                                  <span className="text-sm font-bold text-white/80">kg</span>
+                          if (partId === 'bil') {
+                            const rmBilTotal = slaughtered * 0.25;
+                            return (
+                              <div className="bg-orange-500 p-5 rounded-xl shadow-md flex justify-between items-center text-white">
+                                <div>
+                                  <p className="text-[10px] font-bold text-white/90 uppercase tracking-wider mb-1">RM BIL Total</p>
+                                  <div className="flex items-baseline gap-1.5">
+                                    <span className="text-3xl font-black text-white">{Math.round(rmBilTotal).toLocaleString()}</span>
+                                    <span className="text-sm font-bold text-white/80">kg</span>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-[10px] text-white/80 font-bold uppercase mb-0.5">Yield Formula</p>
+                                  <p className="text-xs text-white font-black italic">Slaughtered * 25%</p>
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <p className="text-[10px] text-white/80 font-bold uppercase mb-0.5">Yield Formula</p>
-                                <p className="text-xs text-white font-black italic">Slaughtered * 25%</p>
-                              </div>
-                            </div>
-                          );
-                        }
-
-                        const rmFlTotal = slaughtered * 0.04;
-
-                        // Parse byproducts JSON to find Yield-Tree based Grade B
-                        let byProducts: Record<string, { name: string; qty: number; processName?: string; type?: string }> = {};
-                        if (selectedSupply.byProducts) {
-                          try {
-                            byProducts = JSON.parse(selectedSupply.byProducts);
-                          } catch (e) {
-                            console.error('Error parsing byProducts', e);
+                            );
                           }
-                        }
 
-                        const yieldTreeGradeB = Object.values(byProducts)
-                          .filter((bp: any) => bp.name === 'สันในเกรด B' || bp.name.includes('เกรด B') || bp.name.toLowerCase().includes('grade b'))
-                          .reduce((sum: number, bp: any) => sum + Number(bp.qty || 0), 0);
+                          const rmFlTotal = slaughtered * 0.04;
 
-                        // If yield tree Grade B is available, use it. Otherwise fall back to formula-based 9.3%
-                        const rmFlGradeB = yieldTreeGradeB > 0 ? yieldTreeGradeB : rmFlTotal * 0.093;
-                        const rmFlNet = rmFlTotal - rmFlGradeB;
-                        const isYieldTree = yieldTreeGradeB > 0;
+                          // Parse byproducts JSON to find Yield-Tree based Grade B
+                          let byProducts: Record<string, { name: string; qty: number; processName?: string; type?: string }> = {};
+                          if (selectedSupply.byProducts) {
+                            try {
+                              byProducts = JSON.parse(selectedSupply.byProducts);
+                            } catch (e) {
+                              console.error('Error parsing byProducts', e);
+                            }
+                          }
 
-                        return (
-                          <>
-                            <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
-                              <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Total</p>
-                              <div className="flex items-baseline gap-1">
-                                <span className="text-2xl font-black text-orange-900">{Math.round(rmFlTotal).toLocaleString()}</span>
-                                <span className="text-xs font-bold text-orange-500">kg</span>
+                          const yieldTreeGradeB = Object.values(byProducts)
+                            .filter((bp: any) => bp.name && (bp.name === 'สันในเกรด B' || bp.name.includes('เกรด B') || bp.name.toLowerCase().includes('grade b')))
+                            .reduce((sum: number, bp: any) => sum + Number(bp.qty || 0), 0);
+
+                          // If yield tree Grade B is available, use it. Otherwise fall back to formula-based 9.3%
+                          const rmFlGradeB = yieldTreeGradeB > 0 ? yieldTreeGradeB : rmFlTotal * 0.093;
+                          const rmFlNet = rmFlTotal - rmFlGradeB;
+                          const isYieldTree = yieldTreeGradeB > 0;
+
+                          return (
+                            <>
+                              <div className="bg-white/80 p-4 rounded-xl border border-orange-200">
+                                <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Total</p>
+                                <div className="flex items-baseline gap-1">
+                                  <span className="text-2xl font-black text-orange-900">{Math.round(rmFlTotal).toLocaleString()}</span>
+                                  <span className="text-xs font-bold text-orange-500">kg</span>
+                                </div>
+                                <p className="text-[9px] text-orange-400 mt-1 italic">Slaughtered * 4%</p>
                               </div>
-                              <p className="text-[9px] text-orange-400 mt-1 italic">Slaughtered * 4%</p>
-                            </div>
-                            <div className={`bg-white/80 p-4 rounded-xl border border-orange-200 ${isYieldTree ? 'border-dashed border-2' : ''}`}>
-                              <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Grade B</p>
-                              <div className="flex items-baseline gap-1">
-                                <span className="text-2xl font-black text-orange-900">{Math.round(rmFlGradeB).toLocaleString()}</span>
-                                <span className="text-xs font-bold text-orange-500">kg</span>
+                              <div className={`bg-white/80 p-4 rounded-xl border border-orange-200 ${isYieldTree ? 'border-dashed border-2' : ''}`}>
+                                <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">{pc.rmPrefix} Grade B</p>
+                                <div className="flex items-baseline gap-1">
+                                  <span className="text-2xl font-black text-orange-900">{Math.round(rmFlGradeB).toLocaleString()}</span>
+                                  <span className="text-xs font-bold text-orange-500">kg</span>
+                                </div>
+                                <p className={`text-[9px] mt-1 italic ${isYieldTree ? 'text-emerald-600 font-bold' : 'text-orange-400'}`}>
+                                  {isYieldTree ? '✓ Calculated via Yield Tree' : 'Total * 9.3% (Fallback)'}
+                                </p>
                               </div>
-                              <p className={`text-[9px] mt-1 italic ${isYieldTree ? 'text-emerald-600 font-bold' : 'text-orange-400'}`}>
-                                {isYieldTree ? '✓ Calculated via Yield Tree' : 'Total * 9.3% (Fallback)'}
-                              </p>
-                            </div>
-                            <div className="bg-orange-500 p-4 rounded-xl shadow-md">
-                              <p className="text-[10px] font-bold text-white/80 uppercase mb-1">{pc.rmPrefix} หัก Grade B</p>
-                              <div className="flex items-baseline gap-1">
-                                <span className="text-2xl font-black text-white">{Math.round(rmFlNet).toLocaleString()}</span>
-                                <span className="text-xs font-bold text-white/80">kg</span>
+                              <div className="bg-orange-500 p-4 rounded-xl shadow-md">
+                                <p className="text-[10px] font-bold text-white/80 uppercase mb-1">{pc.rmPrefix} หัก Grade B</p>
+                                <div className="flex items-baseline gap-1">
+                                  <span className="text-2xl font-black text-white">{Math.round(rmFlNet).toLocaleString()}</span>
+                                  <span className="text-xs font-bold text-white/80">kg</span>
+                                </div>
+                                <p className="text-[9px] text-white/60 mt-1 italic">{pc.netLabel}</p>
                               </div>
-                              <p className="text-[9px] text-white/60 mt-1 italic">{pc.netLabel}</p>
-                            </div>
-                          </>
-                        );
-                      })()}
+                            </>
+                          );
+                        })()}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Section 4: RM Size Breakdown (Internal vs External) */}
                   <div className="space-y-4">
@@ -2390,9 +2506,42 @@ const MPSPlan: React.FC = () => {
                     </h4>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                       {(() => {
-                        const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                        const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                        const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                        let blSizes: Record<string, number> = {};
+                        if (partId === 'bl') {
+                          try {
+                            const bp = JSON.parse(selectedSupply.byProducts || '{}');
+                            const blData = bp['BL-DEBONE'] || bp['BL'] || bp['BL (Debone)'] || {};
+                            blSizes = blData.sizes || {};
+                            
+                            // FALLBACK: If backend didn't provide exact sizes, use BIL RM sizes and blColLabelsMap to distribute total BL kg
+                            if (Object.keys(blSizes).length === 0 && selectedSupply.sizes && selectedSupply.sizes.length > 0) {
+                              let totalBilSizes = 0;
+                              const bilSizes: Record<string, number> = {};
+                              selectedSupply.sizes.forEach((sz: any) => {
+                                bilSizes[sz.groupSize] = (bilSizes[sz.groupSize] || 0) + Number(sz.quantityKg || 0);
+                                totalBilSizes += Number(sz.quantityKg || 0);
+                              });
+                              const blKg = Number(blData.qty || blData.kg || 0);
+                              if (totalBilSizes > 0 && blKg > 0) {
+                                Object.keys(bilSizes).forEach(bilSz => {
+                                  const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
+                                  const ratio = bilSizes[bilSz] / totalBilSizes;
+                                  blSizes[blSz] = (blSizes[blSz] || 0) + (blKg * ratio);
+                                });
+                              }
+                            }
+                          } catch (e) {}
+                        }
+
+                        const getMonthSizeKg = (groupSize: string) => {
+                          if (partId === 'bl') return Number(blSizes[groupSize] || 0);
+                          return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                        };
+                        const getWeekSizeKg = (groupSize: string) => {
+                          if (partId === 'bl') return Number(blSizes[groupSize] || 0);
+                          return weeklySizes.filter((sz: any) => sz.groupSize === groupSize && parseSafeDate(sz.receiveDate) === selectedDate).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                        };
+                        const hasWeekly = partId === 'bl' ? false : weeklySizes.some((sz: any) => parseSafeDate(sz.receiveDate) === selectedDate);
                         const getInternalSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
 
                         // Find External RM for selectedDate
@@ -2414,13 +2563,19 @@ const MPSPlan: React.FC = () => {
                           { label: '70 Up', color: 'bg-red-500' },
                         ];
 
-                        const isBil = currentPlan?.partType === 'bil';
-                        // For BIL, include all sizes from internal and external
-                        const allBilSizes = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
+                        const isBilOrBl = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
+                        // For BIL and BL, include all sizes from internal and external
+                        const allBilSizes = new Set(partId === 'bl' ? Object.keys(blSizes) : (selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
                         Object.keys(extSizes).forEach(k => allBilSizes.add(k));
 
-                        const currentSizeLabels = isBil
+                        const currentSizeLabels = isBilOrBl
                           ? (Array.from(allBilSizes) as string[])
+                            .sort((a, b) => {
+                              const numA = parseInt(a.match(/\d+/)?.[0] || '0', 10);
+                              const numB = parseInt(b.match(/\d+/)?.[0] || '0', 10);
+                              if (numA === numB) return a.localeCompare(b);
+                              return numA - numB;
+                            })
                             .map((label: string, idx: number) => ({
                               label,
                               color: `bg-${['slate', 'blue', 'cyan', 'emerald', 'green', 'amber', 'orange', 'red'][idx % 8]}-500`
@@ -2450,7 +2605,7 @@ const MPSPlan: React.FC = () => {
                                   <span className="text-gray-500 font-medium">Internal:</span>
                                   <span className="font-bold text-gray-700">{Number(internalVal || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</span>
                                 </div>
-                                {isBil && (
+                                {isBilOrBl && (
                                   <div className="flex justify-between items-center text-[10px]">
                                     <span className="text-blue-500 font-medium">External:</span>
                                     <span className="font-bold text-blue-700">{Number(externalVal || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</span>
@@ -2474,8 +2629,8 @@ const MPSPlan: React.FC = () => {
                       <p className="text-gray-400 font-bold uppercase text-[10px] mb-1">Estimated Net Output (Aggregate)</p>
                       {(() => {
                         const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                        const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                        const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                        const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && parseSafeDate(sz.receiveDate) === selectedDate).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                        const hasWeekly = weeklySizes.some((sz: any) => parseSafeDate(sz.receiveDate) === selectedDate);
                         const getInternalSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
 
                         const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(selectedDate));
@@ -2521,8 +2676,8 @@ const MPSPlan: React.FC = () => {
                       <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden flex">
                         {(() => {
                           const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                          const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && (typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false)).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                          const hasWeekly = weeklySizes.some((sz: any) => typeof sz.receiveDate === 'string' ? sz.receiveDate.split('T')[0] === selectedDate : false);
+                          const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && parseSafeDate(sz.receiveDate) === selectedDate).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                          const hasWeekly = weeklySizes.some((sz: any) => parseSafeDate(sz.receiveDate) === selectedDate);
                           const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
 
                           const isBil = currentPlan?.partType === 'bil';
@@ -2577,19 +2732,28 @@ const MPSPlan: React.FC = () => {
                         }
 
                         const isGradeB = (name: string) => {
+                          if (!name) return false;
                           const n = name.toLowerCase();
                           return n.includes('เกรด b') || n.includes('เกรดบี') || n.includes('grade b');
                         };
 
-                        const aggregated: Record<string, { name: string; qty: number }> = {};
-                        Object.values(byProducts).forEach(bp => {
+                        const aggregated: Record<string, { name: string; qty: number; sizes?: Record<string, number> }> = {};
+                        Object.values(byProducts).forEach((bp: any) => {
+                          if (!bp.name) return; // skip BL format entries without name
                           if (isGradeB(bp.name)) return; // Exclude Grade B
 
                           const name = bp.name.trim();
                           if (!aggregated[name]) {
-                            aggregated[name] = { name, qty: 0 };
+                            aggregated[name] = { name, qty: 0, sizes: {} };
                           }
                           aggregated[name].qty += Number(bp.qty || 0);
+                          
+                          if (bp.sizes) {
+                            Object.entries(bp.sizes).forEach(([sz, szQty]) => {
+                              if (!aggregated[name].sizes![sz]) aggregated[name].sizes![sz] = 0;
+                              aggregated[name].sizes![sz] += Number(szQty);
+                            });
+                          }
                         });
 
                         const items = Object.values(aggregated);
@@ -2598,10 +2762,62 @@ const MPSPlan: React.FC = () => {
                         }
 
                         const isBil = currentPlan?.partType === 'bil';
-                        return items.map((bp, index) => {
-                          const roundedQty = Math.round(bp.qty);
-                          
-                          if (bp.name.toUpperCase().includes('BL') && isBil && bilColLabels.length > 0) {
+                        
+                        const isBlMain = (name: string) => {
+                          const n = name.toUpperCase();
+                          return n.includes('BL') && !n.includes('BL-TH') && !n.includes('BL-DR') && !n.includes('สะโพก') && !n.includes('น่อง');
+                        };
+                        const blItems = items.filter(bp => isBlMain(bp.name));
+                        const otherItems = items.filter(bp => !isBlMain(bp.name));
+                        const elements: React.ReactNode[] = [];
+
+                        if (blItems.length > 0) {
+                          const hasSpecificSizes = blItems.some(bp => bp.name.toUpperCase().includes('BLK') || /\d/.test(bp.name));
+                          const totalBl = blItems.reduce((sum, bp) => sum + bp.qty, 0);
+
+                          if (hasSpecificSizes || (!isBil || bilColLabels.length === 0)) {
+                            // Direct render for specific sizes
+                            elements.push(
+                              <div key="bl-section" className="bg-gradient-to-br from-blue-50 to-indigo-50 col-span-full p-4 rounded-xl border border-blue-200 shadow-sm">
+                                <div className="flex justify-between items-center mb-4 border-b border-blue-100 pb-3">
+                                  <div>
+                                    <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">BL (Debone) - Process 3</p>
+                                    <p className="text-[10px] text-blue-500">Output ส่งต่อแผนก BL</p>
+                                  </div>
+                                  <div className="flex items-baseline gap-1 text-right">
+                                    <span className="text-3xl font-black text-blue-900">{Math.round(totalBl).toLocaleString()}</span>
+                                    <span className="text-xs font-bold text-blue-500">kg</span>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                                  {blItems.filter(bp => bp.qty > 1).map((bp, i) => {
+                                      const hasSizes = bp.sizes && Object.keys(bp.sizes).length > 0;
+                                      return (
+                                        <div key={`bl-${i}`} className="bg-white p-2.5 rounded-lg border border-blue-100 shadow-sm hover:border-blue-300 transition-colors flex flex-col justify-between">
+                                          <div>
+                                            <p className="text-[10px] font-bold text-gray-500 uppercase">{bp.name}</p>
+                                            <p className="text-sm font-black text-blue-700">{Math.round(bp.qty).toLocaleString()} <span className="text-[9px] font-normal text-gray-400">kg</span></p>
+                                          </div>
+                                          {hasSizes && (
+                                            <div className="mt-2 pt-2 border-t border-blue-50 flex gap-1 flex-wrap">
+                                              {Object.entries(bp.sizes!).filter(([_, qty]) => Number(qty) > 1).map(([sz, qty], j) => (
+                                                <div key={j} className="bg-blue-50 px-1.5 py-0.5 rounded text-[8px] border border-blue-100">
+                                                  <span className="font-bold text-blue-800">{sz}</span>
+                                                  <span className="ml-1 text-blue-600">{Math.round(Number(qty)).toLocaleString()}kg</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              </div>
+                            );
+                          } else {
+                            // Old logic for a single 'BL (Debone)' using bilSizes
+                            const bp = blItems[0];
+                            const roundedQty = Math.round(bp.qty);
                             // Calculate Supply by BIL Size
                             const bilSizes: Record<string, number> = {};
                             (selectedSupply.sizes || []).forEach((sz: any) => {
@@ -2652,8 +2868,8 @@ const MPSPlan: React.FC = () => {
                               }
                             }
 
-                            return (
-                              <div key={index} className="bg-gradient-to-br from-blue-50 to-indigo-50 col-span-full p-4 rounded-xl border border-blue-200 shadow-sm">
+                            elements.push(
+                              <div key="bl-section-fallback" className="bg-gradient-to-br from-blue-50 to-indigo-50 col-span-full p-4 rounded-xl border border-blue-200 shadow-sm">
                                 <div className="flex justify-between items-center mb-4 border-b border-blue-100 pb-3">
                                   <div>
                                     <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">BL (Debone) - Process 3</p>
@@ -2676,17 +2892,52 @@ const MPSPlan: React.FC = () => {
                               </div>
                             );
                           }
+                        }
 
-                          return (
-                            <div key={index} className="bg-white p-4 rounded-xl border border-amber-200 shadow-sm hover:shadow hover:border-amber-400 transition-all">
-                              <p className="text-[10px] font-bold text-gray-400 uppercase mb-1 tracking-wider">{bp.name}</p>
-                              <div className="flex items-baseline gap-1">
-                                <span className="text-2xl font-black text-amber-900">{roundedQty.toLocaleString()}</span>
-                                <span className="text-xs font-bold text-amber-500">kg</span>
+                        otherItems.forEach((bp, index) => {
+                          const roundedQty = Math.round(bp.qty);
+                          const hasSizes = bp.sizes && Object.keys(bp.sizes).length > 0;
+                          
+                          if (hasSizes) {
+                            elements.push(
+                              <div key={`other-major-${index}`} className="bg-gradient-to-br from-indigo-50 to-purple-50 col-span-full p-4 rounded-xl border border-indigo-200 shadow-sm">
+                                <div className="flex justify-between items-center mb-4 border-b border-indigo-100 pb-3">
+                                  <div>
+                                    <p className="text-xs font-bold text-indigo-800 uppercase tracking-wider">{bp.name}</p>
+                                    <p className="text-[10px] text-indigo-500">Output By-Product</p>
+                                  </div>
+                                  <div className="flex items-baseline gap-1 text-right">
+                                    <span className="text-3xl font-black text-indigo-900">{roundedQty.toLocaleString()}</span>
+                                    <span className="text-xs font-bold text-indigo-500">kg</span>
+                                  </div>
+                                </div>
+                                
+                                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                                  {Object.entries(bp.sizes!).filter(([_, qty]) => Number(qty) > 1).map(([sz, qty], i) => (
+                                    <div key={i} className="bg-white p-2.5 rounded-lg border border-indigo-100 shadow-sm hover:border-indigo-300 transition-colors">
+                                      <p className="text-[10px] font-bold text-gray-500 uppercase">{sz}</p>
+                                      <p className="text-sm font-black text-indigo-700">{Math.round(Number(qty)).toLocaleString()} <span className="text-[9px] font-normal text-gray-400">kg</span></p>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          );
+                            );
+                          } else {
+                            elements.push(
+                              <div key={`other-minor-${index}`} className="bg-white p-4 rounded-xl border border-amber-200 shadow-sm hover:shadow hover:border-amber-400 transition-all flex flex-col justify-between">
+                                <div>
+                                  <p className="text-[10px] font-bold text-gray-400 uppercase mb-1 tracking-wider">{bp.name}</p>
+                                  <div className="flex items-baseline gap-1">
+                                    <span className="text-2xl font-black text-amber-900">{roundedQty.toLocaleString()}</span>
+                                    <span className="text-xs font-bold text-amber-500">kg</span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          }
                         });
+
+                        return elements;
                       })()}
                     </div>
                   </div>
@@ -3477,11 +3728,12 @@ const StatCard = ({ label, value, unit, icon: Icon, color }: any) => {
     blue: 'bg-blue-50 text-blue-600 border-blue-100',
     orange: 'bg-orange-50 text-orange-600 border-orange-100',
     green: 'bg-green-50 text-green-600 border-green-100',
-    purple: 'bg-purple-50 text-purple-600 border-purple-100'
+    purple: 'bg-purple-50 text-purple-600 border-purple-100',
+    red: 'bg-red-50 text-red-600 border-red-100'
   };
 
   const iconColors: Record<string, string> = {
-    blue: 'text-blue-500', orange: 'text-orange-500', green: 'text-green-500', purple: 'text-purple-500'
+    blue: 'text-blue-500', orange: 'text-orange-500', green: 'text-green-500', purple: 'text-purple-500', red: 'text-red-500'
   };
 
   return (

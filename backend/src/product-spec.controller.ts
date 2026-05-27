@@ -86,7 +86,9 @@ export class ProductSpecController {
       productYield: number;
       productWeight: number;
       productSpeed: number;
-      productLead: number;
+      icutSpeed: number;
+      minProductLead: number;
+      maxProductLead: number;
       isExternalRmAllowed: boolean;
     },
   ) {
@@ -120,7 +122,9 @@ export class ProductSpecController {
       productYield: body.productYield,
       productWeight: body.productWeight,
       productSpeed: body.productSpeed,
-      productLead: body.productLead,
+      icutSpeed: body.icutSpeed,
+      minProductLead: body.minProductLead,
+      maxProductLead: body.maxProductLead,
       isExternalRmAllowed: body.isExternalRmAllowed || false,
     });
 
@@ -139,7 +143,9 @@ export class ProductSpecController {
       productYield?: number;
       productWeight?: number;
       productSpeed?: number;
-      productLead?: number;
+      icutSpeed?: number;
+      minProductLead?: number;
+      maxProductLead?: number;
       isExternalRmAllowed?: boolean;
     },
   ) {
@@ -155,7 +161,9 @@ export class ProductSpecController {
     if (body.productWeight !== undefined)
       spec.productWeight = body.productWeight;
     if (body.productSpeed !== undefined) spec.productSpeed = body.productSpeed;
-    if (body.productLead !== undefined) spec.productLead = body.productLead;
+    if (body.icutSpeed !== undefined) spec.icutSpeed = body.icutSpeed;
+    if (body.minProductLead !== undefined) spec.minProductLead = body.minProductLead;
+    if (body.maxProductLead !== undefined) spec.maxProductLead = body.maxProductLead;
     if (body.isExternalRmAllowed !== undefined) spec.isExternalRmAllowed = body.isExternalRmAllowed;
 
     const saved = await this.productSpecRepo.save(spec);
@@ -178,7 +186,9 @@ export class ProductSpecController {
       productYield: number;
       productWeight: number;
       productSpeed: number;
-      productLead: number;
+      icutSpeed: number;
+      minProductLead: number;
+      maxProductLead: number;
       isExternalRmAllowed?: boolean;
     },
   ) {
@@ -215,7 +225,9 @@ export class ProductSpecController {
         productYield: body.productYield,
         productWeight: body.productWeight,
         productSpeed: body.productSpeed,
-        productLead: body.productLead,
+        icutSpeed: body.icutSpeed,
+        minProductLead: body.minProductLead,
+        maxProductLead: body.maxProductLead,
         isExternalRmAllowed: body.isExternalRmAllowed || false,
       });
 
@@ -241,7 +253,9 @@ export class ProductSpecController {
         productYield?: number;
         productWeight?: number;
         productSpeed?: number;
-        productLead?: number;
+        icutSpeed?: number;
+        minProductLead?: number;
+        maxProductLead?: number;
         isExternalRmAllowed?: boolean;
       }>;
     },
@@ -273,8 +287,12 @@ export class ProductSpecController {
           existing.productWeight = row.productWeight;
         if (row.productSpeed !== undefined)
           existing.productSpeed = row.productSpeed;
-        if (row.productLead !== undefined)
-          existing.productLead = row.productLead;
+        if (row.icutSpeed !== undefined)
+          existing.icutSpeed = row.icutSpeed;
+        if (row.minProductLead !== undefined)
+          existing.minProductLead = row.minProductLead;
+        if (row.maxProductLead !== undefined)
+          existing.maxProductLead = row.maxProductLead;
         if (row.isExternalRmAllowed !== undefined)
           existing.isExternalRmAllowed = row.isExternalRmAllowed;
         await this.productSpecRepo.save(existing);
@@ -294,8 +312,11 @@ export class ProductSpecController {
           productYield: row.productYield ?? 0.84,
           productWeight: row.productWeight ?? 2,
           productSpeed: row.productSpeed ?? 45,
-          productLead:
-            row.productLead ?? (row.productType === 'freeze' ? 5 : 1),
+          icutSpeed: row.icutSpeed ?? 0,
+          minProductLead:
+            row.minProductLead ?? (row.productType === 'freeze' ? 5 : 1),
+          maxProductLead:
+            row.maxProductLead ?? (row.productType === 'freeze' ? 30 : 3),
           isExternalRmAllowed: row.isExternalRmAllowed || false,
         });
         await this.productSpecRepo.save(spec);

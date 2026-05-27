@@ -68,8 +68,20 @@ export class ProductSpec {
   })
   productSpeed: number;
 
-  @Column({ name: 'PRODUCT_LEAD', type: 'int', nullable: true })
-  productLead: number; // Default: chilled=1, freeze=5
+  @Column({
+    name: 'ICUT_SPEED',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+  })
+  icutSpeed: number;
+
+  @Column({ name: 'MIN_PRODUCT_LEAD', type: 'int', nullable: true })
+  minProductLead: number;
+
+  @Column({ name: 'MAX_PRODUCT_LEAD', type: 'int', nullable: true })
+  maxProductLead: number;
 
   @Column({ name: 'IS_EXTERNAL_RM_ALLOWED', type: 'bit', default: 0 })
   isExternalRmAllowed: boolean; // Flag to allow usage of external purchased RM

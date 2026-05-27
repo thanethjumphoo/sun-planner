@@ -2,15 +2,17 @@ import { useState, useRef } from 'react';
 import { X, Upload, Download, AlertCircle, CheckCircle, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
-// Column definitions for product spec
 const COLUMNS = [
   { key: 'erpItemCode', label: 'Item Code' },
   { key: 'productType', label: 'Product Type (chilled/freeze)' },
   { key: 'productSize', label: 'Size (e.g. unsize, 40-45)' },
   { key: 'productYield', label: 'Yield' },
   { key: 'productWeight', label: 'Weight (kg)' },
-  { key: 'productSpeed', label: 'Speed' },
-  { key: 'productLead', label: 'Lead Time (days)' },
+  { key: 'productSpeed', label: 'Line Speed (kg/h)' },
+  { key: 'icutSpeed', label: 'I-Cut Speed (kg/h)' },
+  { key: 'minProductLead', label: 'Min Lead (days)' },
+  { key: 'maxProductLead', label: 'Max Lead (days)' },
+  { key: 'isExternalRmAllowed', label: 'Allow Ext RM (true/false)' },
 ];
 
 const SAMPLE_ROW = {
@@ -19,8 +21,11 @@ const SAMPLE_ROW = {
   'Size (e.g. unsize, 40-45)': 'unsize',
   'Yield': '0.84',
   'Weight (kg)': '2.0',
-  'Speed': '45',
-  'Lead Time (days)': '1',
+  'Line Speed (kg/h)': '45',
+  'I-Cut Speed (kg/h)': '0',
+  'Min Lead (days)': '1',
+  'Max Lead (days)': '3',
+  'Allow Ext RM (true/false)': 'false',
 };
 
 interface ImportSpecModalProps {
@@ -105,7 +110,10 @@ export default function ImportSpecModal({ isOpen, onClose, onImportDone }: Impor
       productYield: r.productYield ? parseFloat(r.productYield) : undefined,
       productWeight: r.productWeight ? parseFloat(r.productWeight) : undefined,
       productSpeed: r.productSpeed ? parseFloat(r.productSpeed) : undefined,
-      productLead: r.productLead ? parseInt(r.productLead) : undefined,
+      icutSpeed: r.icutSpeed ? parseFloat(r.icutSpeed) : undefined,
+      minProductLead: r.minProductLead ? parseInt(r.minProductLead) : undefined,
+      maxProductLead: r.maxProductLead ? parseInt(r.maxProductLead) : undefined,
+      isExternalRmAllowed: r.isExternalRmAllowed ? r.isExternalRmAllowed.toLowerCase() === 'true' : undefined,
     }));
 
     try {

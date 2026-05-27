@@ -215,7 +215,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
               JOIN AR_CUSTOMERS CUS ON CUS.CUSTOMER_ID = ODH.SOLD_TO_ORG_ID
         WHERE (ODT.NAME LIKE 'SFO%SO'
                 OR ODT.NAME LIKE 'SFO%F')
-        AND    EXTRACT(MONTH FROM ODL.SCHEDULE_SHIP_DATE) >= 5
+        AND    ODL.SCHEDULE_SHIP_DATE >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -3)
         AND    ODH.CANCELLED_FLAG = 'N'
         AND    ODH.ORG_ID = 82
         ORDER BY ODH.ORDERED_DATE DESC
@@ -277,8 +277,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
    */
   async getLocalOrderHeaders(): Promise<StgErpOrderHeader[]> {
     return this.stgErpOrderHeaderRepository.find({
-      order: { erpOrderDate: 'DESC' },
-      take: 1000
+      order: { erpOrderDate: 'DESC' }
     });
   }
 
@@ -437,8 +436,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
    */
   async getLocalOrderLines(): Promise<StgErpOrderLine[]> {
     return this.stgErpOrderLineRepository.find({
-      order: { erpOrderHeaderId: 'DESC', erpOrderLineNumber: 'ASC' },
-      take: 2000
+      order: { erpOrderHeaderId: 'DESC', erpOrderLineNumber: 'ASC' }
     });
   }
 
@@ -572,8 +570,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
   async getDemandOrders(): Promise<any[]> {
     // Limit to recent 1000 headers to prevent Out of Memory
     const headers = await this.stgErpOrderHeaderRepository.find({
-      order: { erpOrderDate: 'DESC' },
-      take: 1000,
+      order: { erpOrderDate: 'DESC' }
     });
 
     if (headers.length === 0) return [];
