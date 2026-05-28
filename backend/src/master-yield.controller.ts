@@ -10,12 +10,15 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { MasterYield } from './master-yield.entity';
+import { ProductSpec } from './product-spec.entity';
 
 @Controller('api/master-yield')
 export class MasterYieldController {
   constructor(
     @InjectRepository(MasterYield)
     private readonly masterYieldRepository: Repository<MasterYield>,
+    @InjectRepository(ProductSpec)
+    private readonly productSpecRepository: Repository<ProductSpec>,
   ) {}
 
   @Get()
@@ -48,15 +51,46 @@ export class MasterYieldController {
 
   @Delete(':id')
   async deleteNode(@Param('id') id: string) {
-    // Delete cascade is somewhat tricky in MS SQL without proper constraints.
-    // Let's delete it manually for simplicity if it has children, or just use delete.
     const node = await this.masterYieldRepository.findOne({
       where: { id },
       relations: ['children', 'children.children'],
     });
     if (!node) return { success: false };
 
-    // simple recursive delete for up to 3 levels
+    // Collect all IDs to delete
+    const idsToDelete = [id];
+    if (node.children) {
+      for (const child of node.children) {
+        idsToDelete.push(child.id);
+        if (child.children) {
+          for (const grandchild of child.children) {
+            idsToDelete.push(grandchild.id);
+          }
+        }
+      }
+    }
+
+    // 1. Cleanup ProductSpecs referencing these IDs
+    const allSpecs = await this.productSpecRepository.find();
+    const specsToUpdate = [];
+    
+    for (const spec of allSpecs) {
+      if (spec.masterYieldIds) {
+        const currentIds = spec.masterYieldIds.split(',').map(s => s.trim()).filter(s => s);
+        const filteredIds = currentIds.filter(cid => !idsToDelete.includes(cid));
+        
+        if (currentIds.length !== filteredIds.length) {
+          spec.masterYieldIds = filteredIds.length > 0 ? filteredIds.join(',') : null;
+          specsToUpdate.push(spec);
+        }
+      }
+    }
+
+    if (specsToUpdate.length > 0) {
+      await this.productSpecRepository.save(specsToUpdate);
+    }
+
+    // 2. Delete nodes (from bottom up to avoid FK constraints)
     if (node.children) {
       for (const child of node.children) {
         if (child.children) {

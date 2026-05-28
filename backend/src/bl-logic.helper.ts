@@ -214,9 +214,18 @@ export async function executeBlPlanGeneration(
   // ──────────────────────────────────────
   // 6. Classify orders
   // ──────────────────────────────────────
+  // Flow การผลิต BL ที่ถูกต้อง:
+  // Phase 1: I-Cut → RM BL → BLK ≤60g + BL-TH (20g range) + BL BLOCK (Co-Product)
+  // Phase 2: BL BLOCK ขายตรง (ถ้ามีออเดอร์)
+  // Phase 3: BL BLOCK ที่เหลือ → BLK (Belt Gate Sizing)
+  // Phase 4: BLK > 60g (คนตัด Manual) → RM BL
+  // Phase 5: BL-DR → RM BL-DR
+  // Phase 6: Manual Trimming อื่นๆ → RM BL ที่เหลือ
+
   const classifyOrder = (order: StgErpOrderLine) => {
     const spec = specMap.get(order.erpOrderItemCode);
     const desc = ((spec as any)?.erpItemDesc || order.erpOrderItemCode || '').toUpperCase();
+    if (desc.includes('BL BLOCK') || desc.includes('BL_BLOCK') || desc.includes('BLBLOCK')) return 'BL_BLOCK';
     if (desc.includes('BL TH') || desc.includes('BL-TH') || desc.includes('BLTH')) return 'BLTH';
     if (desc.includes('BL DR') || desc.includes('BL-DR') || desc.includes('BLDR')) return 'BLDR';
     if (desc.includes('BLK')) return 'BLK';
@@ -242,7 +251,6 @@ export async function executeBlPlanGeneration(
   };
 
   const extractBeltGateSize = (desc: string): { rmSize: string, targetProduct: string, yieldPct: number } | null => {
-    // Check against the database matrix rules (prioritized by 'priority' ASC)
     for (const rule of blBeltGateMatrix) {
       if (desc.includes(rule.targetProduct)) {
         return { rmSize: rule.rmSize, targetProduct: rule.targetProduct, yieldPct: Number(rule.yieldPct || 100) };
@@ -251,15 +259,19 @@ export async function executeBlPlanGeneration(
     return null;
   };
 
-  // Phase 1: Belt Gate Sizing (BLK, icutSpeed == 0, has Belt Gate mapping)
-  // Phase 2: Special Orders (BLTH, BLDR, icutSpeed == 0)
-  // Phase 3: I-Cut Orders (icutSpeed > 0)
-  // Phase 4: Manual Trimming (BLK or OTHER, icutSpeed == 0, no Belt Gate mapping)
-  
-  const phase1Orders: StgErpOrderLine[] = [];
-  const phase2Orders: StgErpOrderLine[] = [];
-  const phase3Orders: StgErpOrderLine[] = [];
-  const phase4Orders: StgErpOrderLine[] = [];
+  // Phase 1: I-Cut (icutSpeed > 0) → BLK ≤60g, BL-TH 20g range
+  // Phase 2: BL BLOCK direct sale
+  // Phase 3: BLK with Belt Gate mapping (uses BL BLOCK first, then RM BL)
+  // Phase 4: BLK manual (icutSpeed == 0, no Belt Gate mapping, > 60g) → RM BL
+  // Phase 5: BL-DR → RM BL-DR
+  // Phase 6: Manual Trimming / Other → remaining RM
+
+  const phase1IcutOrders: StgErpOrderLine[] = [];
+  const phase2BlBlockSaleOrders: StgErpOrderLine[] = [];
+  const phase3BlkFromBlockOrders: StgErpOrderLine[] = [];
+  const phase4ManualBlkOrders: StgErpOrderLine[] = [];
+  const phase5BlDrOrders: StgErpOrderLine[] = [];
+  const phase6ManualOtherOrders: StgErpOrderLine[] = [];
 
   for (const order of rawLines) {
     const spec = specMap.get(order.erpOrderItemCode);
@@ -267,26 +279,40 @@ export async function executeBlPlanGeneration(
     const classification = classifyOrder(order);
     const itemDesc = ((spec as any)?.erpItemDesc || order.erpOrderItemCode || '').toUpperCase();
 
-    if (icutSpeed > 0) {
-      phase3Orders.push(order);
-    } else if (['BLTH', 'BLDR'].includes(classification)) {
-      phase2Orders.push(order);
+    if (classification === 'BL_BLOCK') {
+      // BL BLOCK direct sale orders
+      phase2BlBlockSaleOrders.push(order);
+    } else if (icutSpeed > 0) {
+      // I-Cut orders (BLK ≤60g, BL-TH 20g range)
+      phase1IcutOrders.push(order);
+    } else if (classification === 'BLDR') {
+      // BL-DR special orders
+      phase5BlDrOrders.push(order);
     } else if (classification === 'BLK') {
+      // BLK without I-Cut → check Belt Gate mapping
       const mapping = extractBeltGateSize(itemDesc);
       if (mapping) {
-        phase1Orders.push(order);
+        // BLK with Belt Gate → use BL BLOCK first, then RM BL
+        phase3BlkFromBlockOrders.push(order);
       } else {
-        phase4Orders.push(order);
+        // BLK manual (> 60g, no Belt Gate) → RM BL directly
+        phase4ManualBlkOrders.push(order);
       }
+    } else if (classification === 'BLTH') {
+      // BL-TH without I-Cut → manual trimming
+      phase6ManualOtherOrders.push(order);
     } else {
-      phase4Orders.push(order);
+      // Other → manual trimming
+      phase6ManualOtherOrders.push(order);
     }
   }
 
-  phase1Orders.sort(prioritySort);
-  phase2Orders.sort(prioritySort);
-  phase3Orders.sort(prioritySort);
-  phase4Orders.sort(prioritySort);
+  phase1IcutOrders.sort(prioritySort);
+  phase2BlBlockSaleOrders.sort(prioritySort);
+  phase3BlkFromBlockOrders.sort(prioritySort);
+  phase4ManualBlkOrders.sort(prioritySort);
+  phase5BlDrOrders.sort(prioritySort);
+  phase6ManualOtherOrders.sort(prioritySort);
   // ──────────────────────────────────────
   // 7. Allocation helpers
   // ──────────────────────────────────────
@@ -340,10 +366,15 @@ export async function executeBlPlanGeneration(
     });
   };
 
-  // ──────────────────────────────────────
-  // Phase 1: Allocate Belt Gate Sizing Orders (BLK, icutSpeed == 0)
-  // ──────────────────────────────────────
-  for (const order of phase1Orders) {
+  // ══════════════════════════════════════
+  // Phase 1: I-Cut Orders (icutSpeed > 0)
+  // RM BL → สินค้าหลัก (BLK ≤60g / BL-TH) + BL BLOCK (Co-Product)
+  // ══════════════════════════════════════
+  const icutMaster = await manager.getRepository('ICutMaster').findOne({ where: { isActive: true } });
+  const coproductYieldPct = Number((icutMaster as any)?.coproductYieldPct ?? 0.20); // Default 0.20 (20%)
+  const mainYieldPct = 1.0 - coproductYieldPct;
+
+  for (const order of phase1IcutOrders) {
     const spec = specMap.get(order.erpOrderItemCode);
     const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
     const descUpper = itemDesc.toUpperCase();
@@ -354,113 +385,7 @@ export async function executeBlPlanGeneration(
     let remainingQty = orderQty;
     const shipDate = new Date(order.erpOrderShipDate);
 
-    const requiredMapping = extractBeltGateSize(descUpper);
-    if (!requiredMapping) {
-      // Should not happen due to pre-filtering, but fallback
-      phase4Orders.push(order);
-      continue;
-    }
-    const requiredSize = requiredMapping.rmSize;
-    const yieldMultiplier = requiredMapping.yieldPct / 100;
-
-    // Try to allocate from specific size bucket
-    for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
-      if (remainingQty <= 0) break;
-      const prodDate = subtractDays(shipDate, leadDay);
-      const dateStr = formatDate(prodDate);
-      const sup = supplyMap.get(dateStr);
-      if (!sup) continue;
-
-      const availSizeKg = sup.blSizes[requiredSize] || 0;
-      if (availSizeKg <= 0) continue;
-
-      const rmNeeded = remainingQty / yieldMultiplier;
-      const allocRmQty = Math.round(Math.min(availSizeKg, rmNeeded));
-      if (allocRmQty <= 0) continue;
-
-      const productProduced = Math.round(allocRmQty * yieldMultiplier);
-
-      sup.blSizes[requiredSize] -= allocRmQty;
-      sup.available.BL -= allocRmQty;
-      remainingQty -= productProduced;
-
-      mpsOrdersToSave.push(createOrderRecord(order, productProduced, prodDate, shipDate, itemDesc, productType));
-    }
-
-    if (remainingQty > 0) {
-      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `RM BL Size ${requiredSize} supply ไม่เพียงพอสำหรับ order Sizing นี้`));
-    }
-  }
-
-  // ──────────────────────────────────────
-  // Phase 2: Allocate Special Orders (BL-TH, BL-DR)
-  // ──────────────────────────────────────
-  for (const order of phase2Orders) {
-    const type = classifyOrder(order);
-    const rmType = type === 'BLTH' ? 'BLTH' : 'BLDR';
-    const spec = specMap.get(order.erpOrderItemCode);
-    const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
-    const productType = (spec as any)?.productType || 'Freeze';
-    const minLead = (spec as any)?.minProductLead ?? 1;
-    const maxLead = (spec as any)?.maxProductLead ?? 3;
-    const orderQty = Number(order.erpOrderItemQty || 0);
-    let remainingQty = orderQty;
-    const shipDate = new Date(order.erpOrderShipDate);
-
-    for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
-      if (remainingQty <= 0) break;
-      const prodDate = subtractDays(shipDate, leadDay);
-      const dateStr = formatDate(prodDate);
-      const sup = supplyMap.get(dateStr);
-      if (!sup) continue;
-
-      const avail = sup.available[rmType];
-      if (avail <= 0) continue;
-
-      const allocQty = Math.round(Math.min(avail, remainingQty));
-      if (allocQty <= 0) continue;
-
-      sup.available[rmType] -= allocQty;
-      remainingQty -= allocQty;
-
-      mpsOrdersToSave.push(createOrderRecord(order, allocQty, prodDate, shipDate, itemDesc, productType));
-    }
-
-    if (remainingQty > 0) {
-      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `RM ${rmType} supply ไม่เพียงพอสำหรับ order Special นี้`));
-    }
-  }
-
-  // ──────────────────────────────────────
-  // Phase 3: Allocate I-CUT Orders (icutSpeed > 0)
-  // ──────────────────────────────────────
-  // I-Cut produces Co-Product "BL BLOCK" which is used in Phase 4
-  const icutMaster = await manager.getRepository('ICutMaster').findOne({ where: { status: 'ACTIVE' } });
-  const coproductYieldPct = Number((icutMaster as any)?.coproductYieldPct || 20); // Default 20% BL BLOCK
-  const mainYieldPct = 100 - coproductYieldPct;
-
-  for (const order of phase3Orders) {
-    const spec = specMap.get(order.erpOrderItemCode);
-    const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
-    const descUpper = itemDesc.toUpperCase();
-    const productType = (spec as any)?.productType || 'Freeze';
-    const minLead = (spec as any)?.minProductLead ?? 1;
-    const maxLead = (spec as any)?.maxProductLead ?? 3;
-    const orderQty = Number(order.erpOrderItemQty || 0);
-    let remainingQty = orderQty;
-    const shipDate = new Date(order.erpOrderShipDate);
-
-    // Determine target size for BL BLOCK (1 step lower)
-    const weightMatch = descUpper.match(/(\d+)\s*[-–]\s*(\d+)/);
-    let generatedBlockKey = 'BL_BLOCK_UNSIZED';
-    if (weightMatch) {
-      const minW = parseInt(weightMatch[1]);
-      const maxW = parseInt(weightMatch[2]);
-      const diff = maxW - minW;
-      generatedBlockKey = `BL_BLOCK_${Math.max(0, minW - diff)}_${Math.max(0, maxW - diff)}`;
-    }
-
-    const yieldMultiplier = mainYieldPct / 100;
+    const yieldMultiplier = mainYieldPct;
 
     for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
       if (remainingQty <= 0) break;
@@ -472,29 +397,33 @@ export async function executeBlPlanGeneration(
       const avail = sup.available.BL;
       if (avail <= 0) continue;
 
+      // Check I-Cut capacity
+      const tracker = getTracker(dateStr);
+      const icutRemaining = MAX_ICUT_KG_PER_DAY - tracker.icutUsedKg;
+      if (icutRemaining <= 0) continue;
+
       const rmNeeded = remainingQty / yieldMultiplier;
-      const allocRmQty = Math.round(Math.min(avail, rmNeeded));
+      const allocRmQty = Math.round(Math.min(avail, rmNeeded, icutRemaining));
       if (allocRmQty <= 0) continue;
 
       const productProduced = Math.round(allocRmQty * yieldMultiplier);
       const blockProduced = allocRmQty - productProduced;
 
       // Track I-Cut Capacity
-      const tracker = getTracker(dateStr);
       tracker.icutUsedKg += allocRmQty;
 
-      // Deduct RM and add BL BLOCK
+      // Deduct RM BL
       sup.available.BL -= allocRmQty;
       remainingQty -= productProduced;
-      
-      sup.blSizes[generatedBlockKey] = (sup.blSizes[generatedBlockKey] || 0) + blockProduced;
-      // Mark total BL BLOCK for reporting
+
+      // Generate BL BLOCK co-product (available for Phase 2 & 3)
+      sup.blSizes['BL_BLOCK_UNSIZED'] = (sup.blSizes['BL_BLOCK_UNSIZED'] || 0) + blockProduced;
       sup.blSizes['TOTAL_BL_BLOCK'] = (sup.blSizes['TOTAL_BL_BLOCK'] || 0) + blockProduced;
 
       // Deduct from general blSizes proportionally
       let remainingToDeduct = allocRmQty;
       for (const [sz, qty] of Object.entries(sup.blSizes)) {
-        if (sz.startsWith('BL_BLOCK_') || sz === 'TOTAL_BL_BLOCK') continue;
+        if (sz.startsWith('BL_BLOCK') || sz === 'TOTAL_BL_BLOCK') continue;
         if (remainingToDeduct <= 0) break;
         if (qty > 0) {
           const deduct = Math.min(qty, remainingToDeduct);
@@ -507,15 +436,63 @@ export async function executeBlPlanGeneration(
     }
 
     if (remainingQty > 0) {
-      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `RM BL supply ไม่เพียงพอสำหรับ order I-Cut นี้`));
+      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `RM BL supply หรือ I-Cut capacity ไม่เพียงพอสำหรับ order I-Cut นี้`));
     }
   }
 
-  // ──────────────────────────────────────
-  // Phase 4: Allocate Manual Trimming Orders (No I-Cut, No Belt Gate)
-  // ──────────────────────────────────────
-  phase4Orders.sort(prioritySort);
-  for (const order of phase4Orders) {
+  // ══════════════════════════════════════
+  // Phase 2: BL BLOCK Direct Sale (ถ้ามีออเดอร์ขาย BL BLOCK ตรง)
+  // ══════════════════════════════════════
+  for (const order of phase2BlBlockSaleOrders) {
+    const spec = specMap.get(order.erpOrderItemCode);
+    const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
+    const productType = (spec as any)?.productType || 'Freeze';
+    const minLead = (spec as any)?.minProductLead ?? 1;
+    const maxLead = (spec as any)?.maxProductLead ?? 3;
+    const orderQty = Number(order.erpOrderItemQty || 0);
+    let remainingQty = orderQty;
+    const shipDate = new Date(order.erpOrderShipDate);
+
+    for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
+      if (remainingQty <= 0) break;
+      const prodDate = subtractDays(shipDate, leadDay);
+      const dateStr = formatDate(prodDate);
+      const sup = supplyMap.get(dateStr);
+      if (!sup) continue;
+
+      const availBlock = sup.blSizes['TOTAL_BL_BLOCK'] || 0;
+      if (availBlock <= 0) continue;
+
+      const allocQty = Math.round(Math.min(availBlock, remainingQty));
+      if (allocQty <= 0) continue;
+
+      // Deduct from BL BLOCK pools
+      let toDeduct = allocQty;
+      for (const sz of Object.keys(sup.blSizes)) {
+        if (sz.startsWith('BL_BLOCK_') && sz !== 'TOTAL_BL_BLOCK') {
+          const availSz = sup.blSizes[sz];
+          if (availSz > 0 && toDeduct > 0) {
+            const use = Math.min(availSz, toDeduct);
+            sup.blSizes[sz] -= use;
+            toDeduct -= use;
+          }
+        }
+      }
+      sup.blSizes['TOTAL_BL_BLOCK'] -= allocQty;
+      remainingQty -= allocQty;
+
+      mpsOrdersToSave.push(createOrderRecord(order, allocQty, prodDate, shipDate, itemDesc, productType));
+    }
+
+    if (remainingQty > 0) {
+      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `BL BLOCK supply ไม่เพียงพอสำหรับ order ขายตรง BL BLOCK นี้`));
+    }
+  }
+
+  // ══════════════════════════════════════
+  // Phase 3: BLK from BL BLOCK (Belt Gate Sizing, ดึง BL BLOCK ก่อน แล้วค่อยดึง RM BL)
+  // ══════════════════════════════════════
+  for (const order of phase3BlkFromBlockOrders) {
     const spec = specMap.get(order.erpOrderItemCode);
     const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
     const descUpper = itemDesc.toUpperCase();
@@ -526,17 +503,12 @@ export async function executeBlPlanGeneration(
     let remainingQty = orderQty;
     const shipDate = new Date(order.erpOrderShipDate);
 
-    // Manual Trimming matches the BL BLOCK size
-    const weightMatch = descUpper.match(/(\d+)\s*[-–]\s*(\d+)/);
-    let targetBlockKey = 'BL_BLOCK_UNSIZED';
-    if (weightMatch) {
-      const minW = parseInt(weightMatch[1]);
-      const maxW = parseInt(weightMatch[2]);
-      targetBlockKey = `BL_BLOCK_${minW}_${maxW}`;
+    const requiredMapping = extractBeltGateSize(descUpper);
+    if (!requiredMapping) {
+      phase4ManualBlkOrders.push(order);
+      continue;
     }
-
-    const manualConfig = deps.machineConfigs.find((c: any) => c.machineKey === 'manual_trim');
-    const manualYield = manualConfig ? Number(manualConfig.yieldPercentage || 0.90) : 0.90;
+    const yieldMultiplier = requiredMapping.yieldPct / 100;
 
     for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
       if (remainingQty <= 0) break;
@@ -545,35 +517,30 @@ export async function executeBlPlanGeneration(
       const sup = supplyMap.get(dateStr);
       if (!sup) continue;
 
-      const rmNeeded = remainingQty / manualYield;
+      const rmNeeded = remainingQty / yieldMultiplier;
       let allocRmQty = 0;
 
-      // 1. Try to use matching BL BLOCK first
-      const availBlock = sup.blSizes[targetBlockKey] || 0;
+      // 1. ดึง BL BLOCK ก่อน (Co-Product จาก I-Cut)
+      const availBlock = sup.blSizes['TOTAL_BL_BLOCK'] || 0;
       if (availBlock > 0) {
         const blockToUse = Math.min(availBlock, rmNeeded);
-        sup.blSizes[targetBlockKey] -= blockToUse;
+        // Deduct from BL BLOCK pools
+        let toDeduct = blockToUse;
+        for (const sz of Object.keys(sup.blSizes)) {
+          if (sz.startsWith('BL_BLOCK_') && sz !== 'TOTAL_BL_BLOCK') {
+            const availSz = sup.blSizes[sz];
+            if (availSz > 0 && toDeduct > 0) {
+              const use = Math.min(availSz, toDeduct);
+              sup.blSizes[sz] -= use;
+              toDeduct -= use;
+            }
+          }
+        }
         sup.blSizes['TOTAL_BL_BLOCK'] -= blockToUse;
         allocRmQty += blockToUse;
       }
 
-      // 2. Try any other BL BLOCK
-      if (allocRmQty < rmNeeded) {
-        for (const sz of Object.keys(sup.blSizes)) {
-          if (sz.startsWith('BL_BLOCK_') && sz !== 'TOTAL_BL_BLOCK' && sz !== targetBlockKey) {
-            const availOther = sup.blSizes[sz];
-            if (availOther > 0) {
-              const toUse = Math.min(availOther, rmNeeded - allocRmQty);
-              sup.blSizes[sz] -= toUse;
-              sup.blSizes['TOTAL_BL_BLOCK'] -= toUse;
-              allocRmQty += toUse;
-              if (allocRmQty >= rmNeeded) break;
-            }
-          }
-        }
-      }
-
-      // 3. Fallback to normal RM BL if still needed
+      // 2. ถ้า BL BLOCK ไม่พอ ค่อยดึง RM BL ปกติ
       if (allocRmQty < rmNeeded && sup.available.BL > 0) {
         const normalRmToUse = Math.min(sup.available.BL, rmNeeded - allocRmQty);
         sup.available.BL -= normalRmToUse;
@@ -582,7 +549,7 @@ export async function executeBlPlanGeneration(
         // Deduct from general blSizes proportionally
         let remainingToDeduct = normalRmToUse;
         for (const [sz, qty] of Object.entries(sup.blSizes)) {
-          if (sz.startsWith('BL_BLOCK_') || sz === 'TOTAL_BL_BLOCK') continue;
+          if (sz.startsWith('BL_BLOCK') || sz === 'TOTAL_BL_BLOCK') continue;
           if (remainingToDeduct <= 0) break;
           if (qty > 0) {
             const deduct = Math.min(qty, remainingToDeduct);
@@ -594,7 +561,181 @@ export async function executeBlPlanGeneration(
 
       if (allocRmQty <= 0) continue;
 
-      const productProduced = Math.round(allocRmQty * manualYield);
+      const productProduced = Math.round(allocRmQty * yieldMultiplier);
+      remainingQty -= productProduced;
+      mpsOrdersToSave.push(createOrderRecord(order, productProduced, prodDate, shipDate, itemDesc, productType));
+    }
+
+    if (remainingQty > 0) {
+      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `BL BLOCK + RM BL supply ไม่เพียงพอสำหรับ order BLK (Belt Gate) นี้`));
+    }
+  }
+
+  // ══════════════════════════════════════
+  // Phase 4: Manual BLK > 60g (คนตัด, ดึง RM BL โดยตรง)
+  // ══════════════════════════════════════
+  for (const order of phase4ManualBlkOrders) {
+    const spec = specMap.get(order.erpOrderItemCode);
+    const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
+    const productType = (spec as any)?.productType || 'Freeze';
+    const productYield = Number((spec as any)?.productYield || 0.90);
+    const minLead = (spec as any)?.minProductLead ?? 1;
+    const maxLead = (spec as any)?.maxProductLead ?? 3;
+    const orderQty = Number(order.erpOrderItemQty || 0);
+    let remainingQty = orderQty;
+    const shipDate = new Date(order.erpOrderShipDate);
+
+    for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
+      if (remainingQty <= 0) break;
+      const prodDate = subtractDays(shipDate, leadDay);
+      const dateStr = formatDate(prodDate);
+      const sup = supplyMap.get(dateStr);
+      if (!sup) continue;
+
+      const avail = sup.available.BL;
+      if (avail <= 0) continue;
+
+      const rmNeeded = remainingQty / productYield;
+      const allocRmQty = Math.round(Math.min(avail, rmNeeded));
+      if (allocRmQty <= 0) continue;
+
+      const productProduced = Math.round(allocRmQty * productYield);
+      sup.available.BL -= allocRmQty;
+      remainingQty -= productProduced;
+
+      const tracker = getTracker(dateStr);
+      tracker.manualUsedKg += allocRmQty;
+
+      // Deduct from general blSizes proportionally
+      let remainingToDeduct = allocRmQty;
+      for (const [sz, qty] of Object.entries(sup.blSizes)) {
+        if (sz.startsWith('BL_BLOCK') || sz === 'TOTAL_BL_BLOCK') continue;
+        if (remainingToDeduct <= 0) break;
+        if (qty > 0) {
+          const deduct = Math.min(qty, remainingToDeduct);
+          sup.blSizes[sz] -= deduct;
+          remainingToDeduct -= deduct;
+        }
+      }
+
+      mpsOrdersToSave.push(createOrderRecord(order, productProduced, prodDate, shipDate, itemDesc, productType));
+    }
+
+    if (remainingQty > 0) {
+      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `RM BL supply ไม่เพียงพอสำหรับ order BLK Manual (> 60g) นี้`));
+    }
+  }
+
+  // ══════════════════════════════════════
+  // Phase 5: BL-DR Special Orders (ดึง RM BL-DR)
+  // ══════════════════════════════════════
+  for (const order of phase5BlDrOrders) {
+    const spec = specMap.get(order.erpOrderItemCode);
+    const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
+    const productType = (spec as any)?.productType || 'Freeze';
+    const minLead = (spec as any)?.minProductLead ?? 1;
+    const maxLead = (spec as any)?.maxProductLead ?? 3;
+    const orderQty = Number(order.erpOrderItemQty || 0);
+    let remainingQty = orderQty;
+    const shipDate = new Date(order.erpOrderShipDate);
+
+    for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
+      if (remainingQty <= 0) break;
+      const prodDate = subtractDays(shipDate, leadDay);
+      const dateStr = formatDate(prodDate);
+      const sup = supplyMap.get(dateStr);
+      if (!sup) continue;
+
+      const avail = sup.available.BLDR;
+      if (avail <= 0) continue;
+
+      const allocQty = Math.round(Math.min(avail, remainingQty));
+      if (allocQty <= 0) continue;
+
+      sup.available.BLDR -= allocQty;
+      remainingQty -= allocQty;
+
+      mpsOrdersToSave.push(createOrderRecord(order, allocQty, prodDate, shipDate, itemDesc, productType));
+    }
+
+    if (remainingQty > 0) {
+      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `RM BL-DR supply ไม่เพียงพอสำหรับ order BL-DR นี้`));
+    }
+  }
+
+  // ══════════════════════════════════════
+  // Phase 6: Manual Trimming / Other (ดึง BL BLOCK ที่เหลือ + RM BL)
+  // ══════════════════════════════════════
+  for (const order of phase6ManualOtherOrders) {
+    const spec = specMap.get(order.erpOrderItemCode);
+    const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
+    const productType = (spec as any)?.productType || 'Freeze';
+    const productYield = Number((spec as any)?.productYield || 0.90);
+    const minLead = (spec as any)?.minProductLead ?? 1;
+    const maxLead = (spec as any)?.maxProductLead ?? 3;
+    const orderQty = Number(order.erpOrderItemQty || 0);
+    let remainingQty = orderQty;
+    const shipDate = new Date(order.erpOrderShipDate);
+    const classification = classifyOrder(order);
+
+    for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
+      if (remainingQty <= 0) break;
+      const prodDate = subtractDays(shipDate, leadDay);
+      const dateStr = formatDate(prodDate);
+      const sup = supplyMap.get(dateStr);
+      if (!sup) continue;
+
+      const rmNeeded = remainingQty / productYield;
+      let allocRmQty = 0;
+
+      // 1. ดึง BL BLOCK ที่เหลือก่อน (ถ้ามี)
+      const availBlock = sup.blSizes['TOTAL_BL_BLOCK'] || 0;
+      if (availBlock > 0) {
+        const blockToUse = Math.min(availBlock, rmNeeded);
+        let toDeduct = blockToUse;
+        for (const sz of Object.keys(sup.blSizes)) {
+          if (sz.startsWith('BL_BLOCK_') && sz !== 'TOTAL_BL_BLOCK') {
+            const availSz = sup.blSizes[sz];
+            if (availSz > 0 && toDeduct > 0) {
+              const use = Math.min(availSz, toDeduct);
+              sup.blSizes[sz] -= use;
+              toDeduct -= use;
+            }
+          }
+        }
+        sup.blSizes['TOTAL_BL_BLOCK'] -= blockToUse;
+        allocRmQty += blockToUse;
+      }
+
+      // 2. ดึง RM ตามประเภท (BLTH ดึง BL-TH, อื่นๆ ดึง BL)
+      if (allocRmQty < rmNeeded) {
+        if (classification === 'BLTH' && sup.available.BLTH > 0) {
+          const rmToUse = Math.min(sup.available.BLTH, rmNeeded - allocRmQty);
+          sup.available.BLTH -= rmToUse;
+          allocRmQty += rmToUse;
+        }
+        // Fallback to RM BL
+        if (allocRmQty < rmNeeded && sup.available.BL > 0) {
+          const normalRmToUse = Math.min(sup.available.BL, rmNeeded - allocRmQty);
+          sup.available.BL -= normalRmToUse;
+          allocRmQty += normalRmToUse;
+
+          let remainingToDeduct = normalRmToUse;
+          for (const [sz, qty] of Object.entries(sup.blSizes)) {
+            if (sz.startsWith('BL_BLOCK') || sz === 'TOTAL_BL_BLOCK') continue;
+            if (remainingToDeduct <= 0) break;
+            if (qty > 0) {
+              const deduct = Math.min(qty, remainingToDeduct);
+              sup.blSizes[sz] -= deduct;
+              remainingToDeduct -= deduct;
+            }
+          }
+        }
+      }
+
+      if (allocRmQty <= 0) continue;
+
+      const productProduced = Math.round(allocRmQty * productYield);
       const tracker = getTracker(dateStr);
       tracker.manualUsedKg += allocRmQty;
 
@@ -603,7 +744,7 @@ export async function executeBlPlanGeneration(
     }
 
     if (remainingQty > 0) {
-      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `RM BL supply ไม่เพียงพอสำหรับ order Manual (รวมถึง BL BLOCK)`));
+      exceptionsToSave.push(createExceptionRecord(order, remainingQty, shipDate, `RM supply ไม่เพียงพอสำหรับ order Manual นี้`));
     }
   }
 

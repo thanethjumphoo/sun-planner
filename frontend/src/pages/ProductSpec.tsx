@@ -316,12 +316,12 @@ const ProductSpec: React.FC = () => {
                     </div>
 
                     {/* Numeric fields */}
-                    <FormField label="Product Yield" value={form.productYield} step="0.01" onChange={v => setForm(f => ({...f, productYield: v}))} />
-                    <FormField label="Product Weight (kg)" value={form.productWeight} step="0.1" onChange={v => setForm(f => ({...f, productWeight: v}))} />
-                    <FormField label="Line Speed" value={form.productSpeed} step="1" onChange={v => setForm(f => ({...f, productSpeed: v}))} />
-                    <FormField label="I-Cut Speed (kg/h)" value={form.icutSpeed} step="1" onChange={v => setForm(f => ({...f, icutSpeed: v}))} hint="ใส่ 0 ถ้าไม่ได้ใช้ I-Cut" />
-                    <FormField label="Min Lead (days)" value={form.minProductLead} step="1" onChange={v => setForm(f => ({...f, minProductLead: v}))} hint={form.productType === 'chilled' ? 'Default: 1 (Chilled)' : 'Default: 5 (Freeze)'} />
-                    <FormField label="Max Lead (days)" value={form.maxProductLead} step="1" onChange={v => setForm(f => ({...f, maxProductLead: v}))} hint={form.productType === 'chilled' ? 'Default: 3 (Chilled)' : 'Default: 30 (Freeze)'} />
+                    <FormField label="Product Yield" value={form.productYield} step="0.01" onChange={(v: any) => setForm(f => ({...f, productYield: v}))} />
+                    <FormField label="Product Weight (kg)" value={form.productWeight} step="0.1" onChange={(v: any) => setForm(f => ({...f, productWeight: v}))} />
+                    <FormField label="Line Speed" value={form.productSpeed} step="1" onChange={(v: any) => setForm(f => ({...f, productSpeed: v}))} />
+                    <FormField label="I-Cut Speed (kg/h)" value={form.icutSpeed} step="1" onChange={(v: any) => setForm(f => ({...f, icutSpeed: v}))} hint="ใส่ 0 ถ้าไม่ได้ใช้ I-Cut" />
+                    <FormField label="Min Lead (days)" value={form.minProductLead} step="1" onChange={(v: any) => setForm(f => ({...f, minProductLead: v}))} hint={form.productType === 'chilled' ? 'Default: 1 (Chilled)' : 'Default: 5 (Freeze)'} />
+                    <FormField label="Max Lead (days)" value={form.maxProductLead} step="1" onChange={(v: any) => setForm(f => ({...f, maxProductLead: v}))} hint={form.productType === 'chilled' ? 'Default: 3 (Chilled)' : 'Default: 30 (Freeze)'} />
                     <div className="flex items-center gap-2 mt-4 ml-1 col-span-2 bg-orange-50 p-3 rounded-xl border border-orange-100">
                       <input type="checkbox" id="extRm" checked={form.isExternalRmAllowed} onChange={e => setForm(f => ({...f, isExternalRmAllowed: e.target.checked}))} className="w-4 h-4 text-orange-500 border-orange-300 rounded focus:ring-orange-500" />
                       <label htmlFor="extRm" className="text-sm font-semibold text-orange-800 cursor-pointer select-none">Allow usage of External RM Supply</label>
@@ -390,12 +390,12 @@ const ProductSpec: React.FC = () => {
                     </div>
 
                     {/* Numeric fields */}
-                    <FormField label="Product Yield" value={editData.productYield || 0} step="0.01" onChange={v => setEditData(d => ({...d, productYield: v}))} />
-                    <FormField label="Product Weight (kg)" value={editData.productWeight || 0} step="0.1" onChange={v => setEditData(d => ({...d, productWeight: v}))} />
-                    <FormField label="Line Speed" value={editData.productSpeed || 0} step="1" onChange={v => setEditData(d => ({...d, productSpeed: v}))} />
-                    <FormField label="I-Cut Speed (kg/h)" value={editData.icutSpeed || 0} step="1" onChange={v => setEditData(d => ({...d, icutSpeed: v}))} hint="ใส่ 0 ถ้าไม่ได้ใช้ I-Cut" />
-                    <FormField label="Min Lead (days)" value={editData.minProductLead || 0} step="1" onChange={v => setEditData(d => ({...d, minProductLead: v}))} hint={editData.productType === 'chilled' ? 'Default: 1 (Chilled)' : 'Default: 5 (Freeze)'} />
-                    <FormField label="Max Lead (days)" value={editData.maxProductLead || 0} step="1" onChange={v => setEditData(d => ({...d, maxProductLead: v}))} hint={editData.productType === 'chilled' ? 'Default: 3 (Chilled)' : 'Default: 30 (Freeze)'} />
+                    <FormField label="Product Yield" value={editData.productYield} step="0.01" onChange={(v: any) => setEditData(d => ({...d, productYield: v}))} />
+                    <FormField label="Product Weight (kg)" value={editData.productWeight} step="0.1" onChange={(v: any) => setEditData(d => ({...d, productWeight: v}))} />
+                    <FormField label="Line Speed" value={editData.productSpeed} step="1" onChange={(v: any) => setEditData(d => ({...d, productSpeed: v}))} />
+                    <FormField label="I-Cut Speed (kg/h)" value={editData.icutSpeed} step="1" onChange={(v: any) => setEditData(d => ({...d, icutSpeed: v}))} hint="ใส่ 0 ถ้าไม่ได้ใช้ I-Cut" />
+                    <FormField label="Min Lead (days)" value={editData.minProductLead} step="1" onChange={(v: any) => setEditData(d => ({...d, minProductLead: v}))} hint={editData.productType === 'chilled' ? 'Default: 1 (Chilled)' : 'Default: 5 (Freeze)'} />
+                    <FormField label="Max Lead (days)" value={editData.maxProductLead} step="1" onChange={(v: any) => setEditData(d => ({...d, maxProductLead: v}))} hint={editData.productType === 'chilled' ? 'Default: 3 (Chilled)' : 'Default: 30 (Freeze)'} />
                     <div className="flex items-center gap-2 mt-4 ml-1 col-span-2 bg-orange-50 p-3 rounded-xl border border-orange-100">
                       <input type="checkbox" id="editExtRm" checked={!!editData.isExternalRmAllowed} onChange={e => setEditData(d => ({...d, isExternalRmAllowed: e.target.checked}))} className="w-4 h-4 text-orange-500 border-orange-300 rounded focus:ring-orange-500" />
                       <label htmlFor="editExtRm" className="text-sm font-semibold text-orange-800 cursor-pointer select-none">Allow usage of External RM Supply</label>
@@ -456,12 +456,13 @@ const StatCard = ({ label, value, icon: Icon, color }: { label: string; value: a
   );
 };
 
-const FormField = ({ label, value, step, onChange, hint }: { label: string; value: number; step: string; onChange: (v: number) => void; hint?: string }) => (
+const FormField = ({ label, value, type = "number", step = "1", onChange, hint }: any) => (
   <div>
     <label className="block text-xs font-medium text-gray-500 mb-1.5">{label}</label>
-    <input type="number" step={step} value={value} onChange={e => onChange(parseFloat(e.target.value) || 0)}
-      className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-orange-300 focus:border-orange-400 outline-none bg-white" />
-    {hint && <p className="text-xs text-orange-500 mt-1">{hint}</p>}
+    <input type={type} step={step} value={value === undefined || value === null ? '' : value}
+      onChange={e => onChange(e.target.value)}
+      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-shadow outline-none" />
+    {hint && <p className="text-[10px] text-gray-400 mt-1">{hint}</p>}
   </div>
 );
 
