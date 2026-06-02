@@ -838,7 +838,7 @@ const DPSPlan: React.FC = () => {
             }
           }
 
-          const netFillet = rmFlTotal - totalSubproductsWeight;
+          const netFillet = rmFlTotal - mainCoproductWeight;
 
           let matchRow = null;
           if (loadedMatrix && loadedMatrix.rows.length > 0) {
@@ -2209,12 +2209,22 @@ const DPSPlan: React.FC = () => {
                       };
                       const matchingUnfulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg > 0);
                       const matchingFulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg <= 0);
+                      const otherUnfulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg > 0);
 
                       return (
                         <>
                           {matchingUnfulfilled.length > 0 && (
                             <optgroup label="Requires This Size (Unfulfilled)">
                               {matchingUnfulfilled.map(o => (
+                                <option key={o.id} value={o.id}>
+                                  {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {otherUnfulfilled.length > 0 && (
+                            <optgroup label="Other Sizes (Unfulfilled)">
+                              {otherUnfulfilled.map(o => (
                                 <option key={o.id} value={o.id}>
                                   {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
                                 </option>
@@ -2230,8 +2240,8 @@ const DPSPlan: React.FC = () => {
                               ))}
                             </optgroup>
                           )}
-                          {matchingUnfulfilled.length === 0 && matchingFulfilled.length === 0 && (
-                            <option disabled>No matching orders for this size</option>
+                          {matchingUnfulfilled.length === 0 && otherUnfulfilled.length === 0 && matchingFulfilled.length === 0 && (
+                            <option disabled>No matching orders</option>
                           )}
                         </>
                       );

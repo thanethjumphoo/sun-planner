@@ -257,9 +257,10 @@ const MPSPlan: React.FC = () => {
     return 'main';
   };
 
-  const isByproductSpec = (itemCode: string): boolean => {
+
+  const isMainProductSpec = (itemCode: string): boolean => {
     const type = getProductType(itemCode);
-    return type === 'byproduct';
+    return type === 'main';
   };
 
   const fetchDemandOrders = async () => {
@@ -371,8 +372,8 @@ const MPSPlan: React.FC = () => {
       console.error(e);
     }
   };
+  const [weeklyDates, setWeeklyDates] = useState<Set<string>>(new Set());
 
-  const [weeklySizes, setWeeklySizes] = useState<any[]>([]);
 
   const loadPlanForMonth = async (allPlans: any[]) => {
     const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
@@ -385,12 +386,29 @@ const MPSPlan: React.FC = () => {
           const json = await res.json();
           if (json.success) {
             setCurrentPlan(json.data);
-            // Fetch weekly sizes as well
-            const weekRes = await fetch(`${API}/api/mps/plans/${planForMonth.id}/weekly-sizes`);
-            if (weekRes.ok) {
-              const weekJson = await weekRes.json();
-              setWeeklySizes(weekJson.success ? weekJson.data : []);
+            
+            try {
+              const wRes = await fetch(`${API}/api/chicken-receiving/weekly`);
+              if (wRes.ok) {
+                const wJson = await wRes.json();
+                const dates = new Set<string>();
+                if (Array.isArray(wJson)) {
+                  wJson.forEach((w: any) => {
+                    const d = w.receive_date || w.receiveDate;
+                    if (d) {
+                      let dStr = '';
+                      if (typeof d === 'string') dStr = d.split('T')[0];
+                      else dStr = new Date(d).toISOString().split('T')[0];
+                      dates.add(dStr);
+                    }
+                  });
+                }
+                setWeeklyDates(dates);
+              }
+            } catch (err) {
+              console.error('Failed to fetch weekly intakes', err);
             }
+            
             return;
           }
         }
@@ -399,7 +417,7 @@ const MPSPlan: React.FC = () => {
       }
     }
     setCurrentPlan(null);
-    setWeeklySizes([]);
+    setWeeklyDates(new Set());
   };
 
   const handleDeletePlan = async (id: number) => {
@@ -699,7 +717,7 @@ const MPSPlan: React.FC = () => {
 
     const dailyOrders = Array.from(grouped.values());
 
-    const totalOrderQty = dailyOrders.filter((o: any) => !isByproductSpec(o.itemCode)).reduce((sum: number, o: any) => sum + o.qty, 0);
+    const totalOrderQty = dailyOrders.filter((o: any) => isMainProductSpec(o.itemCode)).reduce((sum: number, o: any) => sum + o.qty, 0);
 
     const getCodesByProcess = (categoryName: string, processName: string) => {
       const catNodes = yieldTree.filter((n: any) => n.type === 'CATEGORY' && n.name === categoryName);
@@ -777,7 +795,7 @@ const MPSPlan: React.FC = () => {
       const avgPieceWeight = bilPiecesTotal > 0 ? originalSupplyKg / bilPiecesTotal : 0.3;
 
       dailyOrders.forEach((o: any) => {
-        if (!isByproductSpec(o.itemCode)) {
+        if (isMainProductSpec(o.itemCode)) {
           if (bilProcess1Codes.includes(o.itemCode)) {
             demandP1 += o.qty;
             const spec = specs[o.itemCode];
@@ -896,7 +914,7 @@ const MPSPlan: React.FC = () => {
       totalManpowerPlan = deboneWorkers + totalTrimmingWorkers + xrayWorkers;
       requiredCuttingWorkers = p1CuttingStaff + separationCuttingStaff + trimmingWorkersBase;
     } else {
-      dailyOrders.filter((o: any) => !isByproductSpec(o.itemCode)).forEach((o: any) => {
+      dailyOrders.filter((o: any) => isMainProductSpec(o.itemCode)).forEach((o: any) => {
         const spec = specs[o.itemCode];
         const speed = spec?.productSpeed || 45;
         requiredCuttingWorkers += (o.qty / speed);
@@ -905,12 +923,40 @@ const MPSPlan: React.FC = () => {
       totalManpowerPlan = plannedStationWorkers + requiredCuttingWorkers;
     }
 
+    let blTracker = null;
+    if (dailySummary && dailySummary.blTrackerJson) {
+      try {
+        blTracker = JSON.parse(dailySummary.blTrackerJson);
+      } catch(e) {}
+    }
+
+    const selectedSupply = currentPlan.supplyBreakdown?.find((s: any) => formatDBDate(s.productionDate) === date) || {};
+    const getInternalSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+
+    const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(date));
+    let extSizes: Record<string, number> = {};
+    if (extDaily && extDaily.sizeBreakdownJson) {
+      try { extSizes = JSON.parse(extDaily.sizeBreakdownJson); } catch (e) {}
+    }
+    const getExternalSizeKg = (groupSize: string) => extSizes[groupSize] || 0;
+
+    const isBilType = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
+    const allBilSizes = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
+    Object.keys(extSizes).forEach(k => allBilSizes.add(k));
+
+    const sizeNames: string[] = isBilType
+      ? (Array.from(allBilSizes) as string[])
+      : ['40 Down', '40-45', '45-50', '50-55', '55-60', '60-65', '65-70', '70 Up'];
+
+    const estimatedNetOutput = sizeNames.reduce((sum: number, name: string) => sum + getInternalSizeKg(name) + getExternalSizeKg(name), 0);
+
     return {
       intake: dailySummary ? Number(dailySummary.intakeBirds) : 0,
       intakeKg: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
-      rmFlAvailable: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
-      totalOrderQty: dailySummary ? Number(dailySummary.demandKg) : totalOrderQty,
+      rmFlAvailable: estimatedNetOutput,
+      totalOrderQty: totalOrderQty,
       manpower: dailyOrders.length > 0 ? totalManpowerPlan : 0,
+      blTracker,
       manpowerBreakdown: {
         plannedStationWorkers: partId === 'bil' ? deboneWorkers + fixedTrimmingWorkers + xrayWorkers : plannedStationWorkers,
         plannedCuttingWorkers: requiredCuttingWorkers,
@@ -951,7 +997,7 @@ const MPSPlan: React.FC = () => {
   // --- Calculate Summary Stats ---
   const totalIntakeBirds = currentPlan?.totalIntakeBirds || 0;
   const totalRmFlAvail = currentPlan?.totalRmFlKg || 0;
-  const totalOrdersQty = currentPlan?.orders?.filter((o: any) => !isByproductSpec(o.itemCode)).reduce((sum: number, o: any) => sum + Number(o.quantityKg || 0), 0) || 0;
+  const totalOrdersQty = currentPlan?.orders?.filter((o: any) => isMainProductSpec(o.itemCode)).reduce((sum: number, o: any) => sum + Number(o.quantityKg || 0), 0) || 0;
 
   // Calculate average manpower only for active days
   let totalManpowerSum = 0;
@@ -1021,21 +1067,28 @@ const MPSPlan: React.FC = () => {
   const processedDemand = demandOrders.reduce((acc: any[], header: any) => {
     if (!header.lines) return acc;
 
+    const plannedOrders = currentPlan?.orders || [];
+
     const filteredLines = header.lines.filter((line: any) => {
       if (!line.erpOrderShipDate) return false;
       if (!specs[line.erpOrderItemCode]) return false;
       // Filter by allowed item codes from Master Yield Tree
       if (allowedItemCodes.length > 0 && !allowedItemCodes.includes(line.erpOrderItemCode)) return false;
+      
       const shipDate = new Date(line.erpOrderShipDate);
-      return shipDate.getFullYear() === currentMonth.getFullYear() &&
+      const isShipMonth = shipDate.getFullYear() === currentMonth.getFullYear() &&
         shipDate.getMonth() === currentMonth.getMonth();
+
+      const hasPlannedProductionThisMonth = plannedOrders.some((o: any) => o.erpOrderLineId === line.erpOrderLineId);
+
+      return isShipMonth || hasPlannedProductionThisMonth;
     });
 
     if (filteredLines.length > 0) {
-      const plannedOrders = currentPlan?.orders || [];
       const linesWithStatus = filteredLines.map((line: any) => {
         const planned = plannedOrders.filter((o: any) => o.erpOrderLineId === line.erpOrderLineId);
-        const totalPlanned = planned.reduce((s: number, o: any) => s + Number(o.quantityKg || 0), 0);
+        // Use totalAllocatedQty from backend which includes all plans, but fallback to current plan if not provided
+        const totalPlanned = line.totalAllocatedQty !== undefined ? Number(line.totalAllocatedQty) : planned.reduce((s: number, o: any) => s + Number(o.quantityKg || 0), 0);
         const qty = Number(line.erpOrderItemQty || 0);
         const isFull = totalPlanned >= qty * 0.99;
         const isNotPlanned = totalPlanned === 0;
@@ -1494,7 +1547,7 @@ const MPSPlan: React.FC = () => {
                     const dayNum = i + 1;
                     const todayDateStr = getTodayStr();
                     const isToday = date === todayDateStr;
-                    const hasWeekly = weeklySizes.some((sz: any) => parseSafeDate(sz.receiveDate) === date);
+                    const hasWeekly = weeklyDates.has(date);
 
                     return (
                       <div
@@ -2100,12 +2153,12 @@ const MPSPlan: React.FC = () => {
                   {/* Top Summary Chips */}
                   <div className="grid grid-cols-2 gap-3">
                     {partId === 'bl' ? (() => {
-                      // Parse BL supply from byProducts JSON
-                      let blBp: any = {};
-                      try { blBp = JSON.parse(selectedSupply.byProducts || '{}'); } catch(e) {}
-                      const blKg = Number(blBp['BL']?.kg || blBp['BL-DEBONE']?.qty || 0);
-                      const blThKg = Number(blBp['BL-TH']?.kg || 0);
-                      const blDrKg = Number(blBp['BL-DR']?.kg || 0);
+                      const metrics = calculateDailyMetrics(selectedDate);
+                      const trk = metrics.blTracker || {};
+                      const rm = trk.rmBreakdown || {};
+                      const blKg = Number(rm.bl || 0);
+                      const blThKg = Number(rm.blTh || 0);
+                      const blDrKg = Number(rm.blDr || 0);
                       const totalBl = blKg + blThKg + blDrKg;
                       return [
                         { label: 'RM BL (ทั้งชิ้น)', val: blKg, unit: 'kg', color: 'blue' },
@@ -2142,44 +2195,113 @@ const MPSPlan: React.FC = () => {
                   </div>
 
                   {/* Section 2: Manpower / I-CUT Capacity */}
-                  {partId === 'bl' ? (
-                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
-                      <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
-                        <Zap size={16} className="text-indigo-500" />
-                        I-CUT Capacity & Manual Trimming
-                      </h4>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm">
-                          <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">I-CUT ที่ใช้</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-indigo-900">0</span>
-                            <span className="text-[9px] font-bold text-indigo-400">kg</span>
+                  {partId === 'bl' ? (() => {
+                    const metrics = calculateDailyMetrics(selectedDate);
+                    const trk = metrics.blTracker || {};
+                    const icutKg = Number(trk.icutUsedKg || 0);
+                    const icutHours = Number(trk.icutUsedHours || 0);
+                    const manualKg = Number(trk.manualUsedKg || 0);
+                    const icutCap = Number(trk.icutCapacityHours || 37); 
+                    const icutUtil = icutCap > 0 ? (icutHours / icutCap) * 100 : 0;
+                    const manualCapPerPerson = 200; // e.g. 200kg per person per day
+                    const manualPeople = Math.ceil(manualKg / manualCapPerPerson);
+                    
+                    const blBlockProduced = Number(trk.blBlockProduced || 0);
+                    const blBlockUsed = Number(trk.blBlockUsed || 0);
+                    const blBlockRemaining = blBlockProduced - blBlockUsed;
+                    
+                    return (
+                    <div className="space-y-6">
+                      <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
+                        <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
+                          <Zap size={16} className="text-indigo-500" />
+                          I-CUT Capacity & Manual Trimming
+                        </h4>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
+                            <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">I-CUT PROCESS (เนื้อเข้าเครื่อง)</p>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-2xl font-black text-indigo-900">{Math.round(icutKg).toLocaleString()}</span>
+                              <span className="text-[9px] font-bold text-indigo-400">kg</span>
+                            </div>
                           </div>
-                        </div>
-                        <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm">
-                          <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">I-CUT Cap/Day</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-indigo-900">10,000</span>
-                            <span className="text-[9px] font-bold text-indigo-400">kg</span>
+                          <div className="bg-white/80 p-3 rounded-xl border border-indigo-200 shadow-sm flex flex-col justify-center">
+                            <p className="text-[10px] font-bold text-indigo-500 uppercase mb-1">I-CUT HOURS (เวลาเดินเครื่อง)</p>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-2xl font-black text-indigo-900">{icutHours.toFixed(1)}</span>
+                              <span className="text-[9px] font-bold text-indigo-400">/ {icutCap.toFixed(1)} ชม.</span>
+                            </div>
                           </div>
-                        </div>
-                        <div className="bg-white/80 p-3 rounded-xl border border-amber-200 shadow-sm">
-                          <p className="text-[10px] font-bold text-amber-500 uppercase mb-1">Manual Trim</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-amber-900">0</span>
-                            <span className="text-[9px] font-bold text-amber-400">kg</span>
+                          <div className="bg-white/80 p-3 rounded-xl border border-amber-200 shadow-sm flex flex-col justify-center">
+                            <p className="text-[10px] font-bold text-amber-500 uppercase mb-1">MANUAL TRIM (ให้คนตัด)</p>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-2xl font-black text-amber-900">{Math.round(manualKg).toLocaleString()}</span>
+                              <span className="text-[9px] font-bold text-amber-400">kg ({manualPeople} คน)</span>
+                            </div>
                           </div>
-                        </div>
-                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm">
-                          <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">I-CUT Utilization</p>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-black text-emerald-900">0</span>
-                            <span className="text-[9px] font-bold text-emerald-500">%</span>
+                          <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-center">
+                            <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">I-CUT UTILIZATION (ประสิทธิภาพ)</p>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-2xl font-black text-emerald-900">{icutUtil.toFixed(1)}</span>
+                              <span className="text-[9px] font-bold text-emerald-500">%</span>
+                            </div>
                           </div>
                         </div>
                       </div>
+
+                      {/* BL BLOCK Tracking */}
+                      <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
+                        <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
+                          <Package size={16} className="text-orange-500" />
+                          BL BLOCK Tracking (Co-Product)
+                        </h4>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="bg-white/80 p-3 rounded-xl border border-emerald-200 shadow-sm">
+                            <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">ผลิตได้ (Produced)</p>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-2xl font-black text-emerald-900">+{Math.round(blBlockProduced).toLocaleString()}</span>
+                              <span className="text-[9px] font-bold text-emerald-500">kg</span>
+                            </div>
+                          </div>
+                          <div className="bg-white/80 p-3 rounded-xl border border-red-200 shadow-sm">
+                            <p className="text-[10px] font-bold text-red-500 uppercase mb-1">ดึงไปใช้ (Used)</p>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-2xl font-black text-red-900">-{Math.round(blBlockUsed).toLocaleString()}</span>
+                              <span className="text-[9px] font-bold text-red-400">kg</span>
+                            </div>
+                          </div>
+                          <div className="bg-white/80 p-3 rounded-xl border border-orange-200 shadow-sm">
+                            <p className="text-[10px] font-bold text-orange-600 uppercase mb-1">คงเหลือ (Remaining)</p>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-2xl font-black text-orange-900">{Math.round(blBlockRemaining).toLocaleString()}</span>
+                              <span className="text-[9px] font-bold text-orange-500">kg</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Belt Gate Size Breakdown */}
+                      {trk.beltGateSizes && Object.keys(trk.beltGateSizes).length > 0 && (
+                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-4">
+                          <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                            <Layers size={16} className="text-slate-500" />
+                            Belt Gate Sizes (RM BL)
+                          </h4>
+                          <div className="flex flex-wrap gap-2">
+                            {Object.entries(trk.beltGateSizes)
+                              .filter(([sz, qty]) => Number(qty) > 0 && !sz.startsWith('BL_BLOCK'))
+                              .map(([sz, qty]) => (
+                              <div key={sz} className="bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm flex items-center gap-2">
+                                <span className="text-[11px] font-bold text-slate-600">{sz}</span>
+                                <span className="text-sm font-black text-slate-900">{Math.round(Number(qty)).toLocaleString()} <span className="text-[10px] font-medium text-slate-400">kg</span></span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  ) : selectedManpower && (
+                    );
+                  })() : selectedManpower && (
                     <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
                       <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
                         <Users size={16} className="text-indigo-500" />
@@ -2533,16 +2655,10 @@ const MPSPlan: React.FC = () => {
                           } catch (e) {}
                         }
 
-                        const getMonthSizeKg = (groupSize: string) => {
+                        const getInternalSizeKg = (groupSize: string) => {
                           if (partId === 'bl') return Number(blSizes[groupSize] || 0);
                           return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
                         };
-                        const getWeekSizeKg = (groupSize: string) => {
-                          if (partId === 'bl') return Number(blSizes[groupSize] || 0);
-                          return weeklySizes.filter((sz: any) => sz.groupSize === groupSize && parseSafeDate(sz.receiveDate) === selectedDate).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                        };
-                        const hasWeekly = partId === 'bl' ? false : weeklySizes.some((sz: any) => parseSafeDate(sz.receiveDate) === selectedDate);
-                        const getInternalSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
 
                         // Find External RM for selectedDate
                         const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(selectedDate));
@@ -2586,19 +2702,12 @@ const MPSPlan: React.FC = () => {
                         return currentSizeLabels.map((size, idx) => {
                           const internalVal = getInternalSizeKg(size.label as string);
                           const externalVal = getExternalSizeKg(size.label as string);
-                          const monthVal = getMonthSizeKg(size.label as string);
-                          const diff = hasWeekly ? internalVal - monthVal : 0;
                           const totalVal = internalVal + externalVal;
 
                           return (
                             <div key={idx} className="bg-white border border-gray-100 p-3 rounded-xl shadow-sm hover:border-orange-200 transition-all flex flex-col justify-between">
                               <div className="flex justify-between items-start mb-2">
                                 <p className="text-[10px] font-bold text-gray-800 uppercase bg-gray-100 px-1.5 py-0.5 rounded">{String(size.label)}</p>
-                                {hasWeekly && diff !== 0 && (
-                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${diff > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                                    {diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()} kg
-                                  </span>
-                                )}
                               </div>
                               <div className="space-y-1 mt-1">
                                 <div className="flex justify-between items-center text-[10px]">
@@ -2629,9 +2738,7 @@ const MPSPlan: React.FC = () => {
                       <p className="text-gray-400 font-bold uppercase text-[10px] mb-1">Estimated Net Output (Aggregate)</p>
                       {(() => {
                         const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                        const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && parseSafeDate(sz.receiveDate) === selectedDate).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                        const hasWeekly = weeklySizes.some((sz: any) => parseSafeDate(sz.receiveDate) === selectedDate);
-                        const getInternalSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+                        const getInternalSizeKg = (groupSize: string) => getMonthSizeKg(groupSize);
 
                         const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(selectedDate));
                         let extSizes: Record<string, number> = {};
@@ -2640,7 +2747,7 @@ const MPSPlan: React.FC = () => {
                         }
                         const getExternalSizeKg = (groupSize: string) => extSizes[groupSize] || 0;
 
-                        const isBil = currentPlan?.partType === 'bil';
+                        const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
                         
                         const allBilSizes = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
                         Object.keys(extSizes).forEach(k => allBilSizes.add(k));
@@ -2650,19 +2757,12 @@ const MPSPlan: React.FC = () => {
                           : ['40 Down', '40-45', '45-50', '50-55', '55-60', '60-65', '65-70', '70 Up'];
 
                         const total = sizeNames.reduce((sum: number, name: string) => sum + getInternalSizeKg(name) + getExternalSizeKg(name), 0);
-                        const monthTotal = sizeNames.reduce((sum: number, name: string) => sum + getMonthSizeKg(name) + getExternalSizeKg(name), 0);
-                        const diff = hasWeekly ? total - monthTotal : 0;
 
                         return (
                           <>
                             <h5 className="text-3xl font-bold flex items-baseline gap-2">
                               {Math.round(total).toLocaleString()}
                               <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">KG</span>
-                              {hasWeekly && diff !== 0 && (
-                                <span className={`text-sm ml-2 font-bold ${diff > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                  ({diff > 0 ? '+' : ''}{Math.round(diff).toLocaleString()})
-                                </span>
-                              )}
                             </h5>
                           </>
                         );
@@ -2676,11 +2776,9 @@ const MPSPlan: React.FC = () => {
                       <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden flex">
                         {(() => {
                           const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                          const getWeekSizeKg = (groupSize: string) => weeklySizes.filter((sz: any) => sz.groupSize === groupSize && parseSafeDate(sz.receiveDate) === selectedDate).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-                          const hasWeekly = weeklySizes.some((sz: any) => parseSafeDate(sz.receiveDate) === selectedDate);
-                          const getSizeKg = (groupSize: string) => hasWeekly ? getWeekSizeKg(groupSize) : getMonthSizeKg(groupSize);
+                          const getSizeKg = (groupSize: string) => getMonthSizeKg(groupSize);
 
-                          const isBil = currentPlan?.partType === 'bil';
+                          const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
                           const currentSizeLabels = isBil
                             ? (Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string))) as string[])
                               .map((label, idx) => ({
@@ -2761,7 +2859,7 @@ const MPSPlan: React.FC = () => {
                           return <div className="text-sm text-amber-600 italic col-span-full">No By Products generated for the selected orders.</div>;
                         }
 
-                        const isBil = currentPlan?.partType === 'bil';
+                        const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
                         
                         const isBlMain = (name: string) => {
                           const n = name.toUpperCase();
@@ -3091,16 +3189,23 @@ const MPSPlan: React.FC = () => {
                                     </div>
                                     {isExpanded && ords.length > 0 && (
                                       <div className={`ml-5 mt-1 mb-2 border-l-2 ${expandedBorder} pl-3 space-y-1`}>
-                                        {ords.map((ord: any, idx: number) => (
+                                        {ords.map((ord: any, idx: number) => {
+                                          const spec = specs[ord.itemCode];
+                                          return (
                                           <div key={idx} className="flex items-center gap-2 text-[11px] py-1 px-2 bg-white/80 rounded border border-gray-100">
                                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${ord.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
                                               {ord.type === 'chilled' ? 'C' : 'F'}
                                             </span>
+                                            {Number(spec?.icutSpeed) > 0 && (
+                                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200 uppercase tracking-tighter">
+                                                I-CUT
+                                              </span>
+                                            )}
                                             <span className="font-bold text-gray-700">{ord.soNumber}</span>
                                             <span className="text-gray-400 text-[10px]">{ord.itemCode}</span>
                                             <span className="ml-auto font-bold text-gray-900">{Math.round(ord.qty).toLocaleString()} kg</span>
                                           </div>
-                                        ))}
+                                        )})}
                                       </div>
                                     )}
                                   </div>
@@ -3137,10 +3242,15 @@ const MPSPlan: React.FC = () => {
                                             <div className="font-bold text-gray-800">{order.soNumber}</div>
                                             <div className="text-[10px] text-gray-400">{order.itemCode}</div>
                                           </td>
-                                          <td className="px-3 py-2">
+                                          <td className="px-3 py-2 flex items-center gap-1">
                                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${order.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
                                               {order.type}
                                             </span>
+                                            {Number(spec?.icutSpeed) > 0 && (
+                                              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">
+                                                I-CUT
+                                              </span>
+                                            )}
                                           </td>
                                           <td className="px-3 py-2 font-bold text-gray-700">{size}</td>
                                           <td className="px-3 py-2 text-right font-bold text-gray-900">{Math.round(order.qty).toLocaleString()}</td>
@@ -3165,12 +3275,12 @@ const MPSPlan: React.FC = () => {
                           <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 space-y-3">
                             <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
                             {(() => {
-                              const isBil = currentPlan?.partType === 'bil';
+                              const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
                               // Derive base sizes from entire plan supply to know all standard bins
                               const allSupplySizesSet = new Set<string>([
-                                "180 Down", "180-210", "210-230", "230-260", "260-280", 
-                                "280-310", "310-330", "330-360", "360-390", "390-410", 
-                                "410-440", "440-460", "460-490"
+                                "140 Down", "140-160", "160-180", "180-200", "200-220", 
+                                "220-240", "240-260", "260-280", "280-300", "300-320", 
+                                "320-340", "340-360", "360-380", "380 Up"
                               ]);
                               currentPlan?.supplyBreakdown?.forEach((s: any) => {
                                 if (s.sizes) s.sizes.forEach((sz: any) => { if (sz.groupSize) allSupplySizesSet.add(sz.groupSize); });
@@ -3253,8 +3363,17 @@ const MPSPlan: React.FC = () => {
                                   { key: '65_70', label: '65-70', groupSize: '65-70', color: 'bg-orange-500' },
                                   { key: '70Up', label: '70 Up', groupSize: '70 Up', color: 'bg-red-500' },
                                 ];
+                              const metrics = calculateDailyMetrics(selectedDate);
+                              const trk = metrics.blTracker || {};
+                              
                               // Helper: get supply kg from normalized sizes array
                               const getSupplySizeKg = (groupSize: string): number => {
+                                if (currentPlan?.partType === 'bl') {
+                                  // Look for exact match or 'BL ' prefixed match
+                                  const key1 = `BL ${groupSize}`;
+                                  const key2 = groupSize;
+                                  return Number(trk.beltGateSizes?.[key1] || trk.beltGateSizes?.[key2] || 0);
+                                }
                                 return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
                               };
                               const allBinDefs = [
@@ -3277,7 +3396,7 @@ const MPSPlan: React.FC = () => {
                                   const match = sizeLabels.find(sl => sl.label.toLowerCase() === s);
                                   if (match) return [match.key];
 
-                                  // 2. Range Overlap mapping for BIL
+                                  // 2. Range Overlap mapping for BIL/BL
                                   let lo = -1, hi = -1;
                                   if (s.includes('down')) {
                                     const m = s.match(/(\d+)/);
@@ -3287,11 +3406,23 @@ const MPSPlan: React.FC = () => {
                                     if (m) { lo = parseInt(m[1], 10); hi = 9999; }
                                   } else {
                                     const m = s.match(/(\d+)\s*[-–]\s*(\d+)/);
-                                    if (m) { lo = parseInt(m[1], 10); hi = parseInt(m[2], 10); }
+                                    if (m) { 
+                                      lo = parseInt(m[1], 10); 
+                                      hi = parseInt(m[2], 10); 
+                                    } else {
+                                      const singleMatch = s.match(/^(\d+)$/);
+                                      if (singleMatch) {
+                                        lo = parseInt(singleMatch[1], 10);
+                                        hi = parseInt(singleMatch[1], 10);
+                                      }
+                                    }
                                   }
 
-                                  if (lo >= 0 && hi >= 0 && hi > lo) {
-                                    const overlaps = bilBinDefs.filter(b => Math.max(lo, b.lo) < Math.min(hi, b.hi));
+                                  if (lo >= 0 && hi >= 0 && hi >= lo) {
+                                    const overlaps = bilBinDefs.filter(b => {
+                                      if (lo === hi) return lo >= b.lo && hi <= b.hi; // Point inside bin
+                                      return Math.max(lo, b.lo) < Math.min(hi, b.hi); // True overlap
+                                    });
                                     if (overlaps.length > 0) {
                                       return overlaps.map(b => b.key);
                                     }

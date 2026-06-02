@@ -375,9 +375,9 @@ export default function DemandManagement() {
               <h3 className="text-lg font-bold">{editingOrderId ? 'Edit Manual Demand Plan' : 'Add Manual Demand Plan'}</h3>
               <button onClick={() => setShowAddModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors"><X size={20} /></button>
             </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 pb-64">
               {/* Header Fields */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 relative z-20">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-gray-500 uppercase">Plan Number / ID</label>
                   <input type="text" value={newOrder.erpOrderNumber} onChange={e => setNewOrder({...newOrder, erpOrderNumber: e.target.value})} placeholder="e.g. IVQF-2024-001" className="w-full px-4 py-2 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" />
@@ -409,9 +409,9 @@ export default function DemandManagement() {
                     <Plus size={14} /> Add Line Item
                   </button>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-2 relative z-30">
                   {newOrder.lines.map((line, idx) => (
-                    <div key={idx} className="flex gap-2 items-end bg-gray-50 p-3 rounded-xl border border-gray-100 relative group">
+                    <div key={idx} className="flex gap-2 items-end bg-gray-50 p-3 rounded-xl border border-gray-100 relative group" style={{ zIndex: 50 - idx }}>
                       <div className="flex-1 space-y-1">
                         <label className="text-[10px] font-bold text-gray-400 uppercase">Item Code</label>
                         <ItemAutocomplete 

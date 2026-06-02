@@ -605,6 +605,25 @@ export class OracleIntegrationService implements OnModuleDestroy {
     const itemMap = new Map<string, string>();
     items.forEach((i) => itemMap.set(i.erpItemCode, i.erpItemDesc));
 
+    // Fetch the sum of quantity_kg from mps_plan_orders grouped by erp_order_line_id
+    const allocationMap = new Map<number, number>();
+    const lineIds = lines.map(l => l.erpOrderLineId).filter(id => id !== null && id !== undefined);
+    if (lineIds.length > 0) {
+      const allocationChunkSize = 500;
+      for (let i = 0; i < lineIds.length; i += allocationChunkSize) {
+        const chunk = lineIds.slice(i, i + allocationChunkSize);
+        const allAllocations = await this.stgErpOrderLineRepository.query(`
+          SELECT erp_order_line_id AS lineId, SUM(quantity_kg) AS totalAllocated
+          FROM mps_plan_orders
+          WHERE erp_order_line_id IN (${chunk.join(',')})
+          GROUP BY erp_order_line_id
+        `);
+        allAllocations.forEach((alloc: any) => {
+          allocationMap.set(Number(alloc.lineId), Number(alloc.totalAllocated || 0));
+        });
+      }
+    }
+
     return headers.map((h) => ({
       ...h,
       lines: lines
@@ -616,6 +635,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
           ...l,
           erpItemDesc: itemMap.get(l.erpOrderItemCode) || null,
           isItemSynced: itemMap.has(l.erpOrderItemCode),
+          totalAllocatedQty: allocationMap.get(l.erpOrderLineId) || 0,
         })),
     }));
   }

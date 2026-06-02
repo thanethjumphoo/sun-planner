@@ -152,6 +152,9 @@ export class MpsPlanDaily {
 
   @Column({ name: 'total_staff', type: 'int', default: 0 })
   totalStaff: number;
+
+  @Column({ name: 'bl_tracker_json', type: 'text', nullable: true })
+  blTrackerJson: string | null;
 }
 
 // ─── 3. MPS Plan Orders (เก็บ Snapshot การจัดสรร Order เข้าสู่วันผลิต) ───

@@ -72,6 +72,12 @@ export class ChickenReceivingService {
     return { deleted: true, id };
   }
 
+  async removeByDate(type: string, dateStr: string) {
+    const repo = this.getRepo(type);
+    await repo.delete({ receive_date: dateStr });
+    return { deleted: true, date: dateStr };
+  }
+
   async createBatch(type: string, rows: any[]) {
     const repo = this.getRepo(type);
     const cleaned = rows.map((row) =>

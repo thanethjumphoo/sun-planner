@@ -14,17 +14,20 @@ const ExternalRmInput: React.FC = () => {
     lotNumber: ''
   });
   const [sizeBreakdown, setSizeBreakdown] = useState<Array<{label: string, amount: string}>>([
-    { label: '180-210', amount: '' },
-    { label: '210-230', amount: '' },
-    { label: '230-260', amount: '' },
+    { label: '140 Down', amount: '' },
+    { label: '140-160', amount: '' },
+    { label: '160-180', amount: '' },
+    { label: '180-200', amount: '' },
+    { label: '200-220', amount: '' },
+    { label: '220-240', amount: '' },
+    { label: '240-260', amount: '' },
     { label: '260-280', amount: '' },
-    { label: '280-310', amount: '' },
-    { label: '310-330', amount: '' },
-    { label: '330-360', amount: '' },
-    { label: '360-390', amount: '' },
-    { label: '390-410', amount: '' },
-    { label: '410-440', amount: '' },
-    { label: '440 Up', amount: '' }
+    { label: '280-300', amount: '' },
+    { label: '300-320', amount: '' },
+    { label: '320-340', amount: '' },
+    { label: '340-360', amount: '' },
+    { label: '360-380', amount: '' },
+    { label: '380 Up', amount: '' }
   ]);
 
   useEffect(() => {

@@ -343,6 +343,7 @@ export class MpsController {
           specRepo: this.specRepo,
           masterYieldRepo: this.masterYieldRepo,
           blBeltGateMatrixRepo: this.blBeltGateMatrixRepo,
+          bilWeightDistRepo: this.bilWeightDistRepo,
         });
       }
 
@@ -403,9 +404,15 @@ export class MpsController {
       startOfRange = new Date(`${body.orderStartDate}T00:00:00`);
       endOfRange = new Date(`${body.orderEndDate}T23:59:59`);
     } else {
+      const maxLeadResult = await manager.createQueryBuilder(ProductSpec, 'spec')
+        .select('MAX(spec.maxProductLead)', 'maxLead')
+        .getRawOne();
+      const maxSpecLead = maxLeadResult ? Number(maxLeadResult.maxLead) || 90 : 90;
+      const additionalMonths = Math.max(1, Math.ceil(maxSpecLead / 30) + 1);
+
       const targetDate = new Date(`${targetMonth}-01T00:00:00Z`);
       startOfRange = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1, 0, 0, 0);
-      endOfRange = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59);
+      endOfRange = new Date(targetDate.getFullYear(), targetDate.getMonth() + additionalMonths, 0, 23, 59, 59);
     }
 
     // Supply still uses targetMonth for chicken intake
@@ -445,6 +452,10 @@ export class MpsController {
     const specMap = new Map();
     specs.forEach(s => specMap.set(s.erpItemCode, s));
 
+    // Calculate max lead time across all specs for supply buffer sizing
+    const maxLeadForBuffer = Math.max(30, ...specs.map(s => Number(s.maxProductLead || 0)));
+    console.log(`[MPS] maxLeadForBuffer = ${maxLeadForBuffer} days`);
+
     // Filter item codes by partType using Master Yield Tree CATEGORY
     const allowedItemCodes = await this.getItemCodesByPartType(partType);
 
@@ -465,10 +476,13 @@ export class MpsController {
     };
     const parseLocalDate = (val: any): string | null => {
       if (!val) return null;
-      if (val instanceof Date) return formatDate(val);
       if (typeof val === 'string') return val.split('T')[0];
+      if (val instanceof Date) {
+        return `${val.getFullYear()}-${String(val.getMonth() + 1).padStart(2, '0')}-${String(val.getDate()).padStart(2, '0')}`;
+      }
       return null;
     };
+
     const subtractDays = (date: Date, days: number) => {
       const d = new Date(date);
       d.setDate(d.getDate() - days);
@@ -487,18 +501,34 @@ export class MpsController {
     }
 
     // We use monthly plan to represent the actual supply for continuous mapping
-    const allIntakesRaw = await this.chickenReceivingService.findAll('monthly');
+    const allMonthlyIntakesRaw = await this.chickenReceivingService.findAll('monthly');
+    const allWeeklyIntakesRaw = await this.chickenReceivingService.findAll('weekly');
 
-    // Calculate previous month for cross-month supply buffer
-    // Chill orders need production 1-3 days before ship date, freeze orders up to 30 days
-    // So we need supply from the previous month to handle orders shipping early in the target month
+    const weeklyDates = new Set(allWeeklyIntakesRaw.map((w: any) => parseLocalDate(w.receive_date)));
+
+    const allIntakesRaw = [
+      ...allMonthlyIntakesRaw.filter((m: any) => !weeklyDates.has(parseLocalDate(m.receive_date))),
+      ...allWeeklyIntakesRaw
+    ];
+
+    // Calculate previous month for cross-month supply buffer (kept for BIL external RM)
     const prevMonthDate = new Date(targetDate.getFullYear(), targetDate.getMonth() - 1, 1);
     const prevMonth = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
 
-    // Filter to target month + previous month (for cross-month supply matching)
+    // Build list of month prefixes covering max lead time for supply data
+    // e.g. if maxLeadForBuffer = 90 days, cover 3 months back from targetMonth
+    const leadMonths = Math.max(1, Math.ceil(maxLeadForBuffer / 30));
+    const supplyMonthPrefixes: string[] = [targetMonth];
+    for (let m = 1; m <= leadMonths; m++) {
+      const d = new Date(targetDate.getFullYear(), targetDate.getMonth() - m, 1);
+      supplyMonthPrefixes.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    console.log(`[MPS] Supply month prefixes: ${supplyMonthPrefixes.join(', ')}`);
+
+    // Filter to target month + enough previous months for max lead time coverage
     const allIntakesExpanded = allIntakesRaw.filter((intake: any) => {
       const d = parseLocalDate(intake.receive_date);
-      return d && (d.startsWith(targetMonth) || d.startsWith(prevMonth));
+      return d && supplyMonthPrefixes.some(prefix => d.startsWith(prefix));
     });
 
     // Keep a target-month-only filter for daily summaries and supply breakdown (Steps 6 & 7)
@@ -510,6 +540,8 @@ export class MpsController {
     const supplyMap = new Map<string, number>();
     const internalSupplyMap = new Map<string, number>();
     const externalSupplyMap = new Map<string, number>();
+    const internalRemainingMap = new Map<string, number>();
+    const externalRemainingMap = new Map<string, number>();
 
     allIntakesExpanded.forEach((intake: any) => {
       const d = parseLocalDate(intake.receive_date);
@@ -522,17 +554,20 @@ export class MpsController {
           ? intakeKg * 0.9575 * 0.95 * filletYield * 0.907
           : intakeKg * 0.9575 * 0.95 * partYield;
         internalSupplyMap.set(d, (internalSupplyMap.get(d) || 0) + rmAvailKg);
+        internalRemainingMap.set(d, (internalRemainingMap.get(d) || 0) + rmAvailKg);
         supplyMap.set(d, (supplyMap.get(d) || 0) + rmAvailKg);
       }
     });
 
+    let allExternalRms: ExternalRmSupply[] = [];
     if (partType === 'bil') {
-      const allExternalRms = await manager.find(ExternalRmSupply, { where: { partName: 'BIL L/C' }});
+      allExternalRms = await manager.find(ExternalRmSupply, { where: { partName: 'BIL L/C' }});
       allExternalRms.forEach((ext: any) => {
         const d = parseLocalDate(ext.receivedDate);
         if (d && (d.startsWith(targetMonth) || d.startsWith(prevMonth))) {
           const extKg = Number(ext.totalWeightKg || 0);
           externalSupplyMap.set(d, (externalSupplyMap.get(d) || 0) + extKg);
+          externalRemainingMap.set(d, (externalRemainingMap.get(d) || 0) + extKg);
           supplyMap.set(d, (supplyMap.get(d) || 0) + extKg);
         }
       });
@@ -543,17 +578,38 @@ export class MpsController {
     const byprodChillOrders: any[] = [];
     const byprodFreezeOrders: any[] = [];
 
+    if (!body._allocatedMap && orders.length > 0) {
+      body._allocatedMap = new Map<number, number>();
+      const lineIds = orders.map(o => o.erpOrderLineId);
+      const existingOrders = await manager.createQueryBuilder(MpsPlanOrder, 'ord')
+        .innerJoin('ord.mpsPlan', 'p')
+        .where('ord.erpOrderLineId IN (:...lineIds)', { lineIds })
+        .andWhere('p.id != :currentPlanId', { currentPlanId: plan.id || 0 })
+        .getMany();
+      for (const eo of existingOrders) {
+        body._allocatedMap.set(eo.erpOrderLineId, (body._allocatedMap.get(eo.erpOrderLineId) || 0) + Number(eo.quantityKg));
+      }
+    }
+
     for (const order of orders) {
       const spec = specMap.get(order.erpOrderItemCode);
-      if (!spec) continue;
+      if (!spec) {
+        if (order.erpOrderItemCode === '111149201') console.log(`[TRACE 111149201] ⛔ Skipped: no spec found`);
+        continue;
+      }
 
       // Skip orders not in this part's allowed item codes (Master Yield Tree filter)
-      if (allowedItemCodes && !allowedItemCodes.includes(order.erpOrderItemCode)) continue;
+      if (allowedItemCodes && !allowedItemCodes.includes(order.erpOrderItemCode)) {
+        if (order.erpOrderItemCode === '111149201') console.log(`[TRACE 111149201] ⛔ Skipped: not in allowedItemCodes for partType=${partType}`);
+        continue;
+      }
 
       // Adjust quantity for already-allocated amounts (cross-month dedup)
       let adjustedQty = Number(order.erpOrderItemQty || 0);
       if (body._allocatedMap?.has(order.erpOrderLineId)) {
-        adjustedQty -= body._allocatedMap.get(order.erpOrderLineId)!;
+        const alreadyAllocated = body._allocatedMap.get(order.erpOrderLineId)!;
+        adjustedQty -= alreadyAllocated;
+        if (order.erpOrderItemCode === '111149201') console.log(`[TRACE 111149201] Already allocated ${alreadyAllocated}kg in prior months, remaining=${adjustedQty}kg`);
         if (adjustedQty <= 0) continue; // fully allocated in a previous month
       }
 
@@ -565,6 +621,10 @@ export class MpsController {
       };
 
       const isByprod = isByproductSpec(spec);
+
+      if (order.erpOrderItemCode === '111149201') {
+        console.log(`[TRACE 111149201] ✅ Order found in ${targetMonth}: qty=${adjustedQty}kg, ship=${formatDate(orderObj.shipDate)}, productType=${orderObj.productType}, isByprod=${isByprod}, masterYieldIds=${spec.masterYieldIds}, minLead=${spec.minProductLead}, maxLead=${spec.maxProductLead}`);
+      }
 
       if (orderObj.productType === 'chilled') {
         if (isByprod) {
@@ -715,6 +775,36 @@ export class MpsController {
       sizeSupplyMap.set(d, existing);
     });
 
+    if (isBil && allExternalRms.length > 0) {
+      allExternalRms.forEach((ext: any) => {
+        const d = parseLocalDate(ext.receivedDate);
+        if (d && (d.startsWith(targetMonth) || d.startsWith(prevMonth))) {
+          const extKg = Number(ext.totalWeightKg || 0);
+          if (extKg <= 0) return;
+
+          const existing = sizeSupplyMap.get(d) || {
+            total: 0,
+            bins: {}
+          };
+
+          if (ext.sizeBreakdownJson) {
+            try {
+              const sizes = JSON.parse(ext.sizeBreakdownJson);
+              for (const [sz, qty] of Object.entries(sizes)) {
+                existing.bins[sz] = (existing.bins[sz] || 0) + Number(qty);
+              }
+            } catch (e) {
+              existing.bins['Unsize'] = (existing.bins['Unsize'] || 0) + extKg;
+            }
+          } else {
+            existing.bins['Unsize'] = (existing.bins['Unsize'] || 0) + extKg;
+          }
+          existing.total += extKg;
+          sizeSupplyMap.set(d, existing);
+        }
+      });
+    }
+
     // Rebuild supplyMap from actual size bin totals (instead of formula-based RM FL)
     // This eliminates rounding discrepancy between RM FL formula and sum-of-size-bins
     const originalSizeTotalMap = new Map<string, number>(); // snapshot BEFORE allocation
@@ -824,7 +914,7 @@ export class MpsController {
       return 'Unsize';
     };
 
-    const generateByproducts = (dateStr: string, rmQty: number, spec: any) => {
+    const generateByproducts = (dateStr: string, rmQty: number, spec: any, intUsed: number, extUsed: number) => {
       if (!spec || !spec.masterYieldIds) return;
       const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
       const pId = processIds[0];
@@ -918,7 +1008,14 @@ export class MpsController {
 
         // 2. Pull from RM
         const totalRmForDate = supplyMap.get(dateStr) || 0;
-        if (totalRmForDate <= 0) continue;
+        let allowedTotalRmForDate = 0;
+        if (spec?.isExternalRmAllowed) {
+            allowedTotalRmForDate = externalRemainingMap.get(dateStr) || 0;
+        } else {
+            allowedTotalRmForDate = internalRemainingMap.get(dateStr) || 0;
+        }
+
+        if (allowedTotalRmForDate <= 0) continue;
 
         const sizeData = sizeSupplyMap.get(dateStr);
 
@@ -931,9 +1028,10 @@ export class MpsController {
           availableQty = totalRmForDate;
         }
 
+        availableQty = Math.min(availableQty, allowedTotalRmForDate);
         if (availableQty <= 0) continue;
 
-        const allocQty = Math.round(Math.min(availableQty, remainingQty, totalRmForDate));
+        const allocQty = Math.round(Math.min(availableQty, remainingQty));
         if (allocQty <= 0) continue;
 
         mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
@@ -970,11 +1068,25 @@ export class MpsController {
         // 3. Generate byproducts immediately for the RM pulled
         const yieldPct = spec?.productYield || 1;
         const rm = allocQty / yieldPct;
-        generateByproducts(dateStr, rm, spec);
+
+        let extUsed = 0;
+        let intUsed = 0;
+        if (spec?.isExternalRmAllowed) {
+            extUsed = rm;
+            intUsed = 0;
+        } else {
+            intUsed = rm;
+            extUsed = 0;
+        }
+        externalRemainingMap.set(dateStr, Math.max(0, (externalRemainingMap.get(dateStr) || 0) - extUsed));
+        internalRemainingMap.set(dateStr, Math.max(0, (internalRemainingMap.get(dateStr) || 0) - intUsed));
+
+        generateByproducts(dateStr, rm, spec, intUsed, extUsed);
       }
 
       if (remainingQty > 0) {
         // Discard unmet demand from calendar, log as exception
+        const rmTypeDesc = spec?.isExternalRmAllowed ? 'RM SUP' : 'RM STD';
         exceptionsToSave.push(manager.create(MpsExceptionReport, {
           mpsPlan: plan,
           erpOrderLineId: order.erpOrderLineId,
@@ -983,7 +1095,7 @@ export class MpsController {
           shipDate: order.shipDate,
           requiredKg: order.qty,
           shortageKg: remainingQty,
-          reason: `No ${isUnsize ? 'total' : productSize} supply available for Chill order on or before ${formatDate(order.shipDate)}`
+          reason: `No ${isUnsize ? 'total' : productSize} ${rmTypeDesc} supply available for Chill order on or before ${formatDate(order.shipDate)}`
         }));
       }
     }
@@ -1026,7 +1138,7 @@ export class MpsController {
       d.setDate(d.getDate() + days);
       return d;
     };
-    const supplyBufferStart = subtractDays(startOfMonth, 30); // 30-day buffer for freeze lead time
+    const supplyBufferStart = subtractDays(startOfMonth, maxLeadForBuffer); // Dynamic buffer based on max spec lead time
     const allDateStrs: string[] = [];
     for (let d = new Date(supplyBufferStart); d <= endOfMonth; d = addDays(d, 1)) {
       allDateStrs.push(formatDate(d));
@@ -1043,9 +1155,11 @@ export class MpsController {
         const sizeBinKeys = getSizeBinKeys(productSize);
         const isUnsize = sizeBinKeys.length === 0;
 
-        // Valid production window: earliest date first → shipDate - 5 (max 30 days window)
-        const latestProdDate = subtractDays(order.shipDate, 5);
-        const earliestProdDate = subtractDays(order.shipDate, 30);
+        // Valid production window: use spec lead times (minProductLead → maxProductLead)
+        const minLead = spec?.minProductLead ?? 5;
+        const maxLead = spec?.maxProductLead ?? (isUnsize ? 90 : 30);
+        const latestProdDate = subtractDays(order.shipDate, minLead);
+        const earliestProdDate = subtractDays(order.shipDate, maxLead);
 
         // Waterfall forward: earliest date first
         for (const dateStr of allDateStrs) {
@@ -1092,7 +1206,14 @@ export class MpsController {
 
           // 2. Pull from RM
           const totalRmForDate = supplyMap.get(dateStr) || 0;
-          if (totalRmForDate <= 0) continue;
+          let allowedTotalRmForDate = 0;
+          if (spec?.isExternalRmAllowed) {
+              allowedTotalRmForDate = externalRemainingMap.get(dateStr) || 0;
+          } else {
+              allowedTotalRmForDate = internalRemainingMap.get(dateStr) || 0;
+          }
+
+          if (allowedTotalRmForDate <= 0) continue;
 
           const sizeData = sizeSupplyMap.get(dateStr);
 
@@ -1105,9 +1226,10 @@ export class MpsController {
             availableQty = totalRmForDate;
           }
 
+          availableQty = Math.min(availableQty, allowedTotalRmForDate);
           if (availableQty <= 0) continue;
 
-          const allocQty = Math.round(Math.min(availableQty, remainingQty, totalRmForDate));
+          const allocQty = Math.round(Math.min(availableQty, remainingQty));
           if (allocQty <= 0) continue;
 
           mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
@@ -1144,10 +1266,24 @@ export class MpsController {
           // 3. Generate byproducts immediately for the RM pulled
           const yieldPct = spec?.productYield || 1;
           const rm = allocQty / yieldPct;
-          generateByproducts(dateStr, rm, spec);
+
+          let extUsed = 0;
+          let intUsed = 0;
+          if (spec?.isExternalRmAllowed) {
+              extUsed = rm;
+              intUsed = 0;
+          } else {
+              intUsed = rm;
+              extUsed = 0;
+          }
+          externalRemainingMap.set(dateStr, Math.max(0, (externalRemainingMap.get(dateStr) || 0) - extUsed));
+          internalRemainingMap.set(dateStr, Math.max(0, (internalRemainingMap.get(dateStr) || 0) - intUsed));
+
+          generateByproducts(dateStr, rm, spec, intUsed, extUsed);
         }
 
         if (remainingQty > 0) {
+          const rmTypeDesc = spec?.isExternalRmAllowed ? 'RM SUP' : 'RM STD';
           exceptionsToSave.push(manager.create(MpsExceptionReport, {
             mpsPlan: plan,
             erpOrderLineId: order.erpOrderLineId,
@@ -1156,7 +1292,7 @@ export class MpsController {
             shipDate: order.shipDate,
             requiredKg: order.qty,
             shortageKg: remainingQty,
-            reason: `Insufficient ${isUnsize ? 'total' : productSize} supply for Freeze order (Ship: ${formatDate(order.shipDate)})`
+            reason: `Insufficient ${isUnsize ? 'total' : productSize} ${rmTypeDesc} supply for Freeze order (Ship: ${formatDate(order.shipDate)})`
           }));
         }
       }
@@ -1231,8 +1367,11 @@ export class MpsController {
         const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
 
         if (bpId) {
-          const latestProdDate = subtractDays(order.shipDate, 5);
-          const earliestProdDate = subtractDays(order.shipDate, 30);
+          // Use spec lead times for by-product production window
+          const bpMinLead = spec?.minProductLead ?? 5;
+          const bpMaxLead = spec?.maxProductLead ?? 90;
+          const latestProdDate = subtractDays(order.shipDate, bpMinLead);
+          const earliestProdDate = subtractDays(order.shipDate, bpMaxLead);
 
           for (const dateStr of allDateStrs) {
             if (remainingQty <= 0) break;
@@ -1282,6 +1421,45 @@ export class MpsController {
     };
 
     byprodFreezeOrders.sort(prioritySort);
+
+    // ── Diagnostic: Log by-product supply state before allocation ──
+    console.log(`[MPS BYPROD] === By-Product Supply State Before Allocation ===`);
+    console.log(`[MPS BYPROD] dailyByproductSupply has ${dailyByproductSupply.size} date entries`);
+    const bpSummary: Record<string, number> = {};
+    dailyByproductSupply.forEach((dayData, dateStr) => {
+      Object.entries(dayData).forEach(([nodeId, info]) => {
+        const key = `${info.name} (${nodeId.substring(0, 8)}...)`;
+        bpSummary[key] = (bpSummary[key] || 0) + info.qty;
+      });
+    });
+    Object.entries(bpSummary).forEach(([key, totalQty]) => {
+      console.log(`[MPS BYPROD]   ${key}: ${Math.round(totalQty)} kg total across all dates`);
+    });
+    console.log(`[MPS BYPROD] byprodFreezeOrders count: ${byprodFreezeOrders.length}`);
+    for (const order of byprodFreezeOrders) {
+      const spec = specMap.get(order.erpOrderItemCode);
+      const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
+      const bpMinLead = spec?.minProductLead ?? 5;
+      const bpMaxLead = spec?.maxProductLead ?? 90;
+      console.log(`[MPS BYPROD]   Order ${order.erpOrderItemCode} (${spec?.erpItemDesc || '?'}): qty=${order.qty}kg, ship=${formatDate(order.shipDate)}, lead=${bpMinLead}-${bpMaxLead}d, bpId=${bpId || 'NONE'}`);
+      // Check if bpId has ANY supply
+      let totalBpSupply = 0;
+      dailyByproductSupply.forEach((dayData) => {
+        if (dayData[bpId!]) totalBpSupply += dayData[bpId!].qty;
+      });
+      console.log(`[MPS BYPROD]     -> Total available supply for bpId: ${Math.round(totalBpSupply)} kg`);
+      if (totalBpSupply === 0 && bpId) {
+        console.log(`[MPS BYPROD]     ⚠️ NO by-product supply found for this bpId. Check yield tree linkage.`);
+        // Log available bpIds for comparison
+        const availBpIds = new Set<string>();
+        dailyByproductSupply.forEach((dayData) => {
+          Object.keys(dayData).forEach(id => availBpIds.add(id));
+        });
+        console.log(`[MPS BYPROD]     Available bpIds in supply: ${[...availBpIds].join(', ')}`);
+      }
+    }
+    console.log(`[MPS BYPROD] === End By-Product Supply Diagnostic ===`);
+
     allocateByprodFreeze(byprodFreezeOrders);
 
     // Chunk manual save in safe batches of 50 to avoid MS SQL 2100 parameter limit
@@ -1567,6 +1745,10 @@ export class MpsController {
           dayIntakes.push(intake);
         }
       });
+      
+      if (dayStr === '2026-06-04') {
+          console.log(`[DEBUG MPS 04] total birds: ${dailyIntakeBirds}, rows: ${dayIntakes.length}`);
+      }
 
       if (dailyIntakeBirds > 0) {
         const avgWeightDaily = parseFloat((dailyTotalWeight / dailyIntakeBirds).toFixed(2));
@@ -1622,6 +1804,10 @@ export class MpsController {
             }
           });
         });
+
+        if (dayStr === '2026-06-04') {
+            console.log(`[DEBUG MPS 04] size bins:`, sizeBins);
+        }
 
         // Create MpsPlanSupplySize entries for each size bin
         const sizeEntries: MpsPlanSupplySize[] = [];
@@ -1748,10 +1934,11 @@ export class MpsController {
     const allSizes = await this.weeklySizeRepo.find({ where: { partName: currentPartName } });
     const parseDateStr = (val: any): string => {
       if (!val) return '';
-      const dateObj = typeof val === 'string' ? new Date(val) : val;
-      const offset = dateObj.getTimezoneOffset();
-      const localDate = new Date(dateObj.getTime() - (offset * 60 * 1000));
-      return localDate.toISOString().split('T')[0];
+      if (typeof val === 'string') return val.split('T')[0];
+      if (val instanceof Date) {
+        return `${val.getFullYear()}-${String(val.getMonth() + 1).padStart(2, '0')}-${String(val.getDate()).padStart(2, '0')}`;
+      }
+      return '';
     };
 
     const monthSizes = allSizes.filter(s => {
@@ -1773,10 +1960,11 @@ export class MpsController {
 
     const parseDateStr = (val: any): string => {
       if (!val) return '';
-      const dateObj = typeof val === 'string' ? new Date(val) : val;
-      const offset = dateObj.getTimezoneOffset();
-      const localDate = new Date(dateObj.getTime() - (offset * 60 * 1000));
-      return localDate.toISOString().split('T')[0];
+      if (typeof val === 'string') return val.split('T')[0];
+      if (val instanceof Date) {
+        return `${val.getFullYear()}-${String(val.getMonth() + 1).padStart(2, '0')}-${String(val.getDate()).padStart(2, '0')}`;
+      }
+      return '';
     };
 
     // Fetch Weekly Intakes
@@ -1829,11 +2017,16 @@ export class MpsController {
 
     for (const [dayStr, dayIntakes] of dailyGroups.entries()) {
       const sizeBins: Record<string, number> = {};
+      let dailyIntakeBirds = 0;
+      let dailyTotalWeight = 0;
 
       dayIntakes.forEach((intake: any) => {
         const intakeKg = Number(intake.chicken_weight || 0);
         const intakeBirds = Number(intake.chicken_count || 0);
         if (intakeBirds <= 0 || intakeKg <= 0) return;
+
+        dailyIntakeBirds += intakeBirds;
+        dailyTotalWeight += intakeKg;
 
         const avgWeight = parseFloat((intakeKg / intakeBirds).toFixed(2));
         const slaughteredWeight = intakeKg * 0.9575 * 0.95;
@@ -1871,6 +2064,38 @@ export class MpsController {
           partName: currentPartName,
           quantityKg: Math.round(kg)
         }));
+      }
+
+      // Fetch all supplies for the plan to safely find by date string (avoids TypeORM timezone query issues)
+      const allSupplies = await this.mpsSupplyRepo.find({ where: { mpsPlan: { id: plan.id } } });
+      const supplyEntry = allSupplies.find(s => {
+        const pdStr = parseDateStr(s.productionDate);
+        return pdStr === dayStr;
+      });
+
+      if (supplyEntry) {
+        supplyEntry.intakeBirds = dailyIntakeBirds;
+        supplyEntry.totalWeight = dailyTotalWeight;
+        supplyEntry.avgWeight = parseFloat((dailyTotalWeight / dailyIntakeBirds).toFixed(2));
+        supplyEntry.slaughteredWeight = dailyTotalWeight * 0.9575 * 0.95;
+        await this.mpsSupplyRepo.save(supplyEntry);
+
+        // Update MpsPlanSupplySize
+        await this.mpsSupplySizeRepo.delete({ mpsPlanSupply: { id: supplyEntry.id } });
+        const newSizes: MpsPlanSupplySize[] = [];
+        for (const [groupName, kg] of Object.entries(sizeBins)) {
+          if (kg <= 0) continue;
+          newSizes.push(this.mpsSupplySizeRepo.create({
+            mpsPlanSupply: supplyEntry,
+            groupSize: groupName,
+            partName: currentPartName,
+            quantityKg: Math.round(kg),
+            productionDate: new Date(dayStr)
+          }));
+        }
+        if (newSizes.length > 0) {
+          await this.mpsSupplySizeRepo.save(newSizes);
+        }
       }
     }
 
