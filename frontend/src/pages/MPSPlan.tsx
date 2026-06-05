@@ -50,7 +50,7 @@ const PART_CONFIGS: Record<string, {
 const MPSPlan: React.FC = () => {
   const { partId } = useParams<{ partId: string }>();
   const pc = PART_CONFIGS[partId || 'fillet'] || PART_CONFIGS['fillet'];
-  const [currentMonth, setCurrentMonth] = useState(new Date(2026, 4, 1)); // May 2026
+  const [currentMonth, setCurrentMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const [specs, setSpecs] = useState<Record<string, Spec>>({});
   const [loading, setLoading] = useState(true);
   const [loadingPhase, setLoadingPhase] = useState<{ mode: 'loading' | 'generating' | 'importing'; step: number; message: string }>({ mode: 'loading', step: 0, message: 'Initializing...' });
@@ -143,6 +143,12 @@ const MPSPlan: React.FC = () => {
     orderDesc?: string;
     soNumber?: string;
   }>({ isOpen: false, orderId: null, targetDate: '', maxQty: 0, qtyToMove: '' });
+
+  React.useEffect(() => {
+    // Also reset to current month whenever partId changes, as requested
+    const d = new Date();
+    setCurrentMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+  }, [partId]);
 
   React.useEffect(() => {
     initData();
@@ -435,6 +441,23 @@ const MPSPlan: React.FC = () => {
     }
   };
 
+  const handleClearMonth = async () => {
+    const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
+    if (!window.confirm(`Are you sure you want to delete all DRAFT plans for ${monthStr}?`)) return;
+    try {
+      const res = await fetch(`${API}/api/mps/clear/month/${monthStr}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        alert('\u2705 ' + data.message);
+        initData();
+      } else {
+        alert(data.message || 'Failed to clear plans');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleApprovePlan = async (id: number) => {
     if (!window.confirm('Approve this plan? Once approved, the plan will be locked and cannot be modified.')) return;
     try {
@@ -690,7 +713,10 @@ const MPSPlan: React.FC = () => {
     };
 
     const dailySummary = currentPlan.dailySummaries?.find((d: any) => formatDBDate(d.productionDate) === date);
-    const dailyOrdersRaw = currentPlan.orders?.filter((o: any) => formatDBDate(o.plannedProductionDate) === date) || [];
+    let dailyOrdersRaw = currentPlan.orders?.filter((o: any) => formatDBDate(o.plannedProductionDate) === date) || [];
+    if (partId === 'bil' || partId === 'bl') {
+      dailyOrdersRaw = dailyOrdersRaw.filter((o: any) => allowedItemCodes.includes(o.itemCode));
+    }
 
     const grouped = new Map();
     dailyOrdersRaw.forEach((o: any) => {
@@ -940,7 +966,7 @@ const MPSPlan: React.FC = () => {
     }
     const getExternalSizeKg = (groupSize: string) => extSizes[groupSize] || 0;
 
-    const isBilType = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
+    const isBilType = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
     const allBilSizes = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
     Object.keys(extSizes).forEach(k => allBilSizes.add(k));
 
@@ -1355,6 +1381,9 @@ const MPSPlan: React.FC = () => {
           <button disabled={loading || currentPlan?.status === 'APPROVED'} onClick={handleGeneratePlan} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all ${loading || currentPlan?.status === 'APPROVED' ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 shadow-orange-200'}`}>
             <Activity className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {currentPlan?.status === 'APPROVED' ? '🔒 Plan Locked' : loading ? 'Generating...' : 'Generate & Save Plan'}
+          </button>
+          <button onClick={handleClearMonth} className="flex items-center gap-2 px-4 py-2 bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded-xl text-sm font-medium shadow-sm transition-all">
+            <Trash2 className="w-4 h-4" /> Clear Month
           </button>
           <button className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 hover:bg-gray-50 rounded-xl text-sm font-medium text-gray-700 shadow-sm transition-all">
             <Filter className="w-4 h-4" /> Filter
@@ -2679,7 +2708,7 @@ const MPSPlan: React.FC = () => {
                           { label: '70 Up', color: 'bg-red-500' },
                         ];
 
-                        const isBilOrBl = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
+                        const isBilOrBl = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
                         // For BIL and BL, include all sizes from internal and external
                         const allBilSizes = new Set(partId === 'bl' ? Object.keys(blSizes) : (selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
                         Object.keys(extSizes).forEach(k => allBilSizes.add(k));
@@ -2747,7 +2776,7 @@ const MPSPlan: React.FC = () => {
                         }
                         const getExternalSizeKg = (groupSize: string) => extSizes[groupSize] || 0;
 
-                        const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
+                        const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
                         
                         const allBilSizes = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
                         Object.keys(extSizes).forEach(k => allBilSizes.add(k));
@@ -2778,7 +2807,7 @@ const MPSPlan: React.FC = () => {
                           const getMonthSizeKg = (groupSize: string) => (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
                           const getSizeKg = (groupSize: string) => getMonthSizeKg(groupSize);
 
-                          const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
+                          const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
                           const currentSizeLabels = isBil
                             ? (Array.from(new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string))) as string[])
                               .map((label, idx) => ({
@@ -2859,7 +2888,7 @@ const MPSPlan: React.FC = () => {
                           return <div className="text-sm text-amber-600 italic col-span-full">No By Products generated for the selected orders.</div>;
                         }
 
-                        const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
+                        const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
                         
                         const isBlMain = (name: string) => {
                           const n = name.toUpperCase();
@@ -3275,7 +3304,7 @@ const MPSPlan: React.FC = () => {
                           <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 space-y-3">
                             <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
                             {(() => {
-                              const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl';
+                              const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
                               // Derive base sizes from entire plan supply to know all standard bins
                               const allSupplySizesSet = new Set<string>([
                                 "140 Down", "140-160", "160-180", "180-200", "200-220", 

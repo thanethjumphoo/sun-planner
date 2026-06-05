@@ -44,6 +44,11 @@ export class ChickenReceivingController {
     return this.chickenReceivingService.removeByDate(type, dateStr);
   }
 
+  @Delete(':type/clear/month/:month')
+  removeByMonth(@Param('type') type: string, @Param('month') monthStr: string) {
+    return this.chickenReceivingService.removeByMonth(type, monthStr);
+  }
+
   @Delete(':type/:id')
   remove(@Param('type') type: string, @Param('id') id: string) {
     return this.chickenReceivingService.remove(type, id);

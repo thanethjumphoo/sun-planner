@@ -55,7 +55,7 @@ export async function generateBlExcelPlan(
   let colIdx = 3; // Start after Date, Day
   
   const supplyStart = colIdx;
-  const supplyEnd = colIdx + 5; // Total, Int, Ext, BL, BL-TH, BL-DR
+  const supplyEnd = colIdx + 11; // Total(4), Int(4), Ext(4) = 12 columns
   sectionRow.getCell(supplyStart).value = 'Supply Control (RM BL)';
   sheet.mergeCells(1, supplyStart, 1, supplyEnd);
   colIdx = supplyEnd + 1;
@@ -124,7 +124,9 @@ export async function generateBlExcelPlan(
   // Row 3: Column Headers
   const subHeaders = [
     'Date', 'Day',
-    'Total RM BL', 'Internal RM', 'External RM', 'BL (ทั้งชิ้น)', 'BL-TH (สะโพก)', 'BL-DR (น่อง)',
+    'Total RM BL', 'BL (เนื้อรวม)', 'BL-TH (สะโพก)', 'BL-DR (น่อง)',
+    'Int. RM Total', 'Int. BL (เนื้อรวม)', 'Int. BL-TH (สะโพก)', 'Int. BL-DR (น่อง)',
+    'Ext. RM Total', 'Ext. BL (เนื้อรวม)', 'Ext. BL-TH (สะโพก)', 'Ext. BL-DR (น่อง)',
     'I-Cut Process (kg)', 'I-Cut Hours', 'I-Cut Cap (hrs)', 'I-Cut Util (%)', 'Manual Trim (kg)',
     'Block Produced', 'Block Used',
     ...beltGateSizeList,
@@ -155,8 +157,15 @@ export async function generateBlExcelPlan(
     const blDrKg = Number(rm.blDr || 0);
     const totalBl = blKg + blThKg + blDrKg;
     
-    const totalInt = Number(intRm.BL || 0) + Number(intRm.BLTH || 0) + Number(intRm.BLDR || 0);
-    const totalExt = Number(extRm.BL || 0) + Number(extRm.BLTH || 0) + Number(extRm.BLDR || 0);
+    const intBl = Number(intRm.BL || 0);
+    const intBlTh = Number(intRm.BLTH || 0);
+    const intBlDr = Number(intRm.BLDR || 0);
+    const totalInt = intBl + intBlTh + intBlDr;
+
+    const extBl = Number(extRm.BL || 0);
+    const extBlTh = Number(extRm.BLTH || 0);
+    const extBlDr = Number(extRm.BLDR || 0);
+    const totalExt = extBl + extBlTh + extBlDr;
 
     const icutCap = Number(trk.icutCapacityHours || 37);
     const icutHours = Number(trk.icutUsedHours || 0);
@@ -165,7 +174,9 @@ export async function generateBlExcelPlan(
     const rowData = [
       `${dateObj.getDate()}/${dateObj.toLocaleString('en-US', { month: 'short' })}`,
       dateObj.toLocaleDateString('en-US', { weekday: 'short' }),
-      totalBl, totalInt, totalExt, blKg, blThKg, blDrKg,
+      totalBl, blKg, blThKg, blDrKg,
+      totalInt, intBl, intBlTh, intBlDr,
+      totalExt, extBl, extBlTh, extBlDr,
       Number(trk.icutUsedKg || 0), icutHours, icutCap, `${icutUtil.toFixed(1)}%`, Number(trk.manualUsedKg || 0),
       Number(trk.blBlockProduced || 0), Number(trk.blBlockUsed || 0)
     ];
@@ -190,7 +201,7 @@ export async function generateBlExcelPlan(
   // Totals Row
   const totalRowData: any[] = ['Total', ''];
   for (let i = 2; i < subHeaders.length; i++) {
-    if (i === 9) { // I-Cut Util (%)
+    if (i === 15) { // I-Cut Util (%)
       totalRowData.push('');
       continue;
     }

@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Res, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Res, Query, Delete } from '@nestjs/common';
 import * as express from 'express';
 import * as ExcelJS from 'exceljs';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -22,6 +22,8 @@ import { MachineConfig } from './machine-config.entity';
 import { ExternalRmSupply } from './external-rm-supply.entity';
 import { BlBeltGateMatrix } from './bl-belt-gate-matrix.entity';
 import { executeBlPlanGeneration } from './bl-logic.helper';
+import { generateBlExcelPlan } from './bl-excel.helper';
+import { executeUnifiedLegPlanGeneration } from './unified-leg-logic.helper';
 
 @Controller('api/mps')
 export class MpsController {
@@ -161,6 +163,20 @@ export class MpsController {
     return { partType: pt, itemCodes: codes || [] };
   }
 
+  // 0.5 Clear all plans for a specific month
+  @Delete('clear/month/:month')
+  async clearAllPlansForMonth(@Param('month') month: string) {
+    if (!month) return { success: false, message: 'Month is required' };
+    const plans = await this.mpsPlanRepo.find({ where: { targetMonth: month } });
+    
+    for (const plan of plans) {
+      if (plan.status !== 'APPROVED') {
+        await this.mpsPlanRepo.remove(plan);
+      }
+    }
+    return { success: true, message: `Deleted all DRAFT plans for ${month}` };
+  }
+
   // 1. Manually update planned production date in MpsPlanOrder (Drag & Drop)
   @Post('update-date')
   async updateDate(@Body() body: { planId?: number, mpsOrderId?: number, lineId: number; date: string; splitQty?: number }) {
@@ -297,6 +313,37 @@ export class MpsController {
     }
 
     return { success: true, allocatedCount };
+  }
+
+  // Unified Leg Plan Generation (BIL + BL)
+  @Post('generate-unified-leg')
+  async generateUnifiedLegPlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string }) {
+    // Fetch active machine configurations for dependencies
+    const machineConfigs = await this.machineConfigRepo.find({ where: { isActive: true } });
+
+    return await this.dataSource.transaction(async (manager) => {
+      const formatDateLocal = (val: any): string => {
+        if (typeof val === 'string') return val.split('T')[0];
+        if (val instanceof Date) {
+          const y = val.getFullYear();
+          const m = String(val.getMonth() + 1).padStart(2, '0');
+          const d = String(val.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
+        }
+        return String(val);
+      };
+
+      return await executeUnifiedLegPlanGeneration(body, manager, {
+        machineConfigs,
+        getItemCodesByPartType: (pt: string) => this.getItemCodesByPartType(pt),
+        parseLocalDate: formatDateLocal,
+        formatDate: formatDateLocal,
+        specRepo: this.specRepo,
+        masterYieldRepo: this.masterYieldRepo,
+        bilWeightDistRepo: this.bilWeightDistRepo,
+        chickenReceivingService: this.chickenReceivingService,
+      });
+    });
   }
 
   // 3. Generate & Snapshot MPS Plan
@@ -882,7 +929,7 @@ export class MpsController {
     };
 
     // --- Co-Product Dynamic Support ---
-    const dailyByproductSupply = new Map<string, Record<string, { name: string; qty: number; processName: string; sizes: Record<string, number> }>>();
+    const dailyByproductSupply = new Map<string, Record<string, { name: string; qty: number; internalQty?: number; externalQty?: number; processName: string; sizes: Record<string, number> }>>();
 
     const getOrInitByproductSupply = (dateStr: string) => {
       if (!dailyByproductSupply.has(dateStr)) {
@@ -891,24 +938,74 @@ export class MpsController {
       return dailyByproductSupply.get(dateStr)!;
     };
 
-    const calculateByproductSize = (productSize: string, yieldPct: number): string => {
+    const isSizeMatch = (orderSize: string, supplySize: string): boolean => {
+      if (!orderSize || orderSize.toLowerCase() === 'unsize') return true;
+      if (!supplySize || supplySize.toLowerCase() === 'unsize') return true;
+      
+      const parseRange = (s: string) => {
+        const match = s.match(/(\d+)\s*-\s*(\d+)/);
+        if (match) return { min: parseInt(match[1]), max: parseInt(match[2]) };
+        const down = s.match(/(\d+)\s*down/i);
+        if (down) return { min: 0, max: parseInt(down[1]) };
+        const up = s.match(/(\d+)\s*up/i);
+        if (up) return { min: parseInt(up[1]), max: 9999 };
+        const exact = s.match(/^(\d+)$/);
+        if (exact) return { min: parseInt(exact[1]), max: parseInt(exact[1]) };
+        return null;
+      };
+
+      const oRange = parseRange(orderSize);
+      const sRange = parseRange(supplySize);
+      
+      if (!oRange || !sRange) return true; // If we can't parse, be lenient
+      
+      // Check for overlap
+      return oRange.min <= sRange.max && oRange.max >= sRange.min;
+    };
+
+    const calculateRequiredRmSize = (productSize: string, yieldPct: number): string => {
       if (!productSize || productSize.toLowerCase() === 'unsize') return 'Unsize';
+      if (yieldPct <= 0) yieldPct = 1;
       const rangeMatch = productSize.match(/(\d+)\s*-\s*(\d+)/);
       if (rangeMatch) {
-        const min = Math.ceil(parseInt(rangeMatch[1], 10) * yieldPct);
-        const max = Math.ceil(parseInt(rangeMatch[2], 10) * yieldPct);
+        const min = Math.round(parseInt(rangeMatch[1], 10) / yieldPct);
+        const max = Math.round(parseInt(rangeMatch[2], 10) / yieldPct);
         return `${min}-${max}`;
       }
       const singleMatch = productSize.match(/(\d+)\s*(Down|Up)/i);
       if (singleMatch) {
-        const val = Math.ceil(parseInt(singleMatch[1], 10) * yieldPct);
+        const val = Math.round(parseInt(singleMatch[1], 10) / yieldPct);
         const suffix = singleMatch[2];
         const properSuffix = suffix.charAt(0).toUpperCase() + suffix.slice(1).toLowerCase();
         return `${val} ${properSuffix}`;
       }
       const exactMatch = productSize.match(/^(\d+)$/);
       if (exactMatch) {
-        const val = Math.ceil(parseInt(exactMatch[1], 10) * yieldPct);
+        const val = Math.round(parseInt(exactMatch[1], 10) / yieldPct);
+        return `${val}`;
+      }
+      return 'Unsize';
+    };
+
+    const calculateByproductSize = (productSize: string, mainYieldPct: number, childYieldPct: number): string => {
+      if (!productSize || productSize.toLowerCase() === 'unsize') return 'Unsize';
+      if (mainYieldPct <= 0) mainYieldPct = 1;
+      const rangeMatch = productSize.match(/(\d+)\s*-\s*(\d+)/);
+      if (rangeMatch) {
+        const min = Math.round((parseInt(rangeMatch[1], 10) / mainYieldPct) * childYieldPct);
+        const max = Math.round((parseInt(rangeMatch[2], 10) / mainYieldPct) * childYieldPct);
+        return `${min}-${max}`;
+      }
+      const singleMatch = productSize.match(/(\d+)\s*(Down|Up)/i);
+      if (singleMatch) {
+        const val = Math.round((parseInt(singleMatch[1], 10) / mainYieldPct) * childYieldPct);
+        const suffix = singleMatch[2];
+        const properSuffix = suffix.charAt(0).toUpperCase() + suffix.slice(1).toLowerCase();
+        return `${val} ${properSuffix}`;
+      }
+      const exactMatch = productSize.match(/^(\d+)$/);
+      if (exactMatch) {
+        const val = Math.round((parseInt(exactMatch[1], 10) / mainYieldPct) * childYieldPct);
         return `${val}`;
       }
       return 'Unsize';
@@ -924,6 +1021,7 @@ export class MpsController {
       const processNode = node.parentId ? findNode(allYieldNodes, node.parentId) : node;
       if (processNode && processNode.children) {
         const daySupply = getOrInitByproductSupply(dateStr);
+        const mainYieldPct = spec.productYield ? Number(spec.productYield) : 1;
         processNode.children.forEach((child: any) => {
           if (child.id === pId) return;
           const byProdQty = rmQty * (child.yieldPercentage || 0);
@@ -932,14 +1030,27 @@ export class MpsController {
               daySupply[child.id] = {
                 name: child.name,
                 qty: 0,
+                internalQty: 0,
+                externalQty: 0,
                 processName: processNode.name || 'Other Process',
                 sizes: {}
               };
             }
             daySupply[child.id].qty += byProdQty;
+            
+            const totalUsed = intUsed + extUsed;
+            if (totalUsed > 0) {
+                const intRatio = intUsed / totalUsed;
+                const extRatio = extUsed / totalUsed;
+                daySupply[child.id].internalQty = (daySupply[child.id].internalQty || 0) + (byProdQty * intRatio);
+                daySupply[child.id].externalQty = (daySupply[child.id].externalQty || 0) + (byProdQty * extRatio);
+            } else {
+                daySupply[child.id].internalQty = (daySupply[child.id].internalQty || 0) + byProdQty;
+            }
+            
             const nameLower = (child.name || '').toLowerCase();
-            const shouldHaveSize = nameLower.includes('สะโพก') || nameLower.includes('น่อง') || nameLower.includes('อก') || nameLower.includes('ปีก');
-            const byprodSize = shouldHaveSize ? calculateByproductSize(spec.productSize, child.yieldPercentage || 0) : 'Unsize';
+            const shouldHaveSize = nameLower.includes('สะโพก') || nameLower.includes('น่อง') || nameLower.includes('อก') || nameLower.includes('ปีก') || nameLower.includes('bl') || nameLower.includes('เนื้อเลาะ');
+            const byprodSize = shouldHaveSize ? calculateByproductSize(spec.productSize, mainYieldPct, child.yieldPercentage || 0) : 'Unsize';
             daySupply[child.id].sizes[byprodSize] = (daySupply[child.id].sizes[byprodSize] || 0) + byProdQty;
           }
         });
@@ -953,6 +1064,10 @@ export class MpsController {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // Sort orders by quantity descending so large orders drive RM consumption and set dates
+    mainChillOrders.sort((a, b) => b.qty - a.qty);
+    mainFreezeOrders.sort((a, b) => b.qty - a.qty);
+
     // Step 4: Map CHILL Orders First (Flexible Lead Time: Ship Date -1 to -3 Days) — WITH Size Matching
     for (const order of mainChillOrders) {
       totalDemandKg += order.qty;
@@ -960,133 +1075,156 @@ export class MpsController {
 
       const spec = specMap.get(order.erpOrderItemCode);
       const productSize = spec?.productSize || '';
-      const sizeBinKeys = getSizeBinKeys(productSize);
+      const isBil = partType === 'bil';
+      const requiredRmSize = isBil ? calculateRequiredRmSize(productSize, spec?.productYield || 1) : productSize;
+      const sizeBinKeys = getSizeBinKeys(requiredRmSize);
       const isUnsize = sizeBinKeys.length === 0;
 
-      // Try to find supply starting from Ship Date - 1 backwards to Ship Date - 3
-      for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
+      // Phase 1: Try to consume from dailyByproductSupply FIRST (Expanded window: up to Ship Date - 7 days to align co-products)
+      for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 7); d = subtractDays(d, 1)) {
         if (remainingQty <= 0) break;
-
         const dateStr = formatDate(d);
-        
-        // 1. Try to consume from dailyByproductSupply FIRST (Co-Product consumption)
-        const pId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
-        if (pId) {
+        const pIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+        if (pIds.length > 0) {
            const daySupply = getOrInitByproductSupply(dateStr);
-           if (daySupply[pId] && daySupply[pId].qty > 0) {
-             const consumeQty = Math.round(Math.min(daySupply[pId].qty, remainingQty));
-             if (consumeQty > 0) {
-               mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
-                 mpsPlan: plan,
-                 erpOrderLineId: order.erpOrderLineId,
-                 soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-                 itemCode: order.erpOrderItemCode,
-                 itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
-                 productType: order.productType,
-                 quantityKg: consumeQty,
-                 shipDate: order.shipDate,
-                 plannedProductionDate: d,
-                 finishedProductionDate: d,
-                 isManualOverride: false
-               }));
-               daySupply[pId].qty -= consumeQty;
+           for (const pId of pIds) {
+             if (remainingQty <= 0) break;
+             if (daySupply[pId] && daySupply[pId].qty > 0) {
                
-               let deductRem = consumeQty;
+               let matchQty = 0;
+               const matchingSizes: string[] = [];
                for (const sz of Object.keys(daySupply[pId].sizes)) {
-                 if (deductRem <= 0) break;
-                 const szVal = daySupply[pId].sizes[sz];
-                 const ded = Math.min(szVal, deductRem);
-                 daySupply[pId].sizes[sz] -= ded;
-                 deductRem -= ded;
+                 if (isSizeMatch(productSize, sz)) {
+                   matchQty += daySupply[pId].sizes[sz];
+                   matchingSizes.push(sz);
+                 }
                }
 
-               remainingQty -= consumeQty;
-               if (remainingQty <= 0) break;
+               const consumeQty = Math.round(Math.min(matchQty, remainingQty));
+               if (consumeQty > 0) {
+                 mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
+                   mpsPlan: plan,
+                   erpOrderLineId: order.erpOrderLineId,
+                   soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+                   itemCode: order.erpOrderItemCode,
+                   itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+                   productType: order.productType,
+                   quantityKg: consumeQty,
+                   shipDate: order.shipDate,
+                   plannedProductionDate: d,
+                   finishedProductionDate: d,
+                   isManualOverride: false
+                 }));
+                 daySupply[pId].qty -= consumeQty;
+                 let deductRem = consumeQty;
+                 for (const sz of matchingSizes) {
+                   if (deductRem <= 0) break;
+                   const szVal = daySupply[pId].sizes[sz];
+                   const ded = Math.min(szVal, deductRem);
+                   daySupply[pId].sizes[sz] -= ded;
+                   deductRem -= ded;
+                 }
+                 remainingQty -= consumeQty;
+               }
              }
            }
         }
+      }
 
-        // 2. Pull from RM
-        const totalRmForDate = supplyMap.get(dateStr) || 0;
-        let allowedTotalRmForDate = 0;
-        if (spec?.isExternalRmAllowed) {
-            allowedTotalRmForDate = externalRemainingMap.get(dateStr) || 0;
-        } else {
-            allowedTotalRmForDate = internalRemainingMap.get(dateStr) || 0;
-        }
+      // Phase 2: Pull from RM (Strict window: Ship Date - 1 to - 3)
+      if (remainingQty > 0) {
+        for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
+          if (remainingQty <= 0) break;
+          const dateStr = formatDate(d);
+          
+          // 2. Pull from RM
+          const totalRmForDate = supplyMap.get(dateStr) || 0;
+          let allowedTotalRmForDate = 0;
+          if (spec?.isExternalRmAllowed) {
+              allowedTotalRmForDate = (externalRemainingMap.get(dateStr) || 0) + (internalRemainingMap.get(dateStr) || 0);
+          } else {
+              allowedTotalRmForDate = internalRemainingMap.get(dateStr) || 0;
+          }
 
-        if (allowedTotalRmForDate <= 0) continue;
+          if (allowedTotalRmForDate <= 0) continue;
 
-        const sizeData = sizeSupplyMap.get(dateStr);
+          const sizeData = sizeSupplyMap.get(dateStr);
 
-        let availableQty = 0;
-        if (!isUnsize && sizeData) {
-          // Sum available from matching size bins only
-          availableQty = sizeBinKeys.reduce((sum, key) => sum + (sizeData.bins[key] || 0), 0);
-        } else {
-          // Unsize or no size data available: use whatever RM is left
-          availableQty = totalRmForDate;
-        }
+          let availableQty = 0;
+          if (!isUnsize && sizeData) {
+            // Sum available from matching size bins only
+            availableQty = sizeBinKeys.reduce((sum, key) => sum + (sizeData.bins[key] || 0), 0);
+          } else {
+            // Unsize or no size data available: use whatever RM is left
+            availableQty = totalRmForDate;
+          }
 
-        availableQty = Math.min(availableQty, allowedTotalRmForDate);
-        if (availableQty <= 0) continue;
+          availableQty = Math.min(availableQty, allowedTotalRmForDate);
+          if (availableQty <= 0) continue;
 
-        const allocQty = Math.round(Math.min(availableQty, remainingQty));
-        if (allocQty <= 0) continue;
+          const allocQty = Math.round(Math.min(availableQty, remainingQty));
+          if (allocQty <= 0) continue;
 
-        mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
-          mpsPlan: plan,
-          erpOrderLineId: order.erpOrderLineId,
-          soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-          itemCode: order.erpOrderItemCode,
-          itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
-          productType: order.productType,
-          quantityKg: allocQty,
-          shipDate: order.shipDate,
-          plannedProductionDate: d,
-          finishedProductionDate: d,
-          isManualOverride: false
-        }));
+          mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
+            mpsPlan: plan,
+            erpOrderLineId: order.erpOrderLineId,
+            soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+            itemCode: order.erpOrderItemCode,
+            itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+            productType: order.productType,
+            quantityKg: allocQty,
+            shipDate: order.shipDate,
+            plannedProductionDate: d,
+            finishedProductionDate: d,
+            isManualOverride: false
+          }));
 
-        // Deduct from both supply maps
-        supplyMap.set(dateStr, totalRmForDate - allocQty);
-        if (sizeData) {
-          sizeData.total -= allocQty;
-          if (!isUnsize) {
-            let deductRemaining = allocQty;
-            for (const key of sizeBinKeys) {
-              if (deductRemaining <= 0) break;
-              const binVal = sizeData.bins[key] || 0;
-              const deduct = Math.min(binVal, deductRemaining);
-              sizeData.bins[key] = binVal - deduct;
-              deductRemaining -= deduct;
+          // Deduct from both supply maps
+          supplyMap.set(dateStr, totalRmForDate - allocQty);
+          if (sizeData) {
+            sizeData.total -= allocQty;
+            if (!isUnsize) {
+              let deductRemaining = allocQty;
+              for (const key of sizeBinKeys) {
+                if (deductRemaining <= 0) break;
+                const binVal = sizeData.bins[key] || 0;
+                const deduct = Math.min(binVal, deductRemaining);
+                sizeData.bins[key] = binVal - deduct;
+                deductRemaining -= deduct;
+              }
             }
           }
+          remainingQty -= allocQty;
+
+          // 3. Generate byproducts immediately for the RM pulled
+          const yieldPct = spec?.productYield || 1;
+          const rm = allocQty / yieldPct;
+
+          let extUsed = 0;
+          let intUsed = 0;
+          if (spec?.isExternalRmAllowed) {
+              const extAvail = externalRemainingMap.get(dateStr) || 0;
+              if (extAvail >= rm) {
+                  extUsed = rm;
+                  intUsed = 0;
+              } else {
+                  extUsed = extAvail;
+                  intUsed = rm - extAvail;
+              }
+          } else {
+              intUsed = rm;
+              extUsed = 0;
+          }
+          externalRemainingMap.set(dateStr, Math.max(0, (externalRemainingMap.get(dateStr) || 0) - extUsed));
+          internalRemainingMap.set(dateStr, Math.max(0, (internalRemainingMap.get(dateStr) || 0) - intUsed));
+
+          generateByproducts(dateStr, rm, spec, intUsed, extUsed);
         }
-        remainingQty -= allocQty;
-
-        // 3. Generate byproducts immediately for the RM pulled
-        const yieldPct = spec?.productYield || 1;
-        const rm = allocQty / yieldPct;
-
-        let extUsed = 0;
-        let intUsed = 0;
-        if (spec?.isExternalRmAllowed) {
-            extUsed = rm;
-            intUsed = 0;
-        } else {
-            intUsed = rm;
-            extUsed = 0;
-        }
-        externalRemainingMap.set(dateStr, Math.max(0, (externalRemainingMap.get(dateStr) || 0) - extUsed));
-        internalRemainingMap.set(dateStr, Math.max(0, (internalRemainingMap.get(dateStr) || 0) - intUsed));
-
-        generateByproducts(dateStr, rm, spec, intUsed, extUsed);
       }
 
       if (remainingQty > 0) {
         // Discard unmet demand from calendar, log as exception
-        const rmTypeDesc = spec?.isExternalRmAllowed ? 'RM SUP' : 'RM STD';
+        const rmTypeDesc = spec?.isExternalRmAllowed ? 'RM SUP + RM STD' : 'RM STD';
         exceptionsToSave.push(manager.create(MpsExceptionReport, {
           mpsPlan: plan,
           erpOrderLineId: order.erpOrderLineId,
@@ -1152,7 +1290,9 @@ export class MpsController {
 
         const spec = specMap.get(order.erpOrderItemCode);
         const productSize = spec?.productSize || '';
-        const sizeBinKeys = getSizeBinKeys(productSize);
+        const isBil = partType === 'bil';
+        const requiredRmSize = isBil ? calculateRequiredRmSize(productSize, spec?.productYield || 1) : productSize;
+        const sizeBinKeys = getSizeBinKeys(requiredRmSize);
         const isUnsize = sizeBinKeys.length === 0;
 
         // Valid production window: use spec lead times (minProductLead → maxProductLead)
@@ -1161,129 +1301,154 @@ export class MpsController {
         const latestProdDate = subtractDays(order.shipDate, minLead);
         const earliestProdDate = subtractDays(order.shipDate, maxLead);
 
-        // Waterfall forward: earliest date first
+        // Phase 1: Try to consume from dailyByproductSupply FIRST (Expanded window)
+        const earliestProdDateByproduct = subtractDays(earliestProdDate, 5); // Add 5 extra days for co-product alignment
         for (const dateStr of allDateStrs) {
           if (remainingQty <= 0) break;
           const dateObj = new Date(dateStr + 'T00:00:00');
-          if (dateObj < earliestProdDate || dateObj > latestProdDate) continue;
+          if (dateObj < earliestProdDateByproduct || dateObj > latestProdDate) continue;
 
-          // 1. Try to consume from dailyByproductSupply FIRST (Co-Product consumption)
-          const pId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
-          if (pId) {
+          const pIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+          if (pIds.length > 0) {
              const daySupply = getOrInitByproductSupply(dateStr);
-             if (daySupply[pId] && daySupply[pId].qty > 0) {
-               const consumeQty = Math.round(Math.min(daySupply[pId].qty, remainingQty));
-               if (consumeQty > 0) {
-                 mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
-                   mpsPlan: plan,
-                   erpOrderLineId: order.erpOrderLineId,
-                   soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-                   itemCode: order.erpOrderItemCode,
-                   itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
-                   productType: order.productType,
-                   quantityKg: consumeQty,
-                   shipDate: order.shipDate,
-                   plannedProductionDate: dateObj,
-                   finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
-                   isManualOverride: false
-                 }));
-                 daySupply[pId].qty -= consumeQty;
+             for (const pId of pIds) {
+               if (remainingQty <= 0) break;
+               if (daySupply[pId] && daySupply[pId].qty > 0) {
                  
-                 let deductRem = consumeQty;
+                 let matchQty = 0;
+                 const matchingSizes: string[] = [];
                  for (const sz of Object.keys(daySupply[pId].sizes)) {
-                   if (deductRem <= 0) break;
-                   const szVal = daySupply[pId].sizes[sz];
-                   const ded = Math.min(szVal, deductRem);
-                   daySupply[pId].sizes[sz] -= ded;
-                   deductRem -= ded;
+                   if (isSizeMatch(productSize, sz)) {
+                     matchQty += daySupply[pId].sizes[sz];
+                     matchingSizes.push(sz);
+                   }
                  }
 
-                 remainingQty -= consumeQty;
-                 if (remainingQty <= 0) break;
+                 const consumeQty = Math.round(Math.min(matchQty, remainingQty));
+                 if (consumeQty > 0) {
+                   mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
+                     mpsPlan: plan,
+                     erpOrderLineId: order.erpOrderLineId,
+                     soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+                     itemCode: order.erpOrderItemCode,
+                     itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+                     productType: order.productType,
+                     quantityKg: consumeQty,
+                     shipDate: order.shipDate,
+                     plannedProductionDate: dateObj,
+                     finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
+                     isManualOverride: false
+                   }));
+                   daySupply[pId].qty -= consumeQty;
+                   let deductRem = consumeQty;
+                   for (const sz of matchingSizes) {
+                     if (deductRem <= 0) break;
+                     const szVal = daySupply[pId].sizes[sz];
+                     const ded = Math.min(szVal, deductRem);
+                     daySupply[pId].sizes[sz] -= ded;
+                     deductRem -= ded;
+                   }
+                   remainingQty -= consumeQty;
+                 }
                }
              }
           }
+        }
 
-          // 2. Pull from RM
-          const totalRmForDate = supplyMap.get(dateStr) || 0;
-          let allowedTotalRmForDate = 0;
-          if (spec?.isExternalRmAllowed) {
-              allowedTotalRmForDate = externalRemainingMap.get(dateStr) || 0;
-          } else {
-              allowedTotalRmForDate = internalRemainingMap.get(dateStr) || 0;
-          }
+        // Phase 2: Pull from RM (Strict window)
+        if (remainingQty > 0) {
+          for (const dateStr of allDateStrs) {
+            if (remainingQty <= 0) break;
+            const dateObj = new Date(dateStr + 'T00:00:00');
+            if (dateObj < earliestProdDate || dateObj > latestProdDate) continue;
 
-          if (allowedTotalRmForDate <= 0) continue;
+            // 2. Pull from RM
+            const totalRmForDate = supplyMap.get(dateStr) || 0;
+            let allowedTotalRmForDate = 0;
+            if (spec?.isExternalRmAllowed) {
+                allowedTotalRmForDate = (externalRemainingMap.get(dateStr) || 0) + (internalRemainingMap.get(dateStr) || 0);
+            } else {
+                allowedTotalRmForDate = internalRemainingMap.get(dateStr) || 0;
+            }
 
-          const sizeData = sizeSupplyMap.get(dateStr);
+            if (allowedTotalRmForDate <= 0) continue;
 
-          let availableQty = 0;
-          if (useSizeMatch && !isUnsize && sizeData) {
-            // Sum available from matching size bins only
-            availableQty = sizeBinKeys.reduce((sum, key) => sum + (sizeData.bins[key] || 0), 0);
-          } else {
-            // Unsize or no size data available: use whatever RM is left
-            availableQty = totalRmForDate;
-          }
+            const sizeData = sizeSupplyMap.get(dateStr);
 
-          availableQty = Math.min(availableQty, allowedTotalRmForDate);
-          if (availableQty <= 0) continue;
+            let availableQty = 0;
+            if (useSizeMatch && !isUnsize && sizeData) {
+              // Sum available from matching size bins only
+              availableQty = sizeBinKeys.reduce((sum, key) => sum + (sizeData.bins[key] || 0), 0);
+            } else {
+              // Unsize or no size data available: use whatever RM is left
+              availableQty = totalRmForDate;
+            }
 
-          const allocQty = Math.round(Math.min(availableQty, remainingQty));
-          if (allocQty <= 0) continue;
+            availableQty = Math.min(availableQty, allowedTotalRmForDate);
+            if (availableQty <= 0) continue;
 
-          mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
-            mpsPlan: plan,
-            erpOrderLineId: order.erpOrderLineId,
-            soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-            itemCode: order.erpOrderItemCode,
-            itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
-            productType: order.productType,
-            quantityKg: allocQty,
-            shipDate: order.shipDate,
-            plannedProductionDate: dateObj,
-            finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
-            isManualOverride: false
-          }));
+            const allocQty = Math.round(Math.min(availableQty, remainingQty));
+            if (allocQty <= 0) continue;
 
-          // Deduct from supply maps
-          supplyMap.set(dateStr, totalRmForDate - allocQty);
-          if (sizeData) {
-            sizeData.total -= allocQty;
-            if (useSizeMatch && !isUnsize) {
-              let deductRemaining = allocQty;
-              for (const key of sizeBinKeys) {
-                if (deductRemaining <= 0) break;
-                const binVal = sizeData.bins[key] || 0;
-                const deduct = Math.min(binVal, deductRemaining);
-                sizeData.bins[key] = binVal - deduct;
-                deductRemaining -= deduct;
+            mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
+              mpsPlan: plan,
+              erpOrderLineId: order.erpOrderLineId,
+              soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+              itemCode: order.erpOrderItemCode,
+              itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+              productType: order.productType,
+              quantityKg: allocQty,
+              shipDate: order.shipDate,
+              plannedProductionDate: dateObj,
+              finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
+              isManualOverride: false
+            }));
+
+            // Deduct from supply maps
+            supplyMap.set(dateStr, totalRmForDate - allocQty);
+            if (sizeData) {
+              sizeData.total -= allocQty;
+              if (useSizeMatch && !isUnsize) {
+                let deductRemaining = allocQty;
+                for (const key of sizeBinKeys) {
+                  if (deductRemaining <= 0) break;
+                  const binVal = sizeData.bins[key] || 0;
+                  const deduct = Math.min(binVal, deductRemaining);
+                  sizeData.bins[key] = binVal - deduct;
+                  deductRemaining -= deduct;
+                }
               }
             }
+            remainingQty -= allocQty;
+
+            // 3. Generate byproducts immediately for the RM pulled
+            const yieldPct = spec?.productYield || 1;
+            const rm = allocQty / yieldPct;
+
+            let extUsed = 0;
+            let intUsed = 0;
+            if (spec?.isExternalRmAllowed) {
+                const extAvail = externalRemainingMap.get(dateStr) || 0;
+                if (extAvail >= rm) {
+                    extUsed = rm;
+                    intUsed = 0;
+                } else {
+                    extUsed = extAvail;
+                    intUsed = rm - extAvail;
+                }
+            } else {
+                intUsed = rm;
+                extUsed = 0;
+            }
+            externalRemainingMap.set(dateStr, Math.max(0, (externalRemainingMap.get(dateStr) || 0) - extUsed));
+            internalRemainingMap.set(dateStr, Math.max(0, (internalRemainingMap.get(dateStr) || 0) - intUsed));
+
+            generateByproducts(dateStr, rm, spec, intUsed, extUsed);
           }
-          remainingQty -= allocQty;
-
-          // 3. Generate byproducts immediately for the RM pulled
-          const yieldPct = spec?.productYield || 1;
-          const rm = allocQty / yieldPct;
-
-          let extUsed = 0;
-          let intUsed = 0;
-          if (spec?.isExternalRmAllowed) {
-              extUsed = rm;
-              intUsed = 0;
-          } else {
-              intUsed = rm;
-              extUsed = 0;
-          }
-          externalRemainingMap.set(dateStr, Math.max(0, (externalRemainingMap.get(dateStr) || 0) - extUsed));
-          internalRemainingMap.set(dateStr, Math.max(0, (internalRemainingMap.get(dateStr) || 0) - intUsed));
-
-          generateByproducts(dateStr, rm, spec, intUsed, extUsed);
         }
 
         if (remainingQty > 0) {
-          const rmTypeDesc = spec?.isExternalRmAllowed ? 'RM SUP' : 'RM STD';
+          const rmTypeDesc = spec?.isExternalRmAllowed ? 'RM SUP + RM STD' : 'RM STD';
           exceptionsToSave.push(manager.create(MpsExceptionReport, {
             mpsPlan: plan,
             erpOrderLineId: order.erpOrderLineId,
@@ -1309,37 +1474,42 @@ export class MpsController {
       let remainingQty = order.qty;
 
       const spec = specMap.get(order.erpOrderItemCode);
-      const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
+      const bpIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
 
-      if (bpId) {
+      if (bpIds.length > 0) {
         for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
           if (remainingQty <= 0) break;
 
           const dateStr = formatDate(d);
           const daySupply = dailyByproductSupply.get(dateStr);
-          const bpSupply = daySupply && daySupply[bpId] ? daySupply[bpId].qty : 0;
+          if (!daySupply) continue;
 
-          if (bpSupply <= 0) continue;
+          for (const bpId of bpIds) {
+            if (remainingQty <= 0) break;
+            const bpSupply = daySupply[bpId] ? daySupply[bpId].qty : 0;
 
-          const allocQty = Math.round(Math.min(bpSupply, remainingQty));
-          if (allocQty <= 0) continue;
+            if (bpSupply <= 0) continue;
 
-          mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
-            mpsPlan: plan,
-            erpOrderLineId: order.erpOrderLineId,
-            soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-            itemCode: order.erpOrderItemCode,
-            itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
-            productType: order.productType,
-            quantityKg: allocQty,
-            shipDate: order.shipDate,
-            plannedProductionDate: d,
-            finishedProductionDate: d,
-            isManualOverride: false
-          }));
+            const allocQty = Math.round(Math.min(bpSupply, remainingQty));
+            if (allocQty <= 0) continue;
 
-          daySupply![bpId].qty -= allocQty;
-          remainingQty -= allocQty;
+            mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
+              mpsPlan: plan,
+              erpOrderLineId: order.erpOrderLineId,
+              soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+              itemCode: order.erpOrderItemCode,
+              itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+              productType: order.productType,
+              quantityKg: allocQty,
+              shipDate: order.shipDate,
+              plannedProductionDate: d,
+              finishedProductionDate: d,
+              isManualOverride: false
+            }));
+
+            daySupply[bpId].qty -= allocQty;
+            remainingQty -= allocQty;
+          }
         }
       }
 
@@ -1364,9 +1534,9 @@ export class MpsController {
         let remainingQty = order.qty;
 
         const spec = specMap.get(order.erpOrderItemCode);
-        const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
+        const bpIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
 
-        if (bpId) {
+        if (bpIds.length > 0) {
           // Use spec lead times for by-product production window
           const bpMinLead = spec?.minProductLead ?? 5;
           const bpMaxLead = spec?.maxProductLead ?? 90;
@@ -1379,29 +1549,34 @@ export class MpsController {
             if (dateObj < earliestProdDate || dateObj > latestProdDate) continue;
 
             const daySupply = dailyByproductSupply.get(dateStr);
-            const bpSupply = daySupply && daySupply[bpId] ? daySupply[bpId].qty : 0;
+            if (!daySupply) continue;
 
-            if (bpSupply <= 0) continue;
+            for (const bpId of bpIds) {
+              if (remainingQty <= 0) break;
+              const bpSupply = daySupply[bpId] ? daySupply[bpId].qty : 0;
 
-            const allocQty = Math.round(Math.min(bpSupply, remainingQty));
-            if (allocQty <= 0) continue;
+              if (bpSupply <= 0) continue;
 
-            mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
-              mpsPlan: plan,
-              erpOrderLineId: order.erpOrderLineId,
-              soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
-              itemCode: order.erpOrderItemCode,
-              itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
-              productType: order.productType,
-              quantityKg: allocQty,
-              shipDate: order.shipDate,
-              plannedProductionDate: dateObj,
-              finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
-              isManualOverride: false
-            }));
+              const allocQty = Math.round(Math.min(bpSupply, remainingQty));
+              if (allocQty <= 0) continue;
 
-            daySupply![bpId].qty -= allocQty;
-            remainingQty -= allocQty;
+              mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
+                mpsPlan: plan,
+                erpOrderLineId: order.erpOrderLineId,
+                soNumber: headerMap.get(order.erpOrderHeaderId) || order.erpOrderHeaderId?.toString(),
+                itemCode: order.erpOrderItemCode,
+                itemDesc: specMap.get(order.erpOrderItemCode)?.erpItemDesc || order.erpOrderItemCode,
+                productType: order.productType,
+                quantityKg: allocQty,
+                shipDate: order.shipDate,
+                plannedProductionDate: dateObj,
+                finishedProductionDate: new Date(dateObj.getTime() + 4 * 24 * 60 * 60 * 1000),
+                isManualOverride: false
+              }));
+
+              daySupply[bpId].qty -= allocQty;
+              remainingQty -= allocQty;
+            }
           }
         }
 
@@ -1438,18 +1613,20 @@ export class MpsController {
     console.log(`[MPS BYPROD] byprodFreezeOrders count: ${byprodFreezeOrders.length}`);
     for (const order of byprodFreezeOrders) {
       const spec = specMap.get(order.erpOrderItemCode);
-      const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
+      const bpIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
       const bpMinLead = spec?.minProductLead ?? 5;
       const bpMaxLead = spec?.maxProductLead ?? 90;
-      console.log(`[MPS BYPROD]   Order ${order.erpOrderItemCode} (${spec?.erpItemDesc || '?'}): qty=${order.qty}kg, ship=${formatDate(order.shipDate)}, lead=${bpMinLead}-${bpMaxLead}d, bpId=${bpId || 'NONE'}`);
-      // Check if bpId has ANY supply
+      console.log(`[MPS BYPROD]   Order ${order.erpOrderItemCode} (${spec?.erpItemDesc || '?'}): qty=${order.qty}kg, ship=${formatDate(order.shipDate)}, lead=${bpMinLead}-${bpMaxLead}d, bpIds=${bpIds.length > 0 ? bpIds.join(',') : 'NONE'}`);
+      // Check if bpIds have ANY supply
       let totalBpSupply = 0;
       dailyByproductSupply.forEach((dayData) => {
-        if (dayData[bpId!]) totalBpSupply += dayData[bpId!].qty;
+        bpIds.forEach((bpId: any) => {
+          if (dayData[bpId]) totalBpSupply += dayData[bpId].qty;
+        });
       });
-      console.log(`[MPS BYPROD]     -> Total available supply for bpId: ${Math.round(totalBpSupply)} kg`);
-      if (totalBpSupply === 0 && bpId) {
-        console.log(`[MPS BYPROD]     ⚠️ NO by-product supply found for this bpId. Check yield tree linkage.`);
+      console.log(`[MPS BYPROD]     -> Total available supply for bpIds: ${Math.round(totalBpSupply)} kg`);
+      if (totalBpSupply === 0 && bpIds.length > 0) {
+        console.log(`[MPS BYPROD]     ⚠️ NO by-product supply found for these bpIds. Check yield tree linkage.`);
         // Log available bpIds for comparison
         const availBpIds = new Set<string>();
         dailyByproductSupply.forEach((dayData) => {
@@ -1686,11 +1863,25 @@ export class MpsController {
               daySupply['BL-DEBONE'] = {
                   name: 'BL (Debone)',
                   qty: 0,
+                  internalQty: 0,
+                  externalQty: 0,
                   processName: 'Debone Process',
                   sizes: {}
               };
           }
           daySupply['BL-DEBONE'].qty += totalBlOutputKg;
+          
+          const intRm = internalSupplyMap.get(dayStr) || 0;
+          const extRm = externalSupplyMap.get(dayStr) || 0;
+          const totalRm = intRm + extRm;
+          if (totalRm > 0) {
+              const intRatio = intRm / totalRm;
+              const extRatio = extRm / totalRm;
+              daySupply['BL-DEBONE'].internalQty = (daySupply['BL-DEBONE'].internalQty || 0) + (totalBlOutputKg * intRatio);
+              daySupply['BL-DEBONE'].externalQty = (daySupply['BL-DEBONE'].externalQty || 0) + (totalBlOutputKg * extRatio);
+          } else {
+              daySupply['BL-DEBONE'].internalQty = (daySupply['BL-DEBONE'].internalQty || 0) + totalBlOutputKg;
+          }
         }
       }
 
@@ -1872,13 +2063,22 @@ export class MpsController {
     const results: any[] = [];
 
     for (const month of months) {
-      const result = await this.generatePlan({
-        targetMonth: month,
-        orderStartDate: body.orderStartDate,
-        orderEndDate: body.orderEndDate,
-        partType,
-        _allocatedMap: new Map(allocatedMap), // pass a copy
-      });
+      let result;
+      if (partType === 'bil' || partType === 'bl') {
+        result = await this.generateUnifiedLegPlan({
+          targetMonth: month,
+          orderStartDate: body.orderStartDate,
+          orderEndDate: body.orderEndDate
+        });
+      } else {
+        result = await this.generatePlan({
+          targetMonth: month,
+          orderStartDate: body.orderStartDate,
+          orderEndDate: body.orderEndDate,
+          partType,
+          _allocatedMap: new Map(allocatedMap), // pass a copy
+        });
+      }
 
       // After generating, collect how much was allocated per order line
       if (result?.success && ((result as any).planId || (result as any).plan?.id)) {
@@ -1901,8 +2101,9 @@ export class MpsController {
   // 4. List all MPS Plans
   @Get('plans')
   async getPlans(@Query('partType') partType: string) {
+    const searchPartType = (partType === 'bil' || partType === 'bl') ? 'leg' : (partType || 'fillet');
     return this.mpsPlanRepo.find({
-      where: { partType: partType || 'fillet' },
+      where: { partType: searchPartType },
       order: {
         createdAt: 'DESC'
       }
@@ -2197,7 +2398,24 @@ export class MpsController {
       };
     });
 
-    return merged;
+    // Grouping identical orders (same itemCode, productType)
+    const groupedMap = new Map<string, any>();
+    for (const order of merged) {
+      const key = `${order.itemCode}_${order.productType || 'unknown'}`;
+      if (!groupedMap.has(key)) {
+        groupedMap.set(key, { ...order, quantityKg: Number(order.quantityKg) });
+      } else {
+        const existing = groupedMap.get(key);
+        existing.quantityKg += Number(order.quantityKg);
+        if (order.priority !== null && order.priority !== undefined) {
+           if (existing.priority === null || existing.priority === undefined || order.priority < existing.priority) {
+             existing.priority = order.priority;
+           }
+        }
+      }
+    }
+
+    return Array.from(groupedMap.values());
   }
 
   // 10. Update Order Priorities (Batch)
@@ -2234,7 +2452,23 @@ export class MpsController {
 
     const workbook = new ExcelJS.Workbook();
     const isBilPlan = plan.partType === 'bil';
-    const sheet = workbook.addWorksheet(isBilPlan ? 'BIL MPS Plan' : 'Fillet MPS Plan');
+    const isBlPlan = plan.partType === 'bl';
+    
+    if (isBlPlan) {
+      const specs = await this.specRepo.find();
+      const blWorkbook = await generateBlExcelPlan(plan, orders, specs, []);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=MPS_Plan_BL_${plan.targetMonth}.xlsx`);
+      await blWorkbook.xlsx.write(res);
+      res.end();
+      return;
+    }
+
+    let sheetName = 'MPS Plan';
+    if (isBilPlan) sheetName = 'BIL MPS Plan';
+    else sheetName = 'Fillet MPS Plan';
+    
+    const sheet = workbook.addWorksheet(sheetName);
 
     // Fetch Order Headers for Customer Grade mapping
     const orderNumbers = [...new Set(orders.map(o => o.soNumber).filter(id => id))];
@@ -2568,12 +2802,12 @@ export class MpsController {
           } catch (e) {}
         }
         
-        const rmBilTotal = Math.round(s.rmFlAvailKg + extTotalKg);
+        const rmBilTotal = Math.round(s.internalRmKg + extTotalKg);
         const rmUsed = Math.round(s.demandKg);
         const rmBalance = rmBilTotal - rmUsed;
 
         // ── Pieces-based avg piece weight ──
-        const avgPieceWeight = intakeBirds > 0 ? (s.rmFlAvailKg / bilPiecesTotal) : 0;
+        const avgPieceWeight = intakeBirds > 0 ? (s.internalRmKg / bilPiecesTotal) : 0;
         let remainingPieces = bilPiecesTotal; // BIL uses x2
 
         // P1: BIL orders (matched by Master Yield Tree process: 1)
@@ -2738,7 +2972,7 @@ export class MpsController {
           bilPiecesTotal,
           avgWeight ? Number(avgWeight).toFixed(2) : '-',
           Math.round(slaughteredWeight),
-          Math.round(s.rmFlAvailKg),
+          Math.round(s.internalRmKg),
           Math.round(extTotalKg),
           rmBilTotal,
           rmUsed,
@@ -2842,24 +3076,47 @@ export class MpsController {
     // ════════════════════════════════════════════════════
 
     // 2. Setup Headers
+    
+    let dynamicSizes: string[] = [];
+    if (isBlPlan) {
+      const sizeSet = new Set<string>();
+      plan.supplyBreakdown.forEach(s => {
+        if (s.sizes) s.sizes.forEach((sz: any) => { if (sz.groupSize) sizeSet.add(sz.groupSize); });
+      });
+      dynamicSizes = Array.from(sizeSet).sort();
+    } else {
+      dynamicSizes = ['40 Down', '40-45', '45-50', '50-55', '55-60', '60-65', '65-70', '70 Up'];
+    }
+    const sizeColCount = dynamicSizes.length;
+
+    const extraCols = isBlPlan ? 3 : 0;
+    
     // Row 1: Section Headers
     const sectionRow = sheet.addRow([]);
     sectionRow.getCell(1).value = 'Supply Control';
-    sheet.mergeCells(1, 1, 1, 6);
-    sectionRow.getCell(7).value = 'Manpower & Execution';
-    sheet.mergeCells(1, 7, 1, 11);
-    sectionRow.getCell(12).value = 'RM FL by Size';
-    sheet.mergeCells(1, 12, 1, 19);
-    sectionRow.getCell(20).value = 'Production Plan';
-    sheet.mergeCells(1, 20, 1, 20 + itemCodes.length - 1);
+    sheet.mergeCells(1, 1, 1, 6 + extraCols);
+    sectionRow.getCell(7 + extraCols).value = 'Manpower & Execution';
+    sheet.mergeCells(1, 7 + extraCols, 1, 11 + extraCols);
+    
+    sectionRow.getCell(12 + extraCols).value = isBlPlan ? 'RM BL by Size' : 'RM FL by Size';
+    if (sizeColCount > 0) {
+      sheet.mergeCells(1, 12 + extraCols, 1, 11 + extraCols + sizeColCount);
+    }
+    
+    sectionRow.getCell(12 + extraCols + sizeColCount).value = 'Production Plan';
+    sheet.mergeCells(1, 12 + extraCols + sizeColCount, 1, 11 + extraCols + sizeColCount + Math.max(1, itemCodes.length));
 
     // Style Section Headers
-    [
-      { start: 1, end: 6, color: 'FF4472C4' },
-      { start: 7, end: 11, color: 'FF70AD47' },
-      { start: 12, end: 19, color: 'FFED7D31' },
-      { start: 20, end: 20 + itemCodes.length - 1, color: 'FF7030A0' }
-    ].forEach(sec => {
+    const sections = [
+      { start: 1, end: 6 + extraCols, color: 'FF4472C4' },
+      { start: 7 + extraCols, end: 11 + extraCols, color: 'FF70AD47' }
+    ];
+    if (sizeColCount > 0) {
+      sections.push({ start: 12 + extraCols, end: 11 + extraCols + sizeColCount, color: 'FFED7D31' });
+    }
+    sections.push({ start: 12 + extraCols + sizeColCount, end: 11 + extraCols + sizeColCount + Math.max(1, itemCodes.length) - 1, color: 'FF7030A0' });
+
+    sections.forEach(sec => {
       for (let i = sec.start; i <= sec.end; i++) {
         const cell = sectionRow.getCell(i);
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sec.color } };
@@ -2870,11 +3127,11 @@ export class MpsController {
     });
 
     // Row 2: Item Descriptions Header
-    const descRowData = new Array(19).fill('');
+    const descRowData = new Array(11 + extraCols + sizeColCount).fill('');
     itemCodes.forEach(code => descRowData.push(itemMap.get(code) || ''));
     const descRow = sheet.addRow(descRowData);
     descRow.eachCell((cell, colNumber) => {
-      if (colNumber >= 20) {
+      if (colNumber >= 12 + extraCols + sizeColCount) {
         cell.font = { bold: true, size: 8 };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
         cell.alignment = { horizontal: 'center', wrapText: true };
@@ -2884,10 +3141,14 @@ export class MpsController {
     descRow.height = 30;
 
     // Row 3: Sub-Headers
+    let supplyHeaders = ['Date', 'Day', 'Avg. Wt', 'RM FL Total', 'RM Used (Demand)', 'RM Balance'];
+    if (isBlPlan) {
+      supplyHeaders = ['Date', 'Day', 'Avg. Wt', 'RM BL Total', 'RM BL (เนื้อรวม)', 'RM BL-TH (สะโพก)', 'RM BL-DR (น่อง)', 'RM Used (Demand)', 'RM Balance'];
+    }
     const subHeaders = [
-      'Date', 'Day', 'Avg. Wt', 'RM FL Total', 'RM Used (Demand)', 'RM Balance',
+      ...supplyHeaders,
       'Cut (P)', 'Sup (P)', 'Cut (A)', 'Sup (A)', 'Variance',
-      '40 down', '40 45', '45 50', '50 55', '55 60', '60 65', '65 70', '70 up',
+      ...dynamicSizes,
       ...itemCodes
     ];
     const headerRow = sheet.addRow(subHeaders);
@@ -2904,7 +3165,7 @@ export class MpsController {
       const s = d.summary;
       const supply = d.supply;
       const dateObj = new Date(dateStr);
-      const isNoSupply = !s.intakeBirds || s.intakeBirds === 0;
+      const isNoSupply = isBlPlan ? (!s.rmFlAvailKg || s.rmFlAvailKg === 0) : (!s.intakeBirds || s.intakeBirds === 0);
 
       const manualOp = manualOpMap.get(dateStr);
       const actualCut = manualOp?.actualCuttingWorkers || 0;
@@ -2917,30 +3178,42 @@ export class MpsController {
       const getSizeKg = (sizeArr: any[] | undefined, groupSize: string): number => {
         if (!sizeArr) return 0;
         return sizeArr
-          .filter((sz: any) => sz.groupSize === groupSize)
+          .filter((sz: any) => sz.groupSize?.toLowerCase() === groupSize.toLowerCase())
           .reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
       };
 
-      const rowData = [
+      let rmBl = 0, rmBlTh = 0, rmBlDr = 0;
+      if (isBlPlan && s.blTrackerJson) {
+        try {
+          const tracker = JSON.parse(s.blTrackerJson);
+          rmBl = tracker.rmBreakdown?.bl || 0;
+          rmBlTh = tracker.rmBreakdown?.blTh || 0;
+          rmBlDr = tracker.rmBreakdown?.blDr || 0;
+        } catch(e) {}
+      }
+
+      let supplyDataRows = [
         dateStr,
         dateObj.toLocaleDateString('en-US', { weekday: 'short' }),
         supply?.avgWeight || '-',
-        Math.round(s.rmFlAvailKg),
+        Math.round(s.rmFlAvailKg)
+      ];
+      if (isBlPlan) {
+        supplyDataRows.push(Math.round(rmBl), Math.round(rmBlTh), Math.round(rmBlDr));
+      }
+      supplyDataRows.push(
         Math.round(s.demandKg),
-        Math.round(s.rmFlAvailKg - s.demandKg),
+        Math.round(s.rmFlAvailKg - s.demandKg)
+      );
+
+      const rowData = [
+        ...supplyDataRows,
         plannedCut,
         plannedSup,
         actualCut,
         actualSup,
         variance,
-        Math.round(getSizeKg(supply?.sizes, '40 Down')),
-        Math.round(getSizeKg(supply?.sizes, '40-45')),
-        Math.round(getSizeKg(supply?.sizes, '45-50')),
-        Math.round(getSizeKg(supply?.sizes, '50-55')),
-        Math.round(getSizeKg(supply?.sizes, '55-60')),
-        Math.round(getSizeKg(supply?.sizes, '60-65')),
-        Math.round(getSizeKg(supply?.sizes, '65-70')),
-        Math.round(getSizeKg(supply?.sizes, '70 Up')),
+        ...dynamicSizes.map(sz => Math.round(getSizeKg(supply?.sizes, sz))),
         ...itemCodes.map(code => d.orders.has(code) ? Math.round(d.orders.get(code)) : '-')
       ];
 
@@ -2952,7 +3225,7 @@ export class MpsController {
         if (isNoSupply) {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEDED' } };
           cell.font = { color: { argb: 'FF999999' }, size: 9 };
-        } else if (colNumber === 11) { // Variance column
+        } else if (colNumber === 11 + extraCols) { // Variance column
           if (variance > 0) {
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
             cell.font = { color: { argb: 'FF006100' }, bold: true, size: 9 };
@@ -3105,7 +3378,8 @@ export class MpsController {
     exceptionSheet.views = [{ state: 'frozen', ySplit: 1 }];
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=MPS_Plan_${plan.targetMonth}.xlsx`);
+    const partNameStr = (plan.partType || 'fillet').toUpperCase();
+    res.setHeader('Content-Disposition', `attachment; filename=MPS_Plan_${partNameStr}_${plan.targetMonth}.xlsx`);
 
     await workbook.xlsx.write(res);
     res.end();

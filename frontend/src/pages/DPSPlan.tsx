@@ -665,6 +665,11 @@ const DPSPlan: React.FC = () => {
             fulfilledKg: o.fulfilledKg,
             priority: o.priority ?? null
           }));
+          const dbSublotCounts: Record<string, number> = {};
+          dbPlan.data.sublots.forEach((s: any) => {
+            dbSublotCounts[s.sublotNumber] = (dbSublotCounts[s.sublotNumber] || 0) + 1;
+          });
+
           const mappedSublots = dbPlan.data.sublots.map((s: any) => {
             const binsObj: Record<string, number> = {};
             s.bins.forEach((b: any) => { binsObj[b.sizeLabel] = b.availableKg; });
@@ -712,7 +717,7 @@ const DPSPlan: React.FC = () => {
             });
 
             return {
-              id: s.sublotNumber,
+              id: dbSublotCounts[s.sublotNumber] > 1 ? `${s.sublotNumber}_${s.shift || 'A'}` : s.sublotNumber,
               farmName: s.farmName,
               totalBirds: s.totalBirds,
               totalWeightKg: s.totalWeightKg,
@@ -790,16 +795,31 @@ const DPSPlan: React.FC = () => {
           return prodDate === targetDate;
         });
 
+        const sublotShiftCounts: Record<string, Set<string>> = {};
+        dailyIntakes.forEach((r: any) => {
+          const rawSublot = r.sublot !== null && r.sublot !== undefined ? String(r.sublot).trim() : '';
+          if (rawSublot) {
+            if (!sublotShiftCounts[rawSublot]) sublotShiftCounts[rawSublot] = new Set();
+            sublotShiftCounts[rawSublot].add(r.shift || 'Unassigned');
+          }
+        });
+
         const groupedBySublot: Record<string, any> = {};
         dailyIntakes.forEach((r: any, idx: number) => {
           const rawSublot = r.sublot !== null && r.sublot !== undefined ? String(r.sublot).trim() : '';
-          const sublotId = rawSublot || `SL-${idx + 1}`;
+          const baseSublotId = rawSublot || `SL-${idx + 1}`;
+          const shift = r.shift || 'Unassigned';
+          
+          let sublotId = baseSublotId;
+          if (rawSublot && sublotShiftCounts[rawSublot] && sublotShiftCounts[rawSublot].size > 1) {
+             sublotId = `${baseSublotId}_${shift}`;
+          }
 
           if (!groupedBySublot[sublotId]) {
             groupedBySublot[sublotId] = {
               id: sublotId,
               farmName: r.farm_name || `Unknown Farm`,
-              shift: r.shift || 'Unassigned',
+              shift: shift,
               totalBirds: 0,
               totalWeightKg: 0
             };
@@ -1686,7 +1706,7 @@ const DPSPlan: React.FC = () => {
                             <span className="bg-gray-900 text-white text-xs font-black px-2 py-1 rounded-md">#{index + 1}</span>
                             <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">{sl.shift}</span>
                           </div>
-                          <h3 className="text-xl font-black text-gray-900 mb-6">Sublot {sl.id}</h3>
+                          <h3 className="text-xl font-black text-gray-900 mb-6">Sublot {sl.id.split('_')[0]}</h3>
 
                           {/* Part 1: Primary Intake Stats */}
                           <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-gray-200">
@@ -2036,7 +2056,7 @@ const DPSPlan: React.FC = () => {
                                       return (
                                         <div key={idx} onClick={() => handlePullLeftoverAndOpenModal(leftover.fromId, sl.id, leftover.binKey, leftover.qty)} className="bg-indigo-50/30 border border-indigo-100 shadow-sm p-3 rounded-2xl transition-all cursor-pointer hover:border-indigo-300 hover:shadow-md hover:bg-indigo-50 relative overflow-hidden group">
                                           <div className="absolute top-0 right-0 bg-indigo-100 text-indigo-600 text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
-                                            {leftover.fromId} (Shift {leftover.shift || 'A'})
+                                            {leftover.fromId.split('_')[0]} (Shift {leftover.shift || 'A'})
                                           </div>
                                           <p className="text-[9px] font-bold text-indigo-400 uppercase mb-1 tracking-wider mt-2">{label}</p>
                                           <div className="flex items-baseline gap-1">
@@ -2210,6 +2230,7 @@ const DPSPlan: React.FC = () => {
                       const matchingUnfulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg > 0);
                       const matchingFulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg <= 0);
                       const otherUnfulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg > 0);
+                      const otherFulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg <= 0);
 
                       return (
                         <>
@@ -2240,7 +2261,16 @@ const DPSPlan: React.FC = () => {
                               ))}
                             </optgroup>
                           )}
-                          {matchingUnfulfilled.length === 0 && otherUnfulfilled.length === 0 && matchingFulfilled.length === 0 && (
+                          {otherFulfilled.length > 0 && (
+                            <optgroup label="Other Sizes (Fulfilled)">
+                              {otherFulfilled.map(o => (
+                                <option key={o.id} value={o.id}>
+                                  {o.id} - {o.itemDesc}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {matchingUnfulfilled.length === 0 && otherUnfulfilled.length === 0 && matchingFulfilled.length === 0 && otherFulfilled.length === 0 && (
                             <option disabled>No matching orders</option>
                           )}
                         </>

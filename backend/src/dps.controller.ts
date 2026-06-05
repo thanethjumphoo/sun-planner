@@ -69,7 +69,7 @@ export class DpsController {
       // Map sublots
       plan.sublots = payload.sublots.map((sl: any) => {
         const sublot = new DpsSublot();
-        sublot.sublotNumber = sl.id;
+        sublot.sublotNumber = sl.id.includes('_') ? sl.id.split('_')[0] : sl.id;
         sublot.farmName = sl.farmName;
         sublot.shift = sl.shift || 'A';
         sublot.totalBirds = Math.round(sl.totalBirds);
@@ -115,7 +115,15 @@ export class DpsController {
       // Build allocations
       const allocationsToSave = [];
       for (const alloc of payload.allocations) {
-        const dbSublot = reloadedPlan.sublots.find(s => s.sublotNumber === alloc.sublotId);
+        const allocSublotNumber = alloc.sublotId.includes('_') ? alloc.sublotId.split('_')[0] : alloc.sublotId;
+        const allocShift = alloc.sublotId.includes('_') ? alloc.sublotId.split('_')[1] : null;
+
+        const dbSublot = reloadedPlan.sublots.find(s => {
+          if (allocShift) {
+            return s.sublotNumber === allocSublotNumber && s.shift === allocShift;
+          }
+          return s.sublotNumber === allocSublotNumber;
+        });
         if (!dbSublot) continue;
         
         const dbBin = dbSublot.bins.find(b => b.sizeLabel === alloc.size);

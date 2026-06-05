@@ -127,9 +127,9 @@ export async function executeBlPlanGeneration(
       
       const intBlKg = Number(blData.internalQty ?? blKg);
       const extBlKg = Number(blData.externalQty ?? 0);
-      const intBlThKg = Number(blThData.internalQty ?? blThKg) * 0.75;
+      const intBlThKg = Number(blThData.internalQty ?? (blThData.qty || blThData.kg || 0)) * 0.75;
       const extBlThKg = Number(blThData.externalQty ?? 0) * 0.75;
-      const intBlDrKg = Number(blDrData.internalQty ?? blDrKg) * 0.75;
+      const intBlDrKg = Number(blDrData.internalQty ?? (blDrData.qty || blDrData.kg || 0)) * 0.75;
       const extBlDrKg = Number(blDrData.externalQty ?? 0) * 0.75;
       
       const blRatioInt = blKg > 0 ? intBlKg / blKg : 1;
@@ -241,25 +241,21 @@ export async function executeBlPlanGeneration(
   if (supplyRecords.length > 0) {
     const savedSupplies = await manager.save(supplyRecords);
     
-    // Copy RM sizes from BIL plan so the frontend fallback logic has sizes to work with
+    // Save accurate BL sizes for UI and Excel export instead of copying raw RM bird sizes
     const supplySizeRecords: MpsPlanSupplySize[] = [];
-    if (bilPlan.supplyBreakdown) {
-      for (const bilSupply of bilPlan.supplyBreakdown) {
-        if (!bilSupply.sizes || bilSupply.sizes.length === 0) continue;
-        
-        const dateStr = parseLocalDate(bilSupply.productionDate);
-        const savedSup = savedSupplies.find(s => parseLocalDate(s.productionDate) === dateStr);
-        if (!savedSup) continue;
-        
-        for (const bilSize of bilSupply.sizes) {
-          supplySizeRecords.push(manager.create(MpsPlanSupplySize, {
-            mpsPlanSupply: savedSup,
-            groupSize: bilSize.groupSize,
-            quantityKg: bilSize.quantityKg,
-            partName: bilSize.partName || 'BL',
-            productionDate: bilSize.productionDate || bilSupply.productionDate,
-          }));
-        }
+    for (const [dateStr, supData] of supplyMap.entries()) {
+      const savedSup = savedSupplies.find(s => parseLocalDate(s.productionDate) === dateStr);
+      if (!savedSup) continue;
+      
+      for (const [sz, qty] of Object.entries(supData.blSizes)) {
+        if (Number(qty) <= 0) continue;
+        supplySizeRecords.push(manager.create(MpsPlanSupplySize, {
+          mpsPlanSupply: savedSup,
+          groupSize: sz,
+          quantityKg: Number(qty),
+          partName: 'BL',
+          productionDate: savedSup.productionDate,
+        }));
       }
     }
 

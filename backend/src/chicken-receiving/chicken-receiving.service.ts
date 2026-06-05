@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, Between } from 'typeorm';
 import { ChickenReceivingPlanMonthly } from './entities/monthly-plan.entity';
 import { ChickenReceivingPlanWeekly } from './entities/weekly-plan.entity';
 import { ChickenReceivingPlanDaily } from './entities/daily-plan.entity';
@@ -76,6 +76,14 @@ export class ChickenReceivingService {
     const repo = this.getRepo(type);
     await repo.delete({ receive_date: dateStr });
     return { deleted: true, date: dateStr };
+  }
+
+  async removeByMonth(type: string, monthStr: string) {
+    const repo = this.getRepo(type);
+    const startDate = new Date(`${monthStr}-01`);
+    const endDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0, 23, 59, 59);
+    await repo.delete({ receive_date: Between(startDate, endDate) });
+    return { deleted: true, month: monthStr };
   }
 
   async createBatch(type: string, rows: any[]) {

@@ -603,6 +603,32 @@ export default function ChickenReceiving() {
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" placeholder="Search farm or truck..." className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-orange-500" />
           </div>
+          {activeTab === 'monthly' && (
+            <button
+              onClick={() => {
+                const yyyyMm = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+                const d = window.prompt("Enter month to clear (YYYY-MM):", yyyyMm);
+                if (d) {
+                  if (window.confirm(`Are you sure you want to delete all monthly data for ${d}?`)) {
+                    fetch(`${import.meta.env.VITE_API_URL}/api/chicken-receiving/monthly/clear/month/${d}`, {
+                      method: 'DELETE'
+                    }).then(res => {
+                      if (res.ok) {
+                        alert(`Cleared data for ${d}`);
+                        fetchData();
+                      } else {
+                        alert('Failed to clear data');
+                      }
+                    });
+                  }
+                }
+              }}
+              className="px-4 py-2 bg-white border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-all flex items-center gap-2"
+            >
+              <Trash2 size={16} />
+              Clear Month
+            </button>
+          )}
           {activeTab === 'weekly' && (
             <button
               onClick={() => {
