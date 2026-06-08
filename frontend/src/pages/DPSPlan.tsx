@@ -41,6 +41,7 @@ interface Sublot {
   shift: string;
   allocations: Allocation[];
   initialTotalFg: number;
+  supportManpower?: number;
 }
 
 const sizeLabelMap: Record<string, string> = {
@@ -525,6 +526,16 @@ const DPSPlan: React.FC = () => {
     }
     setEditingAlloc(null);
     saveDbUpdate(newSublots, newOrders);
+  };
+
+  const handleUpdateSupportManpower = (sublotId: string, val: number) => {
+    const newSublots = [...sublots];
+    const index = newSublots.findIndex(s => s.id === sublotId);
+    if (index > -1) {
+      newSublots[index] = { ...newSublots[index], supportManpower: val };
+      setSublots(newSublots);
+      saveDbUpdate(newSublots, orders);
+    }
   };
 
   const saveDbUpdate = async (currentSublots: Sublot[], currentOrders: Order[]) => {
@@ -1458,8 +1469,15 @@ const DPSPlan: React.FC = () => {
     let shiftA_Hours = 0;
     let shiftB_Hours = 0;
 
+    let shiftA_Support = 0;
+    let shiftB_Support = 0;
+
     sublots.forEach(sl => {
       const shift = sl.shift || 'A';
+      
+      if (shift === 'A') shiftA_Support += (sl.supportManpower || 0);
+      else if (shift === 'B') shiftB_Support += (sl.supportManpower || 0);
+
       sl.allocations.forEach(alloc => {
         const itemCodeMatch = alloc.itemDesc ? alloc.itemDesc.split(' - ')[0] : '';
         if (!itemCodeMatch || getProductType(itemCodeMatch) !== 'main') return;
@@ -1477,7 +1495,9 @@ const DPSPlan: React.FC = () => {
     return {
       isBil: false,
       shiftA: Math.round(shiftA_Hours > 0 ? (shiftA_Hours / 9.58) : 0),
-      shiftB: Math.round(shiftB_Hours > 0 ? (shiftB_Hours / 9.58) : 0)
+      shiftB: Math.round(shiftB_Hours > 0 ? (shiftB_Hours / 9.58) : 0),
+      supportA: shiftA_Support,
+      supportB: shiftB_Support
     };
   };
 
@@ -1647,11 +1667,23 @@ const DPSPlan: React.FC = () => {
             <div className="flex items-center gap-8">
               <div className="text-center px-4 border-r border-gray-100">
                 <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift A</div>
-                <div className="text-2xl font-black text-gray-900">{manpower.shiftA.toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span></div>
+                <div className="flex flex-col gap-1 text-sm">
+                  <div className="flex justify-between gap-4"><span className="text-gray-500">Cutting:</span> <span className="font-bold text-gray-800">{manpower.shiftA.toLocaleString()}</span></div>
+                  {!manpower.isBil && <div className="flex justify-between gap-4"><span className="text-gray-500">Support:</span> <span className="font-bold text-gray-800">{(manpower as any).supportA?.toLocaleString() || '0'}</span></div>}
+                </div>
+                <div className="mt-2 text-2xl font-black text-gray-900 border-t border-gray-50 pt-2">
+                  {(manpower.shiftA + (!manpower.isBil ? ((manpower as any).supportA || 0) : 0)).toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span>
+                </div>
               </div>
               <div className="text-center px-4">
                 <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift B</div>
-                <div className="text-2xl font-black text-gray-900">{manpower.shiftB.toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span></div>
+                <div className="flex flex-col gap-1 text-sm">
+                  <div className="flex justify-between gap-4"><span className="text-gray-500">Cutting:</span> <span className="font-bold text-gray-800">{manpower.shiftB.toLocaleString()}</span></div>
+                  {!manpower.isBil && <div className="flex justify-between gap-4"><span className="text-gray-500">Support:</span> <span className="font-bold text-gray-800">{(manpower as any).supportB?.toLocaleString() || '0'}</span></div>}
+                </div>
+                <div className="mt-2 text-2xl font-black text-gray-900 border-t border-gray-50 pt-2">
+                  {(manpower.shiftB + (!manpower.isBil ? ((manpower as any).supportB || 0) : 0)).toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1745,17 +1777,37 @@ const DPSPlan: React.FC = () => {
                           </div>
 
                           {/* Part 3: Sublot Manpower */}
-                          <div className="bg-purple-50/50 p-3 rounded-xl border border-purple-100 flex items-center justify-between mb-2">
-                            <div>
-                              <p className="text-[10px] font-bold text-purple-500 uppercase">Sublot Manpower</p>
-                              <p className="text-lg font-black text-purple-700">{slManpower.toLocaleString()} <span className="text-[10px]">Head</span></p>
+                          <div className="bg-purple-50/50 p-3 rounded-xl border border-purple-100 flex flex-col gap-3 mb-2">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-[10px] font-bold text-purple-500 uppercase">Cutting Manpower</p>
+                                <p className="text-lg font-black text-purple-700">{slManpower.toLocaleString()} <span className="text-[10px]">Head</span></p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[10px] font-bold text-purple-400 uppercase">Variance (Shift {sl.shift || 'A'})</p>
+                                <p className={`text-base font-black ${variance > 0 ? 'text-blue-500' : variance < 0 ? 'text-red-500' : 'text-gray-500'}`}>
+                                  {variance > 0 ? `+${variance}` : variance} <span className="text-[10px]">Head</span>
+                                </p>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <p className="text-[10px] font-bold text-purple-400 uppercase">Variance (Shift {sl.shift || 'A'} - Sublot)</p>
-                              <p className={`text-base font-black ${variance > 0 ? 'text-blue-500' : variance < 0 ? 'text-red-500' : 'text-gray-500'}`}>
-                                {variance > 0 ? `+${variance}` : variance} <span className="text-[10px]">Head</span>
-                              </p>
-                            </div>
+                            
+                            {!isBil && (
+                              <div className="flex items-center justify-between border-t border-purple-100/50 pt-2">
+                                <div>
+                                  <p className="text-[10px] font-bold text-purple-500 uppercase">Support Manpower</p>
+                                </div>
+                                <div>
+                                  <input 
+                                    type="number" 
+                                    className="w-20 text-right px-2 py-1 text-sm font-bold text-purple-700 border border-purple-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-purple-400"
+                                    defaultValue={sl.supportManpower || ''}
+                                    placeholder="0"
+                                    onBlur={(e) => handleUpdateSupportManpower(sl.id, parseInt(e.target.value) || 0)}
+                                  />
+                                  <span className="text-[10px] font-bold text-purple-700 ml-1">Head</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                         </div>

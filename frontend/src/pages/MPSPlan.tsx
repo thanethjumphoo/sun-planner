@@ -491,7 +491,8 @@ const MPSPlan: React.FC = () => {
   };
 
   const handleExportExcel = (id: number) => {
-    window.open(`${API}/api/mps/plans/${id}/export`, '_blank');
+    const viewQuery = (partId === 'bil' || partId === 'bl') ? `?view=${partId}` : '';
+    window.open(`${API}/api/mps/plans/${id}/export${viewQuery}`, '_blank');
   };
 
   // --- Calendar Helpers ---
@@ -2876,9 +2877,17 @@ const MPSPlan: React.FC = () => {
                           aggregated[name].qty += Number(bp.qty || 0);
                           
                           if (bp.sizes) {
+                            const totalSizes = Object.values(bp.sizes).reduce((sum: number, val: any) => sum + Number(val), 0) as number;
                             Object.entries(bp.sizes).forEach(([sz, szQty]) => {
                               if (!aggregated[name].sizes![sz]) aggregated[name].sizes![sz] = 0;
-                              aggregated[name].sizes![sz] += Number(szQty);
+                              let scaledQty = Number(szQty);
+                              const netQty = Math.max(0, Number(bp.qty || 0));
+                              if (totalSizes > 0) {
+                                scaledQty = (scaledQty / totalSizes) * netQty;
+                              } else {
+                                scaledQty = 0;
+                              }
+                              aggregated[name].sizes![sz] += scaledQty;
                             });
                           }
                         });
@@ -2944,7 +2953,7 @@ const MPSPlan: React.FC = () => {
                           } else {
                             // Old logic for a single 'BL (Debone)' using bilSizes
                             const bp = blItems[0];
-                            const roundedQty = Math.round(bp.qty);
+                            const roundedQty = Math.max(0, Math.round(bp.qty));
                             // Calculate Supply by BIL Size
                             const bilSizes: Record<string, number> = {};
                             (selectedSupply.sizes || []).forEach((sz: any) => {
@@ -3022,7 +3031,7 @@ const MPSPlan: React.FC = () => {
                         }
 
                         otherItems.forEach((bp, index) => {
-                          const roundedQty = Math.round(bp.qty);
+                          const roundedQty = Math.max(0, Math.round(bp.qty));
                           const hasSizes = bp.sizes && Object.keys(bp.sizes).length > 0;
                           
                           if (hasSizes) {

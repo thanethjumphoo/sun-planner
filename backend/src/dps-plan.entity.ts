@@ -77,6 +77,9 @@ export class DpsSublot {
   @Column({ name: 'co_product_kg', type: 'decimal', precision: 18, scale: 2, default: 0 })
   coProductKg: number; // น้ำหนัก Grade B ที่กระจายมา
 
+  @Column({ name: 'support_manpower', type: 'int', default: 0 })
+  supportManpower: number;
+
   @OneToMany(() => DpsSublotBin, bin => bin.sublot, { cascade: true })
   bins: DpsSublotBin[];
 }

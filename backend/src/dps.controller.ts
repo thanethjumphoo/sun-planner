@@ -76,6 +76,7 @@ export class DpsController {
         sublot.totalWeightKg = Math.round(sl.totalWeightKg);
         sublot.avgLiveWeight = sl.avgLiveWeight;
         sublot.coProductKg = Number((sl.coProductKg || 0).toFixed(1));
+        sublot.supportManpower = sl.supportManpower || 0;
 
         sublot.bins = Object.keys(sl.bins).map(binKey => {
           const bin = new DpsSublotBin();

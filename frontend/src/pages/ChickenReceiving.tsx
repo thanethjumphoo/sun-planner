@@ -654,6 +654,31 @@ export default function ChickenReceiving() {
               Clear Date
             </button>
           )}
+          {activeTab === 'daily' && (
+            <button
+              onClick={() => {
+                const d = window.prompt("Enter date to clear (YYYY-MM-DD):", formatLocalDate(currentDate));
+                if (d) {
+                  if (window.confirm(`Are you sure you want to delete all daily data for ${d}?`)) {
+                    fetch(`${import.meta.env.VITE_API_URL}/api/chicken-receiving/daily/clear/date/${d}`, {
+                      method: 'DELETE'
+                    }).then(res => {
+                      if (res.ok) {
+                        alert(`Cleared data for ${d}`);
+                        fetchData();
+                      } else {
+                        alert('Failed to clear data');
+                      }
+                    });
+                  }
+                }
+              }}
+              className="px-4 py-2 bg-white border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-all flex items-center gap-2"
+            >
+              <Trash2 size={16} />
+              Clear Date
+            </button>
+          )}
           <button
             onClick={() => setIsImportOpen(true)}
             className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-all flex items-center gap-2"

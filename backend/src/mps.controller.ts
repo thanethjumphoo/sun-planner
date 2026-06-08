@@ -317,7 +317,7 @@ export class MpsController {
 
   // Unified Leg Plan Generation (BIL + BL)
   @Post('generate-unified-leg')
-  async generateUnifiedLegPlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string }) {
+  async generateUnifiedLegPlan(@Body() body: { targetMonth: string; orderStartDate?: string; orderEndDate?: string; _allocatedMap?: Map<number, number> }) {
     // Fetch active machine configurations for dependencies
     const machineConfigs = await this.machineConfigRepo.find({ where: { isActive: true } });
 
@@ -2068,7 +2068,8 @@ export class MpsController {
         result = await this.generateUnifiedLegPlan({
           targetMonth: month,
           orderStartDate: body.orderStartDate,
-          orderEndDate: body.orderEndDate
+          orderEndDate: body.orderEndDate,
+          _allocatedMap: new Map(allocatedMap),
         });
       } else {
         result = await this.generatePlan({
@@ -2437,7 +2438,7 @@ export class MpsController {
 
   // 11. Export MPS Plan to Excel (Date-Major Matrix Format)
   @Get('plans/:id/export')
-  async exportPlan(@Param('id') id: number, @Res() res: express.Response) {
+  async exportPlan(@Param('id') id: number, @Query('view') view: string, @Res() res: express.Response) {
     const plan = await this.mpsPlanRepo.findOne({
       where: { id },
       relations: ['dailySummaries', 'exceptions', 'supplyBreakdown', 'supplyBreakdown.sizes'],
@@ -2446,14 +2447,45 @@ export class MpsController {
 
     if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
 
-    const orders = await this.mpsOrderRepo.find({
+    let orders = await this.mpsOrderRepo.find({
       where: { mpsPlan: { id: plan.id } },
     });
 
     const workbook = new ExcelJS.Workbook();
-    const isBilPlan = plan.partType === 'bil';
-    const isBlPlan = plan.partType === 'bl';
-    
+    const isBilPlan = plan.partType === 'bil' || (plan.partType === 'leg' && view === 'bil');
+    const isBlPlan = plan.partType === 'bl' || (plan.partType === 'leg' && view === 'bl');
+
+    // If it's a unified 'leg' plan, filter orders so BIL report only shows BIL orders, BL report only shows BL orders.
+    if (plan.partType === 'leg' && view) {
+      const targetCodes = await this.getItemCodesByPartType(view) || [];
+      const allSpecs = await this.specRepo.find();
+      const allYieldNodes = await this.masterYieldRepo.find();
+      
+      const findNode = (nodes: any[], nodeId: string): any => {
+        for (const n of nodes) {
+          if (n.id === nodeId) return n;
+          if (n.children) {
+            const found = findNode(n.children, nodeId);
+            if (found) return found;
+          }
+        }
+        return undefined;
+      };
+
+      const isByproductSpec = (spec: any): boolean => {
+        if (!spec || !spec.masterYieldIds) return false;
+        const ids = spec.masterYieldIds.split(',').map((bid: string) => bid.trim());
+        return ids.some((bid: string) => {
+          const node = findNode(allYieldNodes, bid);
+          return node && (node.type === 'BY-PRODUCT');
+        });
+      };
+      
+      const byproductItemCodes = allSpecs.filter(s => isByproductSpec(s)).map(s => s.erpItemCode);
+      const allowedAndByproductCodes = [...new Set([...targetCodes, ...byproductItemCodes])];
+      orders = orders.filter(o => allowedAndByproductCodes.includes(o.itemCode));
+    }
+
     if (isBlPlan) {
       const specs = await this.specRepo.find();
       const blWorkbook = await generateBlExcelPlan(plan, orders, specs, []);
@@ -2465,8 +2497,13 @@ export class MpsController {
     }
 
     let sheetName = 'MPS Plan';
-    if (isBilPlan) sheetName = 'BIL MPS Plan';
-    else sheetName = 'Fillet MPS Plan';
+    let filePartType = plan.partType.toUpperCase();
+    if (isBilPlan) {
+      sheetName = 'BIL MPS Plan';
+      filePartType = 'BIL';
+    } else if (!isBlPlan) {
+      sheetName = 'Fillet MPS Plan';
+    }
     
     const sheet = workbook.addWorksheet(sheetName);
 
@@ -3378,8 +3415,7 @@ export class MpsController {
     exceptionSheet.views = [{ state: 'frozen', ySplit: 1 }];
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    const partNameStr = (plan.partType || 'fillet').toUpperCase();
-    res.setHeader('Content-Disposition', `attachment; filename=MPS_Plan_${partNameStr}_${plan.targetMonth}.xlsx`);
+    res.setHeader('Content-Disposition', `attachment; filename=MPS_Plan_${filePartType}_${plan.targetMonth}.xlsx`);
 
     await workbook.xlsx.write(res);
     res.end();
