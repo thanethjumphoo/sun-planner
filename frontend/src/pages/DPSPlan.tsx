@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL;
@@ -151,6 +151,9 @@ const DPSPlan: React.FC = () => {
   const [unprocessedSublots, setUnprocessedSublots] = useState<Sublot[]>([]);
   const [unprocessedOrders, setUnprocessedOrders] = useState<Order[]>([]);
   const [availableSpecs, setAvailableSpecs] = useState<any[]>([]);
+  const specMap = useMemo(() => {
+    return new Map(availableSpecs.map((s: any) => [s.erpItemCode, s]));
+  }, [availableSpecs]);
   const [showAddOrderModal, setShowAddOrderModal] = useState(false);
   const [newOrderForm, setNewOrderForm] = useState({ itemCode: '', qty: '' });
 
@@ -863,12 +866,12 @@ const DPSPlan: React.FC = () => {
     }
   };
 
-  const totalDemand = orders.reduce((sum, o) => sum + o.qty, 0);
-  const totalFulfilled = orders.reduce((sum, o) => sum + o.fulfilledKg, 0);
-  const percentFulfilled = totalDemand > 0 ? (totalFulfilled / totalDemand) * 100 : 0;
-  const totalSublots = sublots.length;
+  const totalDemand = useMemo(() => orders.reduce((sum, o) => sum + o.qty, 0), [orders]);
+  const totalFulfilled = useMemo(() => orders.reduce((sum, o) => sum + o.fulfilledKg, 0), [orders]);
+  const percentFulfilled = useMemo(() => totalDemand > 0 ? (totalFulfilled / totalDemand) * 100 : 0, [totalDemand, totalFulfilled]);
+  const totalSublots = useMemo(() => sublots.length, [sublots]);
 
-  const calculateManpower = () => {
+  const manpower = useMemo(() => {
     let shiftA_Hours = 0;
     let shiftB_Hours = 0;
 
@@ -876,7 +879,7 @@ const DPSPlan: React.FC = () => {
       const shift = sl.shift || 'A';
       sl.allocations.forEach(alloc => {
         const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
-        const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
+        const spec = specMap.get(itemCodeMatch);
         const speed = spec?.productSpeed;
         
         if (speed && speed > 0) {
@@ -891,9 +894,7 @@ const DPSPlan: React.FC = () => {
       shiftA: Math.round(shiftA_Hours > 0 ? (shiftA_Hours / 9.58) : 0),
       shiftB: Math.round(shiftB_Hours > 0 ? (shiftB_Hours / 9.58) : 0)
     };
-  };
-
-  const manpower = calculateManpower();
+  }, [sublots, specMap]);
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-6 bg-[#f8fafc] min-h-screen font-sans">
@@ -1081,7 +1082,7 @@ const DPSPlan: React.FC = () => {
                   let slHours = 0;
                   sl.allocations.forEach(alloc => {
                     const itemCodeMatch = alloc.itemDesc.split(' - ')[0];
-                    const spec = availableSpecs.find(s => s.erpItemCode === itemCodeMatch);
+                    const spec = specMap.get(itemCodeMatch);
                     const speed = spec?.productSpeed;
                     if (speed && speed > 0) {
                       slHours += alloc.qty / speed;

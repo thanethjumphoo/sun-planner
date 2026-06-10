@@ -40,6 +40,21 @@ export default function ChickenReceiving() {
   // Data State
   const [records, setRecords] = useState<any[]>([]);
 
+  const recordsByDate = useMemo(() => {
+    const map = new Map<string, any[]>();
+    records.forEach(r => {
+      if (!r.receive_date) return;
+      const dateStr = typeof r.receive_date === 'string'
+        ? r.receive_date.split('T')[0]
+        : formatLocalDate(new Date(r.receive_date));
+      if (!map.has(dateStr)) {
+        map.set(dateStr, []);
+      }
+      map.get(dateStr)!.push(r);
+    });
+    return map;
+  }, [records]);
+
   // Fetch Data
   const fetchData = async () => {
     if (activeTab === 'reports') return;
@@ -225,7 +240,8 @@ export default function ChickenReceiving() {
           ))}
           {gridCells.map((d, i) => {
             const isToday = isSameDay(d.date, today);
-            const dayRecords = records.filter(r => r.receive_date && isSameDay(new Date(r.receive_date), d.date));
+            const dateStr = formatLocalDate(d.date);
+            const dayRecords = recordsByDate.get(dateStr) || [];
 
             return (
               <div key={i} className={`bg-white min-h-[120px] p-2 hover:bg-orange-50/30 transition-colors relative group ${!d.isCurrentMonth ? 'opacity-50 bg-gray-50' : ''}`}>
@@ -283,7 +299,8 @@ export default function ChickenReceiving() {
         <div className="grid grid-cols-7 gap-4">
           {weekDays.map((dayObj, i) => {
             const isToday = isSameDay(dayObj, today);
-            const dayRecords = records.filter(r => r.receive_date && isSameDay(new Date(r.receive_date), dayObj));
+            const dateStr = formatLocalDate(dayObj);
+            const dayRecords = recordsByDate.get(dateStr) || [];
 
             return (
               <div key={i} className="flex flex-col bg-gray-50 rounded-xl border border-gray-200 overflow-hidden">
@@ -321,7 +338,8 @@ export default function ChickenReceiving() {
 
   const renderDailyTimeline = () => {
     // Filter records by currentDate
-    const dayRecords = records.filter(r => r.receive_date && isSameDay(new Date(r.receive_date), currentDate));
+    const dateStr = formatLocalDate(currentDate);
+    const dayRecords = recordsByDate.get(dateStr) || [];
 
     // Calculate vertical positions and group overlapping records
     const positionedRecords = dayRecords.map((r, idx) => {

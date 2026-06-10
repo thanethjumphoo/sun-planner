@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   RefreshCw, XOctagon, AlertTriangle, CheckCircle2, Clock, 
   FileText, Users, Package, ServerCrash, ChevronDown, ChevronRight, Loader2
@@ -19,6 +19,18 @@ const ErpIntegrationHub: React.FC = () => {
   const [orderLines, setOrderLines] = useState<any[]>([]);
   const [expandedHeader, setExpandedHeader] = useState<number | null>(null);
   const [syncResult, setSyncResult] = useState<{type: string, count: number, time: string} | null>(null);
+
+  const linesByHeaderId = useMemo(() => {
+    const map = new Map<number, any[]>();
+    orderLines.forEach((l) => {
+      const hId = l.erpOrderHeaderId;
+      if (!map.has(hId)) {
+        map.set(hId, []);
+      }
+      map.get(hId)!.push(l);
+    });
+    return map;
+  }, [orderLines]);
 
   useEffect(() => { fetchTargetItems(); }, []);
   useEffect(() => { if (activeTab === 'orders') { fetchOrderHeaders(); fetchOrderLines(); } }, [activeTab]);
@@ -80,7 +92,7 @@ const ErpIntegrationHub: React.FC = () => {
     } catch { alert('Full sync failed'); } finally { setIsSyncing(''); }
   };
 
-  const getLinesForHeader = (headerId: number) => orderLines.filter(l => l.erpOrderHeaderId === headerId);
+  const getLinesForHeader = (headerId: number) => linesByHeaderId.get(headerId) || [];
 
   const tabs = [
     { id: 'orders', label: 'Orders Sync', icon: FileText },

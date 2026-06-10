@@ -262,13 +262,17 @@ const MPSPlan: React.FC = () => {
   };
   const getTodayStr = () => formatLocalDate(new Date());
 
-  const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
-  const firstDayOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
+  const days = React.useMemo(() => {
+    const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+    return Array.from({ length: daysInMonth }, (_, i) => {
+      const d = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), i + 1);
+      return formatLocalDate(d);
+    });
+  }, [currentMonth]);
 
-  const days = Array.from({ length: daysInMonth }, (_, i) => {
-    const d = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), i + 1);
-    return formatLocalDate(d);
-  });
+  const firstDayOfMonth = React.useMemo(() => {
+    return new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
+  }, [currentMonth]);
 
   // --- Drag and Drop Handlers ---
   const handleDragStart = (e: React.DragEvent, orderId: string) => {
@@ -389,11 +393,7 @@ const MPSPlan: React.FC = () => {
   };
 
   // --- Calculations ---
-  const calculateDailyMetrics = (date: string) => {
-    if (!currentPlan) {
-      return { intake: 0, intakeKg: 0, rmFlAvailable: 0, totalOrderQty: 0, manpower: 0, dailyOrders: [] };
-    }
-
+  const dailyMetricsMap = React.useMemo(() => {
     const formatDBDate = (dateVal: any) => {
       if (!dateVal) return null;
       if (typeof dateVal === 'string') return dateVal.split('T')[0];
@@ -401,68 +401,113 @@ const MPSPlan: React.FC = () => {
       return String(dateVal).split('T')[0];
     };
 
-    const dailySummary = currentPlan.dailySummaries?.find((d: any) => formatDBDate(d.productionDate) === date);
-    const dailyOrdersRaw = currentPlan.orders?.filter((o: any) => formatDBDate(o.plannedProductionDate) === date) || [];
+    if (!currentPlan) {
+      const emptyMetrics: Record<string, any> = {};
+      days.forEach(d => {
+        emptyMetrics[d] = { intake: 0, intakeKg: 0, rmFlAvailable: 0, totalOrderQty: 0, manpower: 0, dailyOrders: [] };
+      });
+      return emptyMetrics;
+    }
 
-    const grouped = new Map();
-    dailyOrdersRaw.forEach((o: any) => {
-      const key = `${o.soNumber || 'NO_SO'}_${o.itemCode}`;
-      if (!grouped.has(key)) {
-        grouped.set(key, {
-          id: String(o.id),
-          ids: [String(o.id)],
-          lineId: o.erpOrderLineId,
-          soNumber: o.soNumber || '-',
-          itemCode: o.itemCode,
-          itemDesc: o.itemDesc,
-          type: o.productType,
-          qty: Number(o.quantityKg),
-          shipDate: o.shipDate ? formatDBDate(o.shipDate) : '-'
-        });
-      } else {
-        const existing = grouped.get(key);
-        existing.ids.push(String(o.id));
-        existing.id = existing.ids.join(',');
-        existing.qty += Number(o.quantityKg);
+    // 1. Group dailySummaries by formatted productionDate
+    const summariesMap = new Map();
+    currentPlan.dailySummaries?.forEach((d: any) => {
+      const dateStr = formatDBDate(d.productionDate);
+      if (dateStr) summariesMap.set(dateStr, d);
+    });
+
+    // 2. Group orders by formatted plannedProductionDate
+    const ordersMap = new Map();
+    currentPlan.orders?.forEach((o: any) => {
+      const dateStr = formatDBDate(o.plannedProductionDate);
+      if (dateStr) {
+        if (!ordersMap.has(dateStr)) {
+          ordersMap.set(dateStr, []);
+        }
+        ordersMap.get(dateStr).push(o);
       }
     });
 
-    const dailyOrders = Array.from(grouped.values());
-
-    const totalOrderQty = dailyOrders.reduce((sum: number, o: any) => sum + o.qty, 0);
-
-    const dailyManpower = manpowerData.find((m: any) => formatDBDate(m.productionDate) === date) || {};
-
-    let requiredCuttingWorkers = 0;
-    dailyOrders.forEach((o: any) => {
-      const spec = specs[o.itemCode];
-      const speed = spec?.productSpeed || 45;
-      requiredCuttingWorkers += (o.qty / speed);
+    // 3. Group manpower by formatted productionDate
+    const manpowerMap = new Map();
+    manpowerData.forEach((m: any) => {
+      const dateStr = formatDBDate(m.productionDate);
+      if (dateStr) manpowerMap.set(dateStr, m);
     });
-    requiredCuttingWorkers = Math.ceil(requiredCuttingWorkers / 10);
 
-    const plannedStationWorkers = dailyManpower.plannedStationWorkers || 28;
-    const actualStationWorkers = dailyManpower.actualStationWorkers || 0;
-    const actualCuttingWorkers = dailyManpower.actualCuttingWorkers || 0;
+    // 4. Group supply breakdowns by productionDate
+    const supplyMap = new Map();
+    currentPlan.supplyBreakdown?.forEach((s: any) => {
+      const dateStr = formatDBDate(s.productionDate);
+      if (dateStr) supplyMap.set(dateStr, s);
+    });
 
-    const totalManpowerPlan = plannedStationWorkers + requiredCuttingWorkers;
+    const result: Record<string, any> = {};
 
-    return {
-      intake: dailySummary ? Number(dailySummary.intakeBirds) : 0,
-      intakeKg: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
-      rmFlAvailable: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
-      totalOrderQty,
-      manpower: dailyOrders.length > 0 ? totalManpowerPlan : 0,
-      manpowerBreakdown: {
-        plannedStationWorkers,
-        plannedCuttingWorkers: requiredCuttingWorkers,
-        actualStationWorkers,
-        actualCuttingWorkers
-      },
-      dailyOrders,
-      supplyBreakdown: currentPlan.supplyBreakdown?.find((s: any) => formatDBDate(s.productionDate) === date)
-    };
-  };
+    days.forEach((date) => {
+      const dailySummary = summariesMap.get(date);
+      const dailyOrdersRaw = ordersMap.get(date) || [];
+
+      const grouped = new Map();
+      dailyOrdersRaw.forEach((o: any) => {
+        const key = `${o.soNumber || 'NO_SO'}_${o.itemCode}`;
+        if (!grouped.has(key)) {
+          grouped.set(key, {
+            id: String(o.id),
+            ids: [String(o.id)],
+            lineId: o.erpOrderLineId,
+            soNumber: o.soNumber || '-',
+            itemCode: o.itemCode,
+            itemDesc: o.itemDesc,
+            type: o.productType,
+            qty: Number(o.quantityKg),
+            shipDate: o.shipDate ? formatDBDate(o.shipDate) : '-'
+          });
+        } else {
+          const existing = grouped.get(key);
+          existing.ids.push(String(o.id));
+          existing.id = existing.ids.join(',');
+          existing.qty += Number(o.quantityKg);
+        }
+      });
+
+      const dailyOrders = Array.from(grouped.values());
+      const totalOrderQty = dailyOrders.reduce((sum: number, o: any) => sum + o.qty, 0);
+      const dailyManpower = manpowerMap.get(date) || {};
+
+      let requiredCuttingWorkers = 0;
+      dailyOrders.forEach((o: any) => {
+        const spec = specs[o.itemCode];
+        const speed = spec?.productSpeed || 45;
+        requiredCuttingWorkers += (o.qty / speed);
+      });
+      requiredCuttingWorkers = Math.ceil(requiredCuttingWorkers / 10);
+
+      const plannedStationWorkers = dailyManpower.plannedStationWorkers || 28;
+      const actualStationWorkers = dailyManpower.actualStationWorkers || 0;
+      const actualCuttingWorkers = dailyManpower.actualCuttingWorkers || 0;
+
+      const totalManpowerPlan = plannedStationWorkers + requiredCuttingWorkers;
+
+      result[date] = {
+        intake: dailySummary ? Number(dailySummary.intakeBirds) : 0,
+        intakeKg: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
+        rmFlAvailable: dailySummary ? Number(dailySummary.rmFlAvailKg) : 0,
+        totalOrderQty,
+        manpower: dailyOrders.length > 0 ? totalManpowerPlan : 0,
+        manpowerBreakdown: {
+          plannedStationWorkers,
+          plannedCuttingWorkers: requiredCuttingWorkers,
+          actualStationWorkers,
+          actualCuttingWorkers
+        },
+        dailyOrders,
+        supplyBreakdown: supplyMap.get(date)
+      };
+    });
+
+    return result;
+  }, [currentPlan, manpowerData, specs, days]);
 
   // --- Calculate Summary Stats ---
   const totalIntakeBirds = currentPlan?.totalIntakeBirds || 0;
@@ -470,62 +515,70 @@ const MPSPlan: React.FC = () => {
   const totalOrdersQty = currentPlan?.totalDemandKg || 0;
 
   // Calculate average manpower only for active days
-  let totalManpowerSum = 0;
-  let activeDaysCount = 0;
-  days.forEach(d => {
-    const metrics = calculateDailyMetrics(d);
-    if (metrics.intake > 0 || metrics.totalOrderQty > 0) {
-      totalManpowerSum += metrics.manpower;
-      activeDaysCount++;
-    }
-  });
-  const avgManpower = activeDaysCount > 0 ? Math.round(totalManpowerSum / activeDaysCount) : 0;
+  const avgManpower = React.useMemo(() => {
+    let totalManpowerSum = 0;
+    let activeDaysCount = 0;
+    days.forEach(d => {
+      const metrics = dailyMetricsMap[d];
+      if (metrics && (metrics.intake > 0 || metrics.totalOrderQty > 0)) {
+        totalManpowerSum += metrics.manpower;
+        activeDaysCount++;
+      }
+    });
+    return activeDaysCount > 0 ? Math.round(totalManpowerSum / activeDaysCount) : 0;
+  }, [days, dailyMetricsMap]);
 
   // --- Derived State for Demand Plan Tab ---
-  const processedDemand = demandOrders.reduce((acc: any[], header: any) => {
-    if (!header.lines) return acc;
+  const processedDemand = React.useMemo(() => {
+    return demandOrders.reduce((acc: any[], header: any) => {
+      if (!header.lines) return acc;
 
-    const filteredLines = header.lines.filter((line: any) => {
-      if (!line.erpOrderShipDate) return false;
-      if (!specs[line.erpOrderItemCode]) return false;
-      const shipDate = new Date(line.erpOrderShipDate);
-      return shipDate.getFullYear() === currentMonth.getFullYear() &&
-        shipDate.getMonth() === currentMonth.getMonth();
-    });
-
-    if (filteredLines.length > 0) {
-      const plannedOrders = currentPlan?.orders || [];
-      const linesWithStatus = filteredLines.map((line: any) => {
-        const planned = plannedOrders.filter((o: any) => o.erpOrderLineId === line.erpOrderLineId);
-        const totalPlanned = planned.reduce((s: number, o: any) => s + Number(o.quantityKg || 0), 0);
-        const qty = Number(line.erpOrderItemQty || 0);
-        const isFull = totalPlanned >= qty * 0.99;
-        const isNotPlanned = totalPlanned === 0;
-        return { ...line, totalPlanned, isFull, isNotPlanned, planned };
+      const filteredLines = header.lines.filter((line: any) => {
+        if (!line.erpOrderShipDate) return false;
+        if (!specs[line.erpOrderItemCode]) return false;
+        const shipDate = new Date(line.erpOrderShipDate);
+        return shipDate.getFullYear() === currentMonth.getFullYear() &&
+          shipDate.getMonth() === currentMonth.getMonth();
       });
 
-      const plannedLines = linesWithStatus.filter((l: any) => !l.isNotPlanned);
-      const unfulfilledLines = linesWithStatus.filter((l: any) => l.isNotPlanned);
+      if (filteredLines.length > 0) {
+        const plannedOrders = currentPlan?.orders || [];
+        const linesWithStatus = filteredLines.map((line: any) => {
+          const planned = plannedOrders.filter((o: any) => o.erpOrderLineId === line.erpOrderLineId);
+          const totalPlanned = planned.reduce((s: number, o: any) => s + Number(o.quantityKg || 0), 0);
+          const qty = Number(line.erpOrderItemQty || 0);
+          const isFull = totalPlanned >= qty * 0.99;
+          const isNotPlanned = totalPlanned === 0;
+          return { ...line, totalPlanned, isFull, isNotPlanned, planned };
+        });
 
-      acc.push({ ...header, plannedLines, unfulfilledLines });
-    }
-    return acc;
-  }, []);
+        const plannedLines = linesWithStatus.filter((l: any) => !l.isNotPlanned);
+        const unfulfilledLines = linesWithStatus.filter((l: any) => l.isNotPlanned);
 
-  const section1Planned = processedDemand
-    .filter((h: any) => h.plannedLines.length > 0)
-    .sort((a: any, b: any) => {
-      const aCompleteCount = a.plannedLines.filter((l: any) => l.isFull).length;
-      const bCompleteCount = b.plannedLines.filter((l: any) => l.isFull).length;
-      const aTotal = a.plannedLines.length;
-      const bTotal = b.plannedLines.length;
+        acc.push({ ...header, plannedLines, unfulfilledLines });
+      }
+      return acc;
+    }, []);
+  }, [demandOrders, specs, currentMonth, currentPlan]);
 
-      // Sort by completion ratio
-      return (bCompleteCount / bTotal) - (aCompleteCount / aTotal);
-    });
+  const section1Planned = React.useMemo(() => {
+    return processedDemand
+      .filter((h: any) => h.plannedLines.length > 0)
+      .sort((a: any, b: any) => {
+        const aCompleteCount = a.plannedLines.filter((l: any) => l.isFull).length;
+        const bCompleteCount = b.plannedLines.filter((l: any) => l.isFull).length;
+        const aTotal = a.plannedLines.length;
+        const bTotal = b.plannedLines.length;
 
-  const section2Unfulfilled = processedDemand
-    .filter((h: any) => h.unfulfilledLines.length > 0);
+        // Sort by completion ratio
+        return (bCompleteCount / bTotal) - (aCompleteCount / aTotal);
+      });
+  }, [processedDemand]);
+
+  const section2Unfulfilled = React.useMemo(() => {
+    return processedDemand
+      .filter((h: any) => h.unfulfilledLines.length > 0);
+  }, [processedDemand]);
 
   return (
     <div className="p-6 max-w-full mx-auto space-y-6 bg-gray-50 min-h-screen">
@@ -699,7 +752,7 @@ const MPSPlan: React.FC = () => {
 
                   {/* Actual Days */}
                   {days.map((date, i) => {
-                    const metrics = calculateDailyMetrics(date);
+                    const metrics = dailyMetricsMap[date];
                     const dayNum = i + 1;
                     const todayDateStr = getTodayStr();
                     const isToday = date === todayDateStr;
