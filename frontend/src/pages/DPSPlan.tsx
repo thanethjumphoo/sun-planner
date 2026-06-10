@@ -189,7 +189,11 @@ const DPSPlan: React.FC = () => {
 
 
 
-  const getDisplayLabel = (key: string) => {
+  const getDisplayLabel = (key: string): string => {
+    if (key.includes(',')) {
+      const parts: string[] = key.split(',').map((p: string) => getDisplayLabel(p.trim()));
+      return Array.from(new Set(parts)).join(', ');
+    }
     if (key === 'Grade B' || key === 'Grade B (Co-Product)') return 'Grade B (Co-Product)';
     if (key === 'unsize' || key === 'Unsize / Other Grade A') return 'Unsize / Other Grade A';
     if (sizeLabelMap[key]) return sizeLabelMap[key];
@@ -355,6 +359,10 @@ const DPSPlan: React.FC = () => {
       const matchedId = orderYieldIds.find((id: any) => modalSizes.includes(id));
       if (matchedId) {
         allocSize = matchedId;
+      } else if (modalSizes.includes(order.itemCode)) {
+        allocSize = order.itemCode;
+      } else {
+        allocSize = modalSizes[0];
       }
     }
 
@@ -378,6 +386,10 @@ const DPSPlan: React.FC = () => {
       const aLabel = getSizeLabel(a.size);
       if (sizeModalData.sizeLabel === 'Unsize / Other Grade A' || sizeModalData.sizeLabel === 'unsize') return a.size === 'unsize' || !a.size;
       if (sizeModalData.sizeLabel === 'Grade B (Co-Product)' || sizeModalData.sizeLabel === 'Grade B') return a.size === 'Grade B';
+      if (sizeModalData.sizeLabel.includes(',')) {
+        const parts = sizeModalData.sizeLabel.split(',').map((p: string) => p.trim());
+        return parts.includes(a.size) || parts.includes(aLabel);
+      }
       return a.size === sizeModalData.sizeLabel || aLabel === sizeModalData.sizeLabel;
     });
     setSizeModalData({
@@ -395,6 +407,10 @@ const DPSPlan: React.FC = () => {
       }
       if (labelOrKey === 'Grade B (Co-Product)' || labelOrKey === 'Grade B') {
         return a.size === 'Grade B';
+      }
+      if (labelOrKey.includes(',')) {
+        const parts = labelOrKey.split(',').map(p => p.trim());
+        return parts.includes(a.size) || parts.includes(getSizeLabel(a.size));
       }
       return a.size === labelOrKey || getSizeLabel(a.size) === labelOrKey;
     });
@@ -461,6 +477,10 @@ const DPSPlan: React.FC = () => {
       if (a.orderId !== orderId || a.itemDesc !== itemDesc) return false;
       const sizeKey = sizeLabel === 'Grade B (Co-Product)' || sizeLabel === 'Grade B' ? 'Grade B' :
         sizeLabel === 'Unsize / Other Grade A' || sizeLabel === 'unsize' ? 'unsize' : sizeLabel;
+      if (sizeKey.includes(',')) {
+        const parts = sizeKey.split(',').map((p: string) => p.trim());
+        return parts.includes(a.size) || parts.includes(getSizeLabel(a.size));
+      }
       return a.size === sizeKey || getSizeLabel(a.size) === sizeLabel;
     });
     if (allocIndex === -1) return;
@@ -528,14 +548,17 @@ const DPSPlan: React.FC = () => {
     saveDbUpdate(newSublots, newOrders);
   };
 
-  const handleUpdateSupportManpower = (sublotId: string, val: number) => {
+  const handleUpdateSupportManpowerShift = (shift: string, val: number) => {
     const newSublots = [...sublots];
-    const index = newSublots.findIndex(s => s.id === sublotId);
-    if (index > -1) {
-      newSublots[index] = { ...newSublots[index], supportManpower: val };
-      setSublots(newSublots);
-      saveDbUpdate(newSublots, orders);
+    newSublots.forEach(s => {
+      if (s.shift === shift) s.supportManpower = 0;
+    });
+    const firstIndex = newSublots.findIndex(s => s.shift === shift);
+    if (firstIndex > -1) {
+      newSublots[firstIndex].supportManpower = val;
     }
+    setSublots(newSublots);
+    saveDbUpdate(newSublots, orders);
   };
 
   const saveDbUpdate = async (currentSublots: Sublot[], currentOrders: Order[]) => {
@@ -741,7 +764,8 @@ const DPSPlan: React.FC = () => {
               initialCoProductKg: mainCoproductWeight,
               slaughteredWeight,
               rmFlTotal,
-              shift: s.shift || 'A'
+              shift: s.shift || 'A',
+              supportManpower: s.supportManpower || 0
             };
           });
 
@@ -1667,9 +1691,20 @@ const DPSPlan: React.FC = () => {
             <div className="flex items-center gap-8">
               <div className="text-center px-4 border-r border-gray-100">
                 <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift A</div>
-                <div className="flex flex-col gap-1 text-sm">
-                  <div className="flex justify-between gap-4"><span className="text-gray-500">Cutting:</span> <span className="font-bold text-gray-800">{manpower.shiftA.toLocaleString()}</span></div>
-                  {!manpower.isBil && <div className="flex justify-between gap-4"><span className="text-gray-500">Support:</span> <span className="font-bold text-gray-800">{(manpower as any).supportA?.toLocaleString() || '0'}</span></div>}
+                <div className="flex flex-col gap-2 text-sm">
+                  <div className="flex justify-between items-center gap-4"><span className="text-gray-500">Cutting:</span> <span className="font-bold text-gray-800">{manpower.shiftA.toLocaleString()}</span></div>
+                  {!manpower.isBil && (
+                    <div className="flex justify-between items-center gap-2">
+                      <span className="text-gray-500">Support:</span>
+                      <input 
+                        type="number" 
+                        min="0"
+                        className="w-16 text-right p-1 border border-gray-200 rounded text-gray-800 font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                        defaultValue={(manpower as any).supportA || ''} 
+                        onBlur={(e) => handleUpdateSupportManpowerShift('A', parseInt(e.target.value) || 0)}
+                      />
+                    </div>
+                  )}
                 </div>
                 <div className="mt-2 text-2xl font-black text-gray-900 border-t border-gray-50 pt-2">
                   {(manpower.shiftA + (!manpower.isBil ? ((manpower as any).supportA || 0) : 0)).toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span>
@@ -1677,9 +1712,20 @@ const DPSPlan: React.FC = () => {
               </div>
               <div className="text-center px-4">
                 <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Shift B</div>
-                <div className="flex flex-col gap-1 text-sm">
-                  <div className="flex justify-between gap-4"><span className="text-gray-500">Cutting:</span> <span className="font-bold text-gray-800">{manpower.shiftB.toLocaleString()}</span></div>
-                  {!manpower.isBil && <div className="flex justify-between gap-4"><span className="text-gray-500">Support:</span> <span className="font-bold text-gray-800">{(manpower as any).supportB?.toLocaleString() || '0'}</span></div>}
+                <div className="flex flex-col gap-2 text-sm">
+                  <div className="flex justify-between items-center gap-4"><span className="text-gray-500">Cutting:</span> <span className="font-bold text-gray-800">{manpower.shiftB.toLocaleString()}</span></div>
+                  {!manpower.isBil && (
+                    <div className="flex justify-between items-center gap-2">
+                      <span className="text-gray-500">Support:</span>
+                      <input 
+                        type="number" 
+                        min="0"
+                        className="w-16 text-right p-1 border border-gray-200 rounded text-gray-800 font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                        defaultValue={(manpower as any).supportB || ''} 
+                        onBlur={(e) => handleUpdateSupportManpowerShift('B', parseInt(e.target.value) || 0)}
+                      />
+                    </div>
+                  )}
                 </div>
                 <div className="mt-2 text-2xl font-black text-gray-900 border-t border-gray-50 pt-2">
                   {(manpower.shiftB + (!manpower.isBil ? ((manpower as any).supportB || 0) : 0)).toLocaleString()} <span className="text-sm text-gray-500 font-medium">Head</span>
@@ -1790,24 +1836,6 @@ const DPSPlan: React.FC = () => {
                                 </p>
                               </div>
                             </div>
-                            
-                            {!isBil && (
-                              <div className="flex items-center justify-between border-t border-purple-100/50 pt-2">
-                                <div>
-                                  <p className="text-[10px] font-bold text-purple-500 uppercase">Support Manpower</p>
-                                </div>
-                                <div>
-                                  <input 
-                                    type="number" 
-                                    className="w-20 text-right px-2 py-1 text-sm font-bold text-purple-700 border border-purple-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-purple-400"
-                                    defaultValue={sl.supportManpower || ''}
-                                    placeholder="0"
-                                    onBlur={(e) => handleUpdateSupportManpower(sl.id, parseInt(e.target.value) || 0)}
-                                  />
-                                  <span className="text-[10px] font-bold text-purple-700 ml-1">Head</span>
-                                </div>
-                              </div>
-                            )}
                           </div>
 
                         </div>

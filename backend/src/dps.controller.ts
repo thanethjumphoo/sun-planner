@@ -186,6 +186,13 @@ export class DpsController {
       qty: number;
     }>> = {};
 
+    const shiftManpower: Record<string, number> = {};
+    plan.sublots.forEach(sl => {
+      const shift = (sl.shift || 'A').toUpperCase().trim();
+      if (!shiftManpower[shift]) shiftManpower[shift] = 0;
+      shiftManpower[shift] += Number(sl.supportManpower || 0);
+    });
+
     plan.allocations.forEach(alloc => {
       const sublot = alloc.sourceBin?.sublot;
       const shift = (sublot?.shift || 'A').toUpperCase().trim();
@@ -311,7 +318,7 @@ export class DpsController {
         totalRow.eachCell((cell, colNum) => {
           cell.font = { name: 'Segoe UI', size: 10, bold: true };
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
-          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'double' }, right: { style: 'thin' } };
+          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
           if (colNum === 1) {
             cell.alignment = { vertical: 'middle', horizontal: 'right' };
           } else if (colNum === 5) {
@@ -319,8 +326,26 @@ export class DpsController {
             cell.numFmt = '#,##0.0';
           }
         });
+
+        currentRow += 3;
+
+        // Support Manpower Row
+        const supportRow = summarySheet.addRow(['จำนวนคนบริการ (Support Manpower) / กะ ' + shift, '', '', '', shiftManpower[shift] || 0]);
+        summarySheet.mergeCells(`A${currentRow}:D${currentRow}`);
+        supportRow.height = 22;
+        supportRow.eachCell((cell, colNum) => {
+          cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF800080' } }; // Purple
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDF3F9' } }; // Light Purple
+          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'double' }, right: { style: 'thin' } };
+          if (colNum === 1) {
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          } else if (colNum === 5) {
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+            cell.numFmt = '#,##0';
+          }
+        });
         
-        currentRow += 4; // Add spacing before next shift
+        currentRow += 2; // Add spacing before next shift
       });
     }
 

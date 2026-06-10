@@ -34,20 +34,8 @@ export async function generateBlExcelPlan(
     }
   });
 
-  // Extract all unique Belt Gate Sizes
-  const uniqueBeltGateSizes = new Set<string>();
-  dates.forEach(dateStr => {
-    const d = dailyMap.get(dateStr);
-    try {
-      const trk = JSON.parse(d.summary.blTrackerJson || '{}');
-      if (trk.beltGateSizes) {
-        Object.keys(trk.beltGateSizes).forEach(sz => {
-          if (!sz.startsWith('BL_BLOCK')) uniqueBeltGateSizes.add(sz);
-        });
-      }
-    } catch (e) {}
-  });
-  const beltGateSizeList = Array.from(uniqueBeltGateSizes).sort();
+  // Use standard RM sizes for the Belt Gate Sizes
+  const beltGateSizeList = ['140 DOWN', '160-180', '180-200', '200-220', '220-240', '240-260', '260-280', '280-300', '300-320', '320-340', '340-360', '360-380', '380-400', '400-420', '420-440', '440 UP'];
 
   // ─── LAYOUT SETUP (Dates as Rows, Metrics as Columns) ───
   // Row 1: Section Headers
@@ -157,32 +145,90 @@ export async function generateBlExcelPlan(
     const blDrKg = Number(rm.blDr || 0);
     const totalBl = blKg + blThKg + blDrKg;
     
+    const totalBlSum = blKg + blThKg + blDrKg;
+    
     const intBl = Number(intRm.BL || 0);
     const intBlTh = Number(intRm.BLTH || 0);
     const intBlDr = Number(intRm.BLDR || 0);
-    const totalInt = intBl + intBlTh + intBlDr;
+    const totalIntBl = intBl + intBlTh + intBlDr;
 
     const extBl = Number(extRm.BL || 0);
     const extBlTh = Number(extRm.BLTH || 0);
     const extBlDr = Number(extRm.BLDR || 0);
-    const totalExt = extBl + extBlTh + extBlDr;
+    const totalExtBl = extBl + extBlTh + extBlDr;
 
     const icutCap = Number(trk.icutCapacityHours || 37);
     const icutHours = Number(trk.icutUsedHours || 0);
     const icutUtil = icutCap > 0 ? (icutHours / icutCap) * 100 : 0;
 
+    const rmBreakdownArr = beltGateSizeList.map(() => 0);
+    const supply = (plan as any).supplies?.find((s: any) => s.productionDate === dateStr || new Date(s.productionDate).toISOString().split('T')[0] === dateStr);
+    const rmBlUsed = Number(trk.rmBlUsed || 0);
+
+    if (rmBlUsed > 0) {
+      const bilSizesRecord: Record<string, number> = {};
+      const fullTrk = (() => { try { return JSON.parse(d.summary.trackerJson || '{}'); } catch (e) { return {}; } })();
+      const extSizes = fullTrk.extSizes || {};
+
+      beltGateSizeList.forEach(label => {
+        let kg = 0;
+        if (supply?.sizes) {
+          kg += supply.sizes.filter((sz: any) => sz.groupSize === label).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+        }
+        if (extSizes[label]) kg += Number(extSizes[label]);
+        bilSizesRecord[label] = kg;
+      });
+
+      const demandKgByBilSize: Record<string, number> = {};
+      d.orders.forEach((qty: number, itemCode: string) => {
+        const spec = specs.find(s => s.erpItemCode === itemCode);
+        const sizeMatch = (spec?.productSize || '').match(/(\d+-\d+|\d+\s*Up|\d+\s*Down)/i);
+        const oSize = sizeMatch ? sizeMatch[0] : 'Unsized';
+        const oYield = spec?.productYield && Number(spec.productYield) > 0 ? Number(spec.productYield) : 1;
+        demandKgByBilSize[oSize] = (demandKgByBilSize[oSize] || 0) + (qty / oYield);
+      });
+
+      let totalRemaining = 0;
+      const blBreakdownRecord: Record<string, number> = {};
+      Object.keys(bilSizesRecord).forEach(bilSz => {
+        const remaining = Math.max(0, bilSizesRecord[bilSz] - (demandKgByBilSize[bilSz] || 0));
+        blBreakdownRecord[bilSz] = remaining;
+        totalRemaining += remaining;
+      });
+
+      if (totalRemaining > 0) {
+        beltGateSizeList.forEach((bilSz, i) => {
+          rmBreakdownArr[i] = Math.round(((blBreakdownRecord[bilSz] || 0) / totalRemaining) * rmBlUsed);
+        });
+      } else {
+        let totalBilSizes = 0;
+        Object.values(bilSizesRecord).forEach(v => totalBilSizes += v);
+        if (totalBilSizes > 0) {
+          beltGateSizeList.forEach((bilSz, i) => {
+            const ratio = bilSizesRecord[bilSz] / totalBilSizes;
+            rmBreakdownArr[i] = Math.round(rmBlUsed * ratio);
+          });
+        }
+      }
+    }
+
+    const intRatio = totalBlSum > 0 ? totalIntBl / totalBlSum : 1;
+    const extRatio = totalBlSum > 0 ? totalExtBl / totalBlSum : 0;
+    const totalIntRm = Math.round(rmBlUsed * intRatio);
+    const totalExtRm = Math.round(rmBlUsed * extRatio);
+
     const rowData = [
       `${dateObj.getDate()}/${dateObj.toLocaleString('en-US', { month: 'short' })}`,
       dateObj.toLocaleDateString('en-US', { weekday: 'short' }),
-      totalBl, blKg, blThKg, blDrKg,
-      totalInt, intBl, intBlTh, intBlDr,
-      totalExt, extBl, extBlTh, extBlDr,
+      rmBlUsed, blKg, blThKg, blDrKg,
+      totalIntRm, intBl, intBlTh, intBlDr,
+      totalExtRm, extBl, extBlTh, extBlDr,
       Number(trk.icutUsedKg || 0), icutHours, icutCap, `${icutUtil.toFixed(1)}%`, Number(trk.manualUsedKg || 0),
       Number(trk.blBlockProduced || 0), Number(trk.blBlockUsed || 0)
     ];
 
-    beltGateSizeList.forEach(sz => {
-      rowData.push(Number(trk.beltGateSizes?.[sz] || 0));
+    beltGateSizeList.forEach((sz, i) => {
+      rowData.push(rmBreakdownArr[i] || 0);
     });
 
     itemCodes.forEach(code => {
