@@ -9,7 +9,7 @@ const API = import.meta.env.VITE_API_URL;
 
 const ErpIntegrationHub: React.FC = () => {
   const [activeTab, setActiveTab] = useState('orders');
-  const [itemCodes, setItemCodes] = useState<any[]>([]);
+  const [itemCodes, setItemCodes] = useState<string[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [bulkInput, setBulkInput] = useState('');
   const [isSyncing, setIsSyncing] = useState('');
@@ -42,7 +42,7 @@ const ErpIntegrationHub: React.FC = () => {
     setIsSyncing('items');
     try {
       const res = await fetch(`${API}/api/erp/sync-items`, { method: 'POST' });
-      if (res.ok) { const d = await res.json(); setSyncResult({ type: 'Items', count: d.count, time: new Date().toLocaleTimeString() }); await fetchTargetItems(); }
+      if (res.ok) { const d = await res.json(); setSyncResult({ type: 'Items', count: d.count, time: new Date().toLocaleTimeString() }); }
     } catch { alert('Item sync failed'); } finally { setIsSyncing(''); }
   };
 
@@ -211,24 +211,14 @@ const ErpIntegrationHub: React.FC = () => {
               </div>
               <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
                 <table className="w-full text-sm text-left text-gray-500">
-                  <thead className="text-xs text-gray-700 uppercase bg-gray-50"><tr><th className="px-4 py-3 w-16">No.</th><th className="px-4 py-3">Item Code (SEGMENT1)</th><th className="px-4 py-3">Sync Status</th><th className="px-4 py-3">Last Sync</th><th className="px-4 py-3 text-right">Action</th></tr></thead>
+                  <thead className="text-xs text-gray-700 uppercase bg-gray-50"><tr><th className="px-4 py-3 w-16">No.</th><th className="px-4 py-3">Item Code (SEGMENT1)</th><th className="px-4 py-3 text-right">Action</th></tr></thead>
                   <tbody>
-                    {itemCodes.length === 0 ? (<tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">No Item Codes added. Click "Manage Item Codes" to add some.</td></tr>
-                    ) : itemCodes.map((item, i) => (
-                      <tr key={item.itemCode} className="border-b border-gray-100 hover:bg-gray-50">
+                    {itemCodes.length === 0 ? (<tr><td colSpan={3} className="px-4 py-8 text-center text-gray-500">No Item Codes added. Click "Manage Item Codes" to add some.</td></tr>
+                    ) : itemCodes.map((code, i) => (
+                      <tr key={code} className="border-b border-gray-100 hover:bg-gray-50">
                         <td className="px-4 py-3 font-medium text-gray-900">{i + 1}</td>
-                        <td className="px-4 py-3 font-medium text-blue-600">{item.itemCode}</td>
-                        <td className="px-4 py-3">
-                          {item.lastSyncStatus === 'SUCCESS' ? (
-                            <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium flex items-center gap-1 w-fit"><CheckCircle2 className="w-3 h-3"/> Success</span>
-                          ) : item.lastSyncStatus === 'FAILED' ? (
-                            <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-medium flex items-center gap-1 w-fit"><XOctagon className="w-3 h-3"/> Failed</span>
-                          ) : (
-                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs font-medium">Pending</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-500">{item.lastSyncDate ? new Date(item.lastSyncDate).toLocaleString('th-TH') : '-'}</td>
-                        <td className="px-4 py-3 text-right"><button onClick={() => handleRemoveCode(item.itemCode)} className="text-red-500 hover:text-red-700 text-sm font-medium">Remove</button></td>
+                        <td className="px-4 py-3 font-medium text-blue-600">{code}</td>
+                        <td className="px-4 py-3 text-right"><button onClick={() => handleRemoveCode(code)} className="text-red-500 hover:text-red-700 text-sm font-medium">Remove</button></td>
                       </tr>
                     ))}
                   </tbody>

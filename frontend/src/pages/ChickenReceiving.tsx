@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Calendar as CalendarIcon, Plus, CalendarDays, Activity, Truck, BarChart2, Clock, MapPin, Search, X, Edit, Upload, Trash2 } from 'lucide-react';
+import { Calendar as CalendarIcon, Plus, CalendarDays, Activity, Truck, BarChart2, Clock, MapPin, Search, X, Edit, Upload } from 'lucide-react';
 import ImportModal from '../components/ImportModal';
 
 const tabs = [
@@ -147,9 +147,6 @@ export default function ChickenReceiving() {
       delete payload.sex;
       delete payload.batch;
       delete payload.sublot;
-    } else if (activeTab === 'weekly') {
-      delete payload.receive_time;
-      delete payload.sublot;
     }
 
     // Remove id from payload if POST
@@ -293,26 +290,6 @@ export default function ChickenReceiving() {
                 <div className={`p-3 text-center border-b border-gray-200 font-bold ${isToday ? 'bg-orange-100 text-orange-800' : 'bg-white text-gray-700'}`}>
                   {getDayName(dayObj)} {dayObj.getDate()}
                 </div>
-                {dayRecords.length > 0 && (
-                  <div className="bg-orange-50/60 border-b border-orange-100/50 p-2 flex justify-between items-center px-3 shadow-sm">
-                    <div className="flex flex-col">
-                      <span className="text-[10px] text-orange-600/80 font-bold uppercase tracking-wider">Total Birds</span>
-                      <span className="text-sm font-black text-orange-800">
-                        {dayRecords.reduce((sum, r) => sum + Number(r.chicken_count || 0), 0).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex flex-col text-right">
-                      <span className="text-[10px] text-orange-600/80 font-bold uppercase tracking-wider">Avg Weight</span>
-                      <span className="text-sm font-black text-orange-800">
-                        {(() => {
-                          const tb = dayRecords.reduce((sum, r) => sum + Number(r.chicken_count || 0), 0);
-                          const tw = dayRecords.reduce((sum, r) => sum + Number(r.chicken_weight || 0), 0);
-                          return tb > 0 ? (tw / tb).toFixed(2) : '0.00';
-                        })()} <span className="text-[10px]">kg</span>
-                      </span>
-                    </div>
-                  </div>
-                )}
                 <div className="p-2 space-y-3 min-h-[400px]">
                   {dayRecords.map((record, rIdx) => (
                     <div
@@ -324,6 +301,7 @@ export default function ChickenReceiving() {
                         <Edit size={14} className="text-orange-500" />
                       </div>
                       <div className="text-xs font-bold text-gray-800 mb-1">Shift {record.shift || '-'}</div>
+                      {record.receive_time && <div className="text-xs text-gray-500 mb-2 flex items-center gap-1"><Clock size={12} />{record.receive_time.substring(0, 5)}</div>}
                       <div className="text-xs font-medium mb-1 truncate text-gray-600 flex items-center gap-1"><MapPin size={12} />{record.farm_name || record.farm_name_standard || 'N/A'}</div>
                       <div className="flex justify-between items-center text-xs font-medium mt-2">
                         <span className="text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">{Number(record.chicken_count).toLocaleString()}</span>
@@ -480,7 +458,7 @@ export default function ChickenReceiving() {
             <label className="block text-xs font-semibold text-gray-600 mb-1">Receive Date</label>
             <input type="date" name="receive_date" value={formData.receive_date} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500" />
           </div>
-          {['monthly', 'weekly'].includes(activeTab) ? (
+          {activeTab === 'monthly' ? (
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Chicken Type</label>
               <select name="chicken_type" value={formData.chicken_type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
@@ -499,17 +477,15 @@ export default function ChickenReceiving() {
 
         {activeTab !== 'monthly' && (
           <div className="grid grid-cols-2 gap-4">
-            {activeTab !== 'weekly' && (
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Chicken Type</label>
-                <select name="chicken_type" value={formData.chicken_type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-                  <option value="ไก่เนื้อ">ไก่เนื้อ</option>
-                  <option value="ไก่ไข่">ไก่ไข่</option>
-                  <option value="ไก่พันธุ์">ไก่พันธุ์</option>
-                </select>
-              </div>
-            )}
-            <div className={activeTab === 'weekly' ? 'col-span-2' : ''}>
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">Chicken Type</label>
+              <select name="chicken_type" value={formData.chicken_type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
+                <option value="ไก่เนื้อ">ไก่เนื้อ</option>
+                <option value="ไก่ไข่">ไก่ไข่</option>
+                <option value="ไก่พันธุ์">ไก่พันธุ์</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Shift</label>
               <select name="shift" value={formData.shift} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
                 <option value="A">Shift A (เช้า)</option>
@@ -603,82 +579,6 @@ export default function ChickenReceiving() {
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" placeholder="Search farm or truck..." className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-orange-500" />
           </div>
-          {activeTab === 'monthly' && (
-            <button
-              onClick={() => {
-                const yyyyMm = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
-                const d = window.prompt("Enter month to clear (YYYY-MM):", yyyyMm);
-                if (d) {
-                  if (window.confirm(`Are you sure you want to delete all monthly data for ${d}?`)) {
-                    fetch(`${import.meta.env.VITE_API_URL}/api/chicken-receiving/monthly/clear/month/${d}`, {
-                      method: 'DELETE'
-                    }).then(res => {
-                      if (res.ok) {
-                        alert(`Cleared data for ${d}`);
-                        fetchData();
-                      } else {
-                        alert('Failed to clear data');
-                      }
-                    });
-                  }
-                }
-              }}
-              className="px-4 py-2 bg-white border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-all flex items-center gap-2"
-            >
-              <Trash2 size={16} />
-              Clear Month
-            </button>
-          )}
-          {activeTab === 'weekly' && (
-            <button
-              onClick={() => {
-                const d = window.prompt("Enter date to clear (YYYY-MM-DD):", formatLocalDate(currentDate));
-                if (d) {
-                  if (window.confirm(`Are you sure you want to delete all weekly data for ${d}?`)) {
-                    fetch(`${import.meta.env.VITE_API_URL}/api/chicken-receiving/weekly/clear/date/${d}`, {
-                      method: 'DELETE'
-                    }).then(res => {
-                      if (res.ok) {
-                        alert(`Cleared data for ${d}`);
-                        fetchData();
-                      } else {
-                        alert('Failed to clear data');
-                      }
-                    });
-                  }
-                }
-              }}
-              className="px-4 py-2 bg-white border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-all flex items-center gap-2"
-            >
-              <Trash2 size={16} />
-              Clear Date
-            </button>
-          )}
-          {activeTab === 'daily' && (
-            <button
-              onClick={() => {
-                const d = window.prompt("Enter date to clear (YYYY-MM-DD):", formatLocalDate(currentDate));
-                if (d) {
-                  if (window.confirm(`Are you sure you want to delete all daily data for ${d}?`)) {
-                    fetch(`${import.meta.env.VITE_API_URL}/api/chicken-receiving/daily/clear/date/${d}`, {
-                      method: 'DELETE'
-                    }).then(res => {
-                      if (res.ok) {
-                        alert(`Cleared data for ${d}`);
-                        fetchData();
-                      } else {
-                        alert('Failed to clear data');
-                      }
-                    });
-                  }
-                }
-              }}
-              className="px-4 py-2 bg-white border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-all flex items-center gap-2"
-            >
-              <Trash2 size={16} />
-              Clear Date
-            </button>
-          )}
           <button
             onClick={() => setIsImportOpen(true)}
             className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-all flex items-center gap-2"
