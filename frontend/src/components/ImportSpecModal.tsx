@@ -156,8 +156,8 @@ export default function ImportSpecModal({ isOpen, onClose, onImportDone }: Impor
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="bg-white w-[95vw] max-w-5xl rounded-2xl shadow-xl border border-gray-200 flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white w-[95vw] max-w-5xl rounded-2xl shadow-xl border border-gray-200 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl shrink-0">
           <div>

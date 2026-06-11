@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Calendar, Package, Users, Activity, Scale, Move, ChevronLeft, ChevronRight, Filter, FileText, Trash2, CalendarDays, ShoppingCart, X, Info, CheckCircle2, Lock, Unlock, ShieldCheck, Download, FileSpreadsheet, AlertTriangle, Database, BarChart3, Cpu, Layers, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import CustomDatePicker from '../components/common/CustomDatePicker';
 
 const API = import.meta.env.VITE_API_URL;
 
@@ -45,6 +46,43 @@ const PART_CONFIGS: Record<string, {
     sizeBreakdownTitle: 'BL Size Breakdown',
     netLabel: 'Net BL Available',
   },
+};
+
+interface PriorityInputProps {
+  initialValue: number | null;
+  onChange: (value: string) => void;
+  className?: string;
+}
+
+const PriorityInput: React.FC<PriorityInputProps> = ({ initialValue, onChange, className }) => {
+  const [val, setVal] = React.useState<string>(initialValue !== null ? String(initialValue) : '');
+
+  React.useEffect(() => {
+    setVal(initialValue !== null ? String(initialValue) : '');
+  }, [initialValue]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setVal(e.target.value);
+  };
+
+  const handleBlur = () => {
+    if (val !== (initialValue !== null ? String(initialValue) : '')) {
+      onChange(val);
+    }
+  };
+
+  return (
+    <input
+      type="number"
+      min={1}
+      max={99}
+      value={val}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      placeholder="-"
+      className={className}
+    />
+  );
 };
 
 const MPSPlan: React.FC = () => {
@@ -202,13 +240,16 @@ const MPSPlan: React.FC = () => {
 
   const fetchExternalRmSupplies = async () => {
     try {
-      const res = await fetch(`${API}/api/external-rm-supplies`);
+      const year = currentMonth.getFullYear();
+      const month = currentMonth.getMonth() + 1;
+      const monthStr = `${year}-${month.toString().padStart(2, '0')}`;
+      const startDate = `${monthStr}-01`;
+      const endDate = `${year}-${month.toString().padStart(2, '0')}-${new Date(year, month, 0).getDate()}`;
+
+      const res = await fetch(`${API}/api/external-rm-supplies?startDate=${startDate}&endDate=${endDate}&partName=BIL L/C`);
       if (res.ok) {
         const json = await res.json();
-        // Filter only supplies in current month
-        const monthStr = `${currentMonth.getFullYear()}-${(currentMonth.getMonth() + 1).toString().padStart(2, '0')}`;
-        const supplies = json.data.filter((s: any) => s.receivedDate.startsWith(monthStr) && s.partName === 'BIL L/C');
-        setExternalRmSupplies(supplies);
+        setExternalRmSupplies(json.data || []);
       }
     } catch (e) {
       console.error(e);
@@ -269,22 +310,49 @@ const MPSPlan: React.FC = () => {
     return type === 'main';
   };
 
-  const fetchDemandOrders = async () => {
+  const fetchDemandOrders = async (extraLineIds?: number[], appendMode = false) => {
     try {
-      const res = await fetch(`${API}/api/erp/demand-orders`);
+      const year = currentMonth.getFullYear();
+      const month = currentMonth.getMonth() + 1;
+      const monthStr = `${year}-${month.toString().padStart(2, '0')}`;
+      const shipStartDate = `${monthStr}-01`;
+      const shipEndDate = `${year}-${month.toString().padStart(2, '0')}-${new Date(year, month, 0).getDate()}`;
+
+      let url = `${API}/api/erp/demand-orders?shipStartDate=${shipStartDate}&shipEndDate=${shipEndDate}`;
+      if (extraLineIds && extraLineIds.length > 0) {
+        url += `&lineIds=${extraLineIds.join(',')}`;
+      }
+
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        setDemandOrders(data);
-        // Build initial priority map from fetched data
-        const pMap: Record<number, number | null> = {};
-        data.forEach((header: any) => {
-          header.lines?.forEach((line: any) => {
-            if (line.priority !== null && line.priority !== undefined) {
-              pMap[line.erpOrderLineId] = line.priority;
-            }
+        if (appendMode) {
+          setDemandOrders(prev => {
+            const prevIds = new Set(prev.map((h: any) => h.erpOrderHeaderId));
+            const merged = [...prev];
+            data.forEach((h: any) => {
+              if (!prevIds.has(h.erpOrderHeaderId)) {
+                merged.push(h);
+              }
+            });
+            return merged;
           });
+        } else {
+          setDemandOrders(data);
+        }
+        
+        // Build/merge priority map
+        setPriorityMap(prev => {
+          const nextMap = appendMode ? { ...prev } : {};
+          data.forEach((header: any) => {
+            header.lines?.forEach((line: any) => {
+              if (line.priority !== null && line.priority !== undefined) {
+                nextMap[line.erpOrderLineId] = line.priority;
+              }
+            });
+          });
+          return nextMap;
         });
-        setPriorityMap(pMap);
         setPriorityDirty(false);
       }
     } catch (e) {
@@ -392,6 +460,20 @@ const MPSPlan: React.FC = () => {
           const json = await res.json();
           if (json.success) {
             setCurrentPlan(json.data);
+            
+            if (json.data.orders && json.data.orders.length > 0) {
+              setDemandOrders(prev => {
+                const loadedLineIds = new Set(prev.flatMap((h: any) => h.lines?.map((l: any) => l.erpOrderLineId) || []));
+                const missingLineIds = json.data.orders
+                  .map((o: any) => o.erpOrderLineId)
+                  .filter((id: number) => id && !loadedLineIds.has(id));
+                
+                if (missingLineIds.length > 0) {
+                  fetchDemandOrders(missingLineIds, true);
+                }
+                return prev;
+              });
+            }
             
             try {
               const wRes = await fetch(`${API}/api/chicken-receiving/weekly`);
@@ -1169,7 +1251,7 @@ const MPSPlan: React.FC = () => {
   };
 
   return (
-    <div className="p-6 max-w-full mx-auto space-y-6 bg-gray-50 min-h-screen">
+    <div className="p-6 max-w-full mx-auto space-y-6 bg-slate-50 min-h-screen">
       {/* ═══ PREMIUM LOADING OVERLAY ═══ */}
       <AnimatePresence>
         {loading && (
@@ -1181,7 +1263,7 @@ const MPSPlan: React.FC = () => {
             className="fixed inset-0 z-[9999] flex items-center justify-center"
           >
             {/* Backdrop */}
-            <div className="absolute inset-0 bg-gradient-to-br from-slate-900/70 via-slate-800/60 to-orange-900/40 backdrop-blur-md" />
+            <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-md" />
 
             {/* Animated background particles */}
             <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -1222,7 +1304,7 @@ const MPSPlan: React.FC = () => {
               {/* Top gradient bar - animated */}
               <div className="h-1.5 w-full bg-gray-100 overflow-hidden">
                 <motion.div
-                  className="h-full bg-gradient-to-r from-orange-400 via-red-500 to-orange-400"
+                  className="h-full bg-orange-500"
                   initial={{ width: '0%' }}
                   animate={{
                     width: `${Math.min(((loadingPhase.step + 1) / (LOADING_STEPS[loadingPhase.mode]?.length || 5)) * 100, 100)}%`,
@@ -1236,7 +1318,7 @@ const MPSPlan: React.FC = () => {
                 <div className="flex items-center gap-4 mb-7">
                   <div className="relative">
                     <motion.div
-                      className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center shadow-lg shadow-orange-300/50"
+                      className="w-14 h-14 rounded-2xl bg-orange-500 flex items-center justify-center shadow-sm shadow-orange-500/20"
                       animate={{ rotate: [0, 5, -5, 0] }}
                       transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
                     >
@@ -1266,7 +1348,7 @@ const MPSPlan: React.FC = () => {
                   {/* Timer */}
                   <div className="text-right">
                     <motion.span
-                      className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-red-500 tabular-nums"
+                      className="text-2xl font-black text-orange-500 tabular-nums"
                       key={elapsedTime}
                       initial={{ y: -5, opacity: 0.5 }}
                       animate={{ y: 0, opacity: 1 }}
@@ -1296,8 +1378,8 @@ const MPSPlan: React.FC = () => {
                           }`}
                       >
                         {/* Step circle */}
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-all duration-300 ${isComplete ? 'bg-emerald-500 shadow-md shadow-emerald-200' :
-                          isCurrent ? 'bg-gradient-to-br from-orange-500 to-red-500 shadow-md shadow-orange-200' :
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-all duration-300 ${isComplete ? 'bg-emerald-500 shadow-sm shadow-emerald-200' :
+                          isCurrent ? 'bg-orange-500 shadow-sm shadow-orange-200' :
                             'bg-gray-200'
                           }`}>
                           {isComplete ? (
@@ -1338,7 +1420,7 @@ const MPSPlan: React.FC = () => {
                 </div>
 
                 {/* Current message */}
-                <div className="bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+                <div className="bg-slate-50 rounded-xl px-4 py-3 border border-gray-100">
                   <div className="flex items-center gap-2">
                     <motion.div
                       animate={{ opacity: [1, 0.4, 1] }}
@@ -1363,9 +1445,9 @@ const MPSPlan: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-end bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
         <div className="relative">
-          <div className="absolute -top-10 -left-10 w-40 h-40 bg-orange-200/20 blur-3xl rounded-full"></div>
+          <div className="absolute -top-10 -left-10 w-40 h-40 bg-slate-200/20 blur-3xl rounded-full"></div>
           <h1 className="text-4xl font-black text-slate-900 tracking-tight flex items-center gap-4 relative z-10">
-            <div className="p-3 bg-orange-500 rounded-2xl shadow-lg shadow-orange-200">
+            <div className="p-3 bg-orange-500 rounded-2xl shadow-sm shadow-orange-200">
               <Calendar className="w-8 h-8 text-white" />
             </div>
             <span>Master Production Schedule <span className="text-orange-500">({pc.title} MPS)</span></span>
@@ -1374,19 +1456,19 @@ const MPSPlan: React.FC = () => {
         </div>
         <div className="flex gap-3">
           {currentPlan && (
-            <button disabled={loading || currentPlan?.status === 'APPROVED'} onClick={handleImportWeekly} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all ${loading || currentPlan?.status === 'APPROVED' ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 shadow-blue-200'}`}>
+            <button disabled={loading || currentPlan?.status === 'APPROVED'} onClick={handleImportWeekly} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-all'}`}>
               <Download className={`w-4 h-4 ${loading ? 'animate-pulse' : ''}`} />
               Import Week Plan
             </button>
           )}
-          <button disabled={loading || currentPlan?.status === 'APPROVED'} onClick={handleGeneratePlan} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-md transition-all ${loading || currentPlan?.status === 'APPROVED' ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 shadow-orange-200'}`}>
+          <button disabled={loading || currentPlan?.status === 'APPROVED'} onClick={handleGeneratePlan} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-sm transition-all ${loading || currentPlan?.status === 'APPROVED' ? 'bg-gray-400 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600 shadow-orange-200'}`}>
             <Activity className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {currentPlan?.status === 'APPROVED' ? '🔒 Plan Locked' : loading ? 'Generating...' : 'Generate & Save Plan'}
           </button>
           <button onClick={handleClearMonth} className="flex items-center gap-2 px-4 py-2 bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded-xl text-sm font-medium shadow-sm transition-all">
             <Trash2 className="w-4 h-4" /> Clear Month
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 hover:bg-gray-50 rounded-xl text-sm font-medium text-gray-700 shadow-sm transition-all">
+          <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl text-sm font-medium text-gray-700 shadow-sm transition-all">
             <Filter className="w-4 h-4" /> Filter
           </button>
           <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-xl">
@@ -1408,12 +1490,12 @@ const MPSPlan: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-1 inline-flex w-full sm:w-auto overflow-x-auto">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-1 inline-flex w-full sm:w-auto overflow-x-auto">
         <button
           onClick={() => setActiveTab('calendar')}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'calendar'
             ? 'bg-orange-50 text-orange-600 shadow-sm'
-            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+            : 'text-gray-500 hover:text-gray-900 hover:bg-slate-50'
             }`}
         >
           <CalendarDays size={16} />
@@ -1423,7 +1505,7 @@ const MPSPlan: React.FC = () => {
           onClick={() => setActiveTab('drafts')}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'drafts'
             ? 'bg-orange-50 text-orange-600 shadow-sm'
-            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+            : 'text-gray-500 hover:text-gray-900 hover:bg-slate-50'
             }`}
         >
           <FileText size={16} />
@@ -1436,7 +1518,7 @@ const MPSPlan: React.FC = () => {
           onClick={() => setActiveTab('demand')}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'demand'
             ? 'bg-orange-50 text-orange-600 shadow-sm'
-            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+            : 'text-gray-500 hover:text-gray-900 hover:bg-slate-50'
             }`}
         >
           <ShoppingCart size={16} />
@@ -1554,9 +1636,9 @@ const MPSPlan: React.FC = () => {
               )}
 
               {/* Calendar Grid */}
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                 {/* Days of Week Header */}
-                <div className="grid grid-cols-7 bg-gray-50 border-b border-gray-200">
+                <div className="grid grid-cols-7 bg-slate-50 border-b border-slate-200">
                   {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
                     <div key={day} className="py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">
                       {day}
@@ -1568,7 +1650,7 @@ const MPSPlan: React.FC = () => {
                 <div className="grid grid-cols-7 auto-rows-fr">
                   {/* Empty slots for first week */}
                   {Array.from({ length: firstDayOfMonth }).map((_, i) => (
-                    <div key={`empty-${i}`} className="min-h-[160px] border-r border-b border-gray-100 bg-gray-50/50"></div>
+                    <div key={`empty-${i}`} className="min-h-[160px] border-r border-b border-gray-100 bg-slate-50/50"></div>
                   ))}
 
                   {/* Actual Days */}
@@ -1585,8 +1667,8 @@ const MPSPlan: React.FC = () => {
                         onDragOver={handleDragOver}
                         onDrop={(e) => handleDrop(e, date)}
                         className={`min-h-[180px] border-r border-b border-gray-100 p-2 flex flex-col gap-2 transition-colors
-                      ${isToday ? 'bg-orange-50/30' : (Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) !== 0 ? 'bg-red-100' : 'bg-white hover:bg-gray-50')}
-                      ${metrics.supplyBreakdown ? 'cursor-pointer hover:shadow-md' : ''}
+                      ${isToday ? 'bg-orange-50/30' : (Math.round(metrics.rmFlAvailable - metrics.totalOrderQty) !== 0 ? 'bg-red-100' : 'bg-white hover:bg-slate-50')}
+                      ${metrics.supplyBreakdown ? 'cursor-pointer hover:shadow-sm' : ''}
                     `}
                         onClick={() => {
                           if (metrics.supplyBreakdown) {
@@ -1602,7 +1684,7 @@ const MPSPlan: React.FC = () => {
                         {/* Day Header */}
                         <div className="flex justify-between items-start mb-1">
                           <div className="flex items-center gap-2">
-                            <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-bold ${isToday ? 'bg-orange-500 text-white shadow-md' : 'text-gray-700'}`}>
+                            <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-bold ${isToday ? 'bg-orange-500 text-white shadow-sm' : 'text-gray-700'}`}>
                               {dayNum}
                             </span>
                             {hasWeekly && (
@@ -1712,7 +1794,7 @@ const MPSPlan: React.FC = () => {
                               ${currentPlan?.status === 'APPROVED' ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}
                               ${order.type === 'chilled' ? 'bg-orange-50 border-orange-200' : 'bg-cyan-50 border-cyan-200'}
                               ${highlightedSoNumber && !isHighlighted ? 'opacity-40 grayscale-[50%]' : ''}
-                              ${isHighlighted ? 'ring-2 ring-orange-500 shadow-orange-500/50 shadow-lg scale-[1.02] z-10' : ''}
+                              ${isHighlighted ? 'ring-2 ring-orange-500 shadow-orange-500/50 shadow-sm scale-[1.02] z-10' : ''}
                             `}
                               >
                                 <div className="flex justify-between font-bold mb-1">
@@ -1740,18 +1822,18 @@ const MPSPlan: React.FC = () => {
               </div>
             </>
           ) : (
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-12 text-center min-h-[400px] flex flex-col items-center justify-center">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center min-h-[400px] flex flex-col items-center justify-center">
               <CalendarDays size={48} className="text-gray-300 mb-4" />
               <h3 className="text-xl font-bold text-gray-800 mb-2">No Plan Generated</h3>
               <p className="text-gray-500 mb-6">There is no production plan generated for {currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })} yet.</p>
-              <button onClick={handleGeneratePlan} className="px-6 py-3 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-xl shadow-md transition-colors">
+              <button onClick={handleGeneratePlan} className="px-6 py-3 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-xl shadow-sm transition-colors">
                 Generate Plan Now
               </button>
             </div>
           )}
         </>
       ) : activeTab === 'drafts' ? (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 min-h-[500px]">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[500px]">
           <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
             <FileText className="text-orange-500" />
             Generated Plans & Drafts
@@ -1764,23 +1846,23 @@ const MPSPlan: React.FC = () => {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-600 border-b">ID</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-600 border-b">Plan Name</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-600 border-b">Target Month</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-600 border-b">Status</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-600 border-b">Created</th>
-                    <th className="px-4 py-3 text-right font-semibold text-gray-600 border-b">Actions</th>
+                <thead className="bg-slate-50 border-b border-slate-200">
+                  <tr className="even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                    <th className="px-4 py-3 text-left font-semibold text-gray-600">ID</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-600">Plan Name</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-600">Target Month</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-600">Created</th>
+                    <th className="px-4 py-3 text-right font-semibold text-gray-600 tabular-nums">Actions</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-slate-100 bg-white">
                   {plans.map(p => (
-                    <tr key={p.id} className={`hover:bg-gray-50 transition-colors border-b last:border-0 ${p.status === 'APPROVED' ? 'bg-emerald-50/30' : ''}`}>
-                      <td className="px-4 py-3 font-mono text-gray-500">{p.id}</td>
-                      <td className="px-4 py-3 font-semibold text-gray-800">{p.planName}</td>
-                      <td className="px-4 py-3 text-gray-600">{p.targetMonth}</td>
-                      <td className="px-4 py-3">
+                    <tr key={p.id} className={`hover:bg-slate-50 transition-colors border-b last:border-0 ${p.status === 'APPROVED' ? 'bg-emerald-50/30' : ''}`}>
+                      <td className="px-4 py-2.5 font-mono text-gray-500">{p.id}</td>
+                      <td className="px-4 py-2.5 font-semibold text-gray-800">{p.planName}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{p.targetMonth}</td>
+                      <td className="px-4 py-2.5">
                         {p.status === 'APPROVED' ? (
                           <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md text-xs font-bold inline-flex items-center gap-1">
                             <ShieldCheck size={12} />
@@ -1792,10 +1874,10 @@ const MPSPlan: React.FC = () => {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-gray-500">
+                      <td className="px-4 py-2.5 text-gray-500">
                         {new Date(p.createdAt).toLocaleDateString()}
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-2.5 text-right tabular-nums">
                         <div className="flex items-center gap-1.5 justify-end">
                           {p.status === 'DRAFT' ? (
                             <>
@@ -1874,14 +1956,14 @@ const MPSPlan: React.FC = () => {
               <div className="flex gap-2 flex-shrink-0">
                 <button
                   onClick={cancelPriorities}
-                  className="px-4 py-2 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 transition-all shadow-sm"
+                  className="px-4 py-2 text-sm font-bold text-gray-600 bg-white border border-gray-300 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={savePriorities}
                   disabled={savingPriority}
-                  className="px-4 py-2 text-sm font-bold text-white bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl hover:from-amber-600 hover:to-orange-600 transition-all shadow-md disabled:opacity-50"
+                  className="px-4 py-2 text-sm font-bold text-white bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl hover:from-amber-600 hover:to-orange-600 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {savingPriority ? 'Saving...' : 'Save & Re-Generate'}
                 </button>
@@ -1890,7 +1972,7 @@ const MPSPlan: React.FC = () => {
           )}
 
           {/* Section 1: Planned Demand Orders */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <ShoppingCart className="text-orange-500" />
@@ -1914,9 +1996,9 @@ const MPSPlan: React.FC = () => {
             ) : (
               <div className="space-y-5">
                 {section1Planned.map((header: any) => (
-                  <div key={header.erpOrderHeaderId} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                  <div key={header.erpOrderHeaderId} className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                     {/* SO Header */}
-                    <div className="bg-gradient-to-r from-gray-50 to-slate-50 px-4 py-3 border-b border-gray-200 flex flex-wrap gap-4 items-center justify-between">
+                    <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex flex-wrap gap-4 items-center justify-between">
                       <div className="flex gap-6 items-center">
                         <div className="w-44">
                           <span className="text-[10px] text-gray-400 uppercase font-bold block tracking-wider">SO Number</span>
@@ -1946,20 +2028,20 @@ const MPSPlan: React.FC = () => {
 
                     {/* SO Lines */}
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead className="bg-white">
-                          <tr>
-                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-16">Priority</th>
-                            <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Item Code</th>
-                            <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Description</th>
-                            <th className="px-3 py-2 text-right font-semibold text-gray-600 border-b w-28">Qty (kg)</th>
-                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Planned Date</th>
-                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Finished Date</th>
-                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Ship Date</th>
-                            <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Production</th>
+                      <table className="w-full text-sm border-collapse">
+                        <thead className="bg-slate-50 border-b border-slate-200">
+                          <tr className="even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                            <th className="px-4 py-3 text-center font-semibold text-gray-600 w-16">Priority</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-600">Item Code</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-600">Description</th>
+                            <th className="px-4 py-3 text-right font-semibold text-gray-600 w-28 tabular-nums" title="น้ำหนักรวม (กิโลกรัม)">Qty (kg) <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
+                            <th className="px-4 py-3 text-center font-semibold text-gray-600 w-28">Planned Date</th>
+                            <th className="px-4 py-3 text-center font-semibold text-gray-600 w-28">Finished Date</th>
+                            <th className="px-4 py-3 text-center font-semibold text-gray-600 w-28">Ship Date</th>
+                            <th className="px-4 py-3 text-center font-semibold text-gray-600 w-28" title="จำนวนที่ต้องผลิตจริงในแต่ละกะ">Production <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
                           </tr>
                         </thead>
-                        <tbody>
+                        <tbody className="divide-y divide-slate-100 bg-white">
                           {header.plannedLines.map((line: any) => {
                             const totalPlanned = line.totalPlanned;
                             const isFull = line.isFull;
@@ -1968,39 +2050,35 @@ const MPSPlan: React.FC = () => {
                             const currentPri = priorityMap[line.erpOrderLineId] ?? null;
 
                             return (
-                              <tr key={line.erpOrderLineId} className="hover:bg-gray-50/80 transition-colors border-b last:border-0 border-gray-100">
-                                <td className="px-3 py-2 text-center">
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    max={99}
-                                    value={currentPri ?? ''}
-                                    onChange={(e) => handlePriorityChange(line.erpOrderLineId, e.target.value)}
-                                    placeholder="-"
-                                    className="w-12 text-center text-sm font-bold border border-gray-200 rounded-lg py-1 focus:ring-2 focus:ring-orange-300 focus:border-orange-400 outline-none transition-all"
+                              <tr key={line.erpOrderLineId} className="hover:bg-slate-50/80 transition-colors border-b last:border-0 border-gray-100">
+                                <td className="px-4 py-2.5 text-center">
+                                  <PriorityInput
+                                    initialValue={currentPri}
+                                    onChange={(val) => handlePriorityChange(line.erpOrderLineId, val)}
+                                    className="w-12 text-center text-sm font-bold border border-slate-200 rounded-lg py-1 focus:ring-2 focus:ring-orange-300 focus:border-orange-400 outline-none transition-all"
                                   />
                                 </td>
-                                <td className="px-3 py-2 font-medium text-gray-800">{line.erpOrderItemCode}</td>
-                                <td className="px-3 py-2 text-gray-600 truncate max-w-[200px]" title={line.erpItemDesc}>{line.erpItemDesc || '-'}</td>
-                                <td className="px-3 py-2 text-right font-bold text-blue-700">{Number(line.erpOrderItemQty).toLocaleString()}</td>
-                                <td className="px-3 py-2 text-center text-xs">
+                                <td className="px-4 py-2.5 font-medium text-gray-800">{line.erpOrderItemCode}</td>
+                                <td className="px-4 py-2.5 text-gray-600 truncate max-w-[200px]" title={line.erpItemDesc}>{line.erpItemDesc || '-'}</td>
+                                <td className="px-4 py-2.5 text-right font-bold text-blue-700 tabular-nums">{Number(line.erpOrderItemQty).toLocaleString()}</td>
+                                <td className="px-4 py-2.5 text-center text-xs">
                                   {plannedDate ? (
                                     <span className="text-gray-700 font-bold">{new Date(plannedDate).toLocaleDateString()}</span>
                                   ) : (
                                     <span className="text-gray-400">-</span>
                                   )}
                                 </td>
-                                <td className="px-3 py-2 text-center text-xs">
+                                <td className="px-4 py-2.5 text-center text-xs">
                                   {line.planned.length > 0 && line.planned[0].finishedProductionDate ? (
                                     <span className="text-blue-700 font-bold">{new Date(line.planned[0].finishedProductionDate).toLocaleDateString()}</span>
                                   ) : (
                                     <span className="text-gray-400">-</span>
                                   )}
                                 </td>
-                                <td className="px-3 py-2 text-center text-emerald-700 text-xs font-bold">
+                                <td className="px-4 py-2.5 text-center text-emerald-700 text-xs font-bold">
                                   {new Date(line.erpOrderShipDate).toLocaleDateString()}
                                 </td>
-                                <td className="px-3 py-2 text-center">
+                                <td className="px-4 py-2.5 text-center">
                                   {isFull ? (
                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-bold">
                                       <CheckCircle2 size={10} /> Complete
@@ -2055,7 +2133,7 @@ const MPSPlan: React.FC = () => {
                   return (
                     <div key={header.erpOrderHeaderId} className="border border-red-100 rounded-xl overflow-hidden shadow-sm">
                       {/* SO Header */}
-                      <div className="bg-gradient-to-r from-red-50/50 to-orange-50/50 px-4 py-3 border-b border-red-100 flex flex-wrap gap-4 items-center justify-between">
+                      <div className="bg-orange-50/30 px-4 py-3 border-b border-red-100 flex flex-wrap gap-4 items-center justify-between">
                         <div className="flex gap-6 items-center">
                           <div className="w-44">
                             <span className="text-[10px] text-red-400 uppercase font-bold block tracking-wider">SO Number</span>
@@ -2085,42 +2163,38 @@ const MPSPlan: React.FC = () => {
 
                       {/* SO Lines */}
                       <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead className="bg-white">
-                            <tr>
-                              <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-16">Priority</th>
-                              <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Item Code</th>
-                              <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Description</th>
-                              <th className="px-3 py-2 text-right font-semibold text-gray-600 border-b w-28">Qty (kg)</th>
-                              <th className="px-3 py-2 text-center font-semibold text-gray-600 border-b w-28">Ship Date</th>
-                              <th className="px-3 py-2 text-left font-semibold text-gray-600 border-b">Reason / Action</th>
+                        <table className="w-full text-sm border-collapse">
+                          <thead className="bg-slate-50 border-b border-slate-200">
+                            <tr className="even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                              <th className="px-4 py-3 text-center font-semibold text-gray-600 w-16">Priority</th>
+                              <th className="px-4 py-3 text-left font-semibold text-gray-600">Item Code</th>
+                              <th className="px-4 py-3 text-left font-semibold text-gray-600">Description</th>
+                              <th className="px-4 py-3 text-right font-semibold text-gray-600 w-28 tabular-nums" title="น้ำหนักรวม (กิโลกรัม)">Qty (kg) <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
+                              <th className="px-4 py-3 text-center font-semibold text-gray-600 w-28">Ship Date</th>
+                              <th className="px-4 py-3 text-left font-semibold text-gray-600">Reason / Action</th>
                             </tr>
                           </thead>
-                          <tbody>
+                          <tbody className="divide-y divide-slate-100 bg-white">
                             {header.unfulfilledLines.map((line: any) => {
                               const exception = exceptions.find((e: any) => e.erpOrderLineId === line.erpOrderLineId);
                               const currentPri = priorityMap[line.erpOrderLineId] ?? null;
 
                               return (
                                 <tr key={line.erpOrderLineId} className="hover:bg-red-50/30 transition-colors border-b last:border-0 border-red-50">
-                                  <td className="px-3 py-2 text-center">
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      max={99}
-                                      value={currentPri ?? ''}
-                                      onChange={(e) => handlePriorityChange(line.erpOrderLineId, e.target.value)}
-                                      placeholder="-"
-                                      className="w-12 text-center text-sm font-bold border border-gray-200 rounded-lg py-1 focus:ring-2 focus:ring-red-300 focus:border-red-400 outline-none transition-all"
+                                  <td className="px-4 py-2.5 text-center">
+                                    <PriorityInput
+                                      initialValue={currentPri}
+                                      onChange={(val) => handlePriorityChange(line.erpOrderLineId, val)}
+                                      className="w-12 text-center text-sm font-bold border border-slate-200 rounded-lg py-1 focus:ring-2 focus:ring-red-300 focus:border-red-400 outline-none transition-all"
                                     />
                                   </td>
-                                  <td className="px-3 py-2 font-medium text-gray-800">{line.erpOrderItemCode}</td>
-                                  <td className="px-3 py-2 text-gray-600 truncate max-w-[200px]" title={line.erpItemDesc}>{line.erpItemDesc || '-'}</td>
-                                  <td className="px-3 py-2 text-right font-bold text-red-700">{Number(line.erpOrderItemQty).toLocaleString()}</td>
-                                  <td className="px-3 py-2 text-center text-gray-600 text-xs">
+                                  <td className="px-4 py-2.5 font-medium text-gray-800">{line.erpOrderItemCode}</td>
+                                  <td className="px-4 py-2.5 text-gray-600 truncate max-w-[200px]" title={line.erpItemDesc}>{line.erpItemDesc || '-'}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold text-red-700 tabular-nums">{Number(line.erpOrderItemQty).toLocaleString()}</td>
+                                  <td className="px-4 py-2.5 text-center text-gray-600 text-xs">
                                     {new Date(line.erpOrderShipDate).toLocaleDateString()}
                                   </td>
-                                  <td className="px-3 py-2 text-left">
+                                  <td className="px-4 py-2.5 text-left">
                                     {exception ? (
                                       <div className="flex flex-col">
                                         <span className="text-red-600 font-bold text-[10px]">✕ Shortage: {Math.round(exception.shortageKg).toLocaleString()}kg</span>
@@ -2149,23 +2223,23 @@ const MPSPlan: React.FC = () => {
         </div>
       )}
 
-      {/* Supply & Demand Breakdown Modal */}
       {showSupplyModal && selectedSupply && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowSupplyModal(false)}>
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            className="bg-white rounded-2xl shadow-xl w-full max-w-7xl flex flex-col max-h-[90vh] border border-gray-200"
+            className="bg-white rounded-2xl shadow-xl w-full max-w-7xl flex flex-col max-h-[90vh] border border-slate-200"
+            onClick={e => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl">
+            <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-slate-50/50 rounded-t-2xl">
               <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                 <Info size={20} className="text-orange-500" />
                 Raw Material Breakdown — <span className="text-orange-600">{selectedDate}</span>
               </h3>
               <button
                 onClick={() => setShowSupplyModal(false)}
-                className="text-gray-400 hover:text-gray-700 bg-white p-1 rounded-full shadow-sm border border-gray-200 transition-colors"
+                className="text-gray-400 hover:text-gray-700 bg-white p-1 rounded-full shadow-sm border border-slate-200 transition-colors"
               >
                 <X size={18} />
               </button>
@@ -2196,7 +2270,7 @@ const MPSPlan: React.FC = () => {
                         { label: 'RM BL-DR (น่อง)', val: blDrKg, unit: 'kg', color: 'pink' },
                         { label: 'Total RM BL', val: totalBl, unit: 'kg', color: 'orange' },
                       ].map((stat, i) => (
-                        <div key={i} className="bg-gray-50 border border-gray-100 p-4 rounded-xl">
+                        <div key={i} className="bg-slate-50 border border-gray-100 p-4 rounded-xl">
                           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{stat.label}</p>
                           <div className="flex items-baseline gap-1">
                             <span className="text-xl font-bold text-gray-800">
@@ -2212,7 +2286,7 @@ const MPSPlan: React.FC = () => {
                       { label: 'Avg. Weight', val: selectedSupply.avgWeight, unit: 'kg/pc', color: 'emerald', precision: 3 },
                       { label: 'Slaughtered', val: selectedSupply.slaughteredWeight, unit: 'kg', color: 'orange' },
                     ].map((stat, i) => (
-                      <div key={i} className="bg-gray-50 border border-gray-100 p-4 rounded-xl">
+                      <div key={i} className="bg-slate-50 border border-gray-100 p-4 rounded-xl">
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{stat.label}</p>
                         <div className="flex items-baseline gap-1">
                           <span className="text-xl font-bold text-gray-800">
@@ -2242,7 +2316,7 @@ const MPSPlan: React.FC = () => {
                     
                     return (
                     <div className="space-y-6">
-                      <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
+                      <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-6">
                         <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
                           <Zap size={16} className="text-indigo-500" />
                           I-CUT Capacity & Manual Trimming
@@ -2280,7 +2354,7 @@ const MPSPlan: React.FC = () => {
                       </div>
 
                       {/* BL BLOCK Tracking */}
-                      <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
+                      <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-6">
                         <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
                           <Package size={16} className="text-orange-500" />
                           BL BLOCK Tracking (Co-Product)
@@ -2312,7 +2386,7 @@ const MPSPlan: React.FC = () => {
 
                       {/* Belt Gate Size Breakdown */}
                       {trk.beltGateSizes && Object.keys(trk.beltGateSizes).length > 0 && (
-                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-4">
+                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-6">
                           <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                             <Layers size={16} className="text-slate-500" />
                             Belt Gate Sizes (RM BL)
@@ -2332,7 +2406,7 @@ const MPSPlan: React.FC = () => {
                     </div>
                     );
                   })() : selectedManpower && (
-                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-4">
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 space-y-6">
                       <h4 className="text-sm font-bold text-indigo-800 flex items-center gap-2">
                         <Users size={16} className="text-indigo-500" />
                         Manpower Planning & Actual
@@ -2344,7 +2418,7 @@ const MPSPlan: React.FC = () => {
                         <div className="flex flex-col gap-4">
                           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             {/* Process 1 */}
-                            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-2xl border border-blue-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-md transition-all">
+                            <div className="bg-white border border-slate-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-sm transition-all">
                               <div className="flex items-center justify-between mb-2 z-10">
                                 <p className="text-xs font-bold text-blue-700 uppercase tracking-wider">Process 1: BIL</p>
                                 <Package size={16} className="text-blue-400" />
@@ -2359,7 +2433,7 @@ const MPSPlan: React.FC = () => {
                             </div>
                             
                             {/* Process 2 */}
-                            <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-2xl border border-purple-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-md transition-all">
+                            <div className="bg-white border border-slate-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-sm transition-all">
                               <div className="flex items-center justify-between mb-2 z-10">
                                 <p className="text-xs font-bold text-purple-700 uppercase tracking-wider">Process 2: สะโพก + น่อง</p>
                                 <Move size={16} className="text-purple-400" />
@@ -2374,7 +2448,7 @@ const MPSPlan: React.FC = () => {
                             </div>
 
                             {/* Process 3 */}
-                            <div className="bg-gradient-to-br from-pink-50 to-pink-100 p-4 rounded-2xl border border-pink-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-md transition-all">
+                            <div className="bg-white border border-slate-200 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-sm transition-all">
                               <div className="flex items-center justify-between mb-2 z-10">
                                 <p className="text-xs font-bold text-pink-700 uppercase tracking-wider">Process 3: BL</p>
                                 <Activity size={16} className="text-pink-400" />
@@ -2389,7 +2463,7 @@ const MPSPlan: React.FC = () => {
                             </div>
 
                             {/* Total Manpower */}
-                            <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 p-4 rounded-2xl border border-indigo-700 shadow-md flex flex-col justify-between relative overflow-hidden group hover:shadow-lg transition-all text-white">
+                            <div className="bg-slate-800 border-slate-700 text-white shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-sm transition-all text-white">
                               <div className="flex items-center justify-between mb-2 z-10">
                                 <p className="text-xs font-bold text-indigo-100 uppercase tracking-wider">Total Manpower</p>
                                 <Users size={16} className="text-indigo-200" />
@@ -2415,103 +2489,103 @@ const MPSPlan: React.FC = () => {
                             {/* Machine Summary Table */}
                             <div className="overflow-x-auto">
                               <table className="w-full text-[11px] border-collapse">
-                                <thead>
-                                  <tr className="bg-pink-50/80">
-                                    <th className="text-left px-3 py-2 font-bold text-pink-800 border-b border-pink-200">เครื่องจักร</th>
-                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">จำนวนไลน์</th>
-                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">เครื่อง/ไลน์</th>
-                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">เครื่องทั้งหมด</th>
-                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">จำนวนกะ</th>
-                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">Yield</th>
-                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">คน/ไลน์/กะ</th>
-                                    <th className="text-center px-3 py-2 font-bold text-pink-800 border-b border-pink-200">รวมคน</th>
+                                <thead className="bg-slate-50 border-b border-slate-200">
+                                  <tr className="bg-pink-50/80 even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                                    <th className="px-4 py-3 text-left font-bold text-pink-800 ">เครื่องจักร</th>
+                                    <th className="px-4 py-3 text-center font-bold text-pink-800 " title="จำนวนไลน์การผลิตที่เปิดใช้งาน">จำนวนไลน์ <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
+                                    <th className="px-4 py-3 text-center font-bold text-pink-800 ">เครื่อง/ไลน์</th>
+                                    <th className="px-4 py-3 text-center font-bold text-pink-800 ">เครื่องทั้งหมด</th>
+                                    <th className="px-4 py-3 text-center font-bold text-pink-800 ">จำนวนกะ</th>
+                                    <th className="px-4 py-3 text-center font-bold text-pink-800 " title="อัตราผลผลิตเปรียบเทียบกับน้ำหนักวัตถุดิบ (%)">Yield <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
+                                    <th className="px-4 py-3 text-center font-bold text-pink-800 " title="จำนวนพนักงานที่ต้องการต่อ 1 ไลน์ผลิตใน 1 กะ">คน/ไลน์/กะ <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
+                                    <th className="px-4 py-3 text-center font-bold text-pink-800 ">รวมคน</th>
                                   </tr>
                                 </thead>
-                                <tbody>
+                                <tbody className="divide-y divide-slate-100 bg-white">
                                   {/* Toridas */}
-                                  <tr className="hover:bg-pink-50/40 transition-colors">
-                                    <td className="px-3 py-2.5 border-b border-pink-100">
+                                  <tr className="hover:bg-pink-50/40 transition-colors even:bg-slate-50/50 hover:bg-slate-50">
+                                    <td className="px-4 py-2.5 ">
                                       <span className="font-bold text-gray-800">🔧 Toridas</span>
                                       <span className="text-[9px] text-gray-400 ml-1">(Debone)</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 font-semibold text-gray-700">{mb.toridasLinesNeeded || 0}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.toridasMachinesPerLine || 4}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center  font-semibold text-gray-700">{mb.toridasLinesNeeded || 0}</td>
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">{mb.toridasMachinesPerLine || 4}</td>
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-bold text-pink-700 bg-pink-50 px-2 py-0.5 rounded">{mb.toridasTotalMachines || 0}</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">{mb.shiftsNeeded || 0} กะ</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{((mb.toridasYield || 0.75) * 100).toFixed(0)}%</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.toridasWorkersPerUnit || 5}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">{((mb.toridasYield || 0.75) * 100).toFixed(0)}%</td>
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">{mb.toridasWorkersPerUnit || 5}</td>
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-extrabold text-gray-900">{mb.toridasWorkers || 0}</span>
                                     </td>
                                   </tr>
                                   {/* Foodmate */}
-                                  <tr className="hover:bg-pink-50/40 transition-colors">
-                                    <td className="px-3 py-2.5 border-b border-pink-100">
+                                  <tr className="hover:bg-pink-50/40 transition-colors even:bg-slate-50/50 hover:bg-slate-50">
+                                    <td className="px-4 py-2.5 ">
                                       <span className="font-bold text-gray-800">🔧 Foodmate</span>
                                       <span className="text-[9px] text-gray-400 ml-1">(Debone)</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 font-semibold text-gray-700">{mb.foodmateLinesNeeded || 0}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.foodmateMachinesPerLine || 1}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center  font-semibold text-gray-700">{mb.foodmateLinesNeeded || 0}</td>
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">{mb.foodmateMachinesPerLine || 1}</td>
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-bold text-pink-700 bg-pink-50 px-2 py-0.5 rounded">{mb.foodmateTotalMachines || 0}</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">{mb.shiftsNeeded || 0} กะ</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{((mb.foodmateYield || 0.70) * 100).toFixed(0)}%</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.foodmateWorkersPerUnit || 5}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">{((mb.foodmateYield || 0.70) * 100).toFixed(0)}%</td>
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">{mb.foodmateWorkersPerUnit || 5}</td>
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-extrabold text-gray-900">{mb.foodmateWorkers || 0}</span>
                                     </td>
                                   </tr>
                                   {/* Trimming Belt */}
-                                  <tr className="hover:bg-pink-50/40 transition-colors">
-                                    <td className="px-3 py-2.5 border-b border-pink-100">
+                                  <tr className="hover:bg-pink-50/40 transition-colors even:bg-slate-50/50 hover:bg-slate-50">
+                                    <td className="px-4 py-2.5 ">
                                       <span className="font-bold text-gray-800">✂️ Trimming Belt</span>
                                       <span className="text-[9px] text-gray-400 ml-1">(ตัดแต่ง+ประจำจุด)</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 font-semibold text-gray-700">{mb.trimmingLinesNeeded || 0}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">1</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center  font-semibold text-gray-700">{mb.trimmingLinesNeeded || 0}</td>
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">1</td>
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-bold text-pink-700 bg-pink-50 px-2 py-0.5 rounded">{mb.trimmingLinesNeeded || 0}</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">{mb.shiftsNeeded || 0} กะ</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">-</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.trimWorkersPerLine || 7}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">-</td>
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">{mb.trimWorkersPerLine || 7}</td>
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-extrabold text-gray-900">{mb.trimmingBeltWorkers || 0}</span>
                                     </td>
                                   </tr>
                                   {/* X-Ray */}
-                                  <tr className="hover:bg-pink-50/40 transition-colors">
-                                    <td className="px-3 py-2.5 border-b border-pink-100">
+                                  <tr className="hover:bg-pink-50/40 transition-colors even:bg-slate-50/50 hover:bg-slate-50">
+                                    <td className="px-4 py-2.5 ">
                                       <span className="font-bold text-gray-800">📡 X-Ray</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 font-semibold text-gray-700">-</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">-</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center  font-semibold text-gray-700">-</td>
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">-</td>
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-bold text-pink-700 bg-pink-50 px-2 py-0.5 rounded">{mb.xrayMachinesCount || 0}</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">{mb.shiftsNeeded || 0} กะ</span>
                                     </td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">-</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100 text-gray-600">{mb.xrayWorkersPerUnit || 5}</td>
-                                    <td className="text-center px-3 py-2.5 border-b border-pink-100">
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">-</td>
+                                    <td className="px-4 py-2.5 text-center  text-gray-600">{mb.xrayWorkersPerUnit || 5}</td>
+                                    <td className="px-4 py-2.5 text-center ">
                                       <span className="font-extrabold text-gray-900">{mb.xrayWorkers || 0}</span>
                                     </td>
                                   </tr>
                                 </tbody>
                                 <tfoot>
-                                  <tr className="bg-pink-50/60">
-                                    <td colSpan={7} className="px-3 py-2.5 font-bold text-pink-800 text-right border-t border-pink-200">รวมคนทั้งหมด (Process 3)</td>
-                                    <td className="text-center px-3 py-2.5 border-t border-pink-200">
+                                  <tr className="bg-pink-50/60 even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                                    <td colSpan={7} className="px-3 py-2.5 font-bold text-pink-800 text-right border-t border">รวมคนทั้งหมด (Process 3)</td>
+                                    <td className="px-4 py-2.5 text-center .5 ">
                                       <span className="font-extrabold text-pink-700 text-sm">{(mb.deboneWorkers || 0) + (mb.trimmingBeltWorkers || 0) + (mb.xrayWorkers || 0)}</span>
                                     </td>
                                   </tr>
@@ -2566,7 +2640,7 @@ const MPSPlan: React.FC = () => {
 
                   {/* Section 3: RM FL Summary (Fillet Yield) */}
                   {partId !== 'bl' && (
-                    <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-4">
+                    <div className="bg-orange-50 border border-orange-100 rounded-2xl p-6 space-y-6">
                       <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
                         <Activity size={16} className="text-orange-500" />
                         {pc.rmPrefix} Summary ({pc.yieldLabel})
@@ -2578,7 +2652,7 @@ const MPSPlan: React.FC = () => {
                           if (partId === 'bil') {
                             const rmBilTotal = slaughtered * 0.25;
                             return (
-                              <div className="bg-orange-500 p-5 rounded-xl shadow-md flex justify-between items-center text-white">
+                              <div className="bg-orange-500 p-5 rounded-xl shadow-sm flex justify-between items-center text-white">
                                 <div>
                                   <p className="text-[10px] font-bold text-white/90 uppercase tracking-wider mb-1">RM BIL Total</p>
                                   <div className="flex items-baseline gap-1.5">
@@ -2635,7 +2709,7 @@ const MPSPlan: React.FC = () => {
                                   {isYieldTree ? '✓ Calculated via Yield Tree' : 'Total * 9.3% (Fallback)'}
                                 </p>
                               </div>
-                              <div className="bg-orange-500 p-4 rounded-xl shadow-md">
+                              <div className="bg-orange-500 p-4 rounded-xl shadow-sm">
                                 <p className="text-[10px] font-bold text-white/80 uppercase mb-1">{pc.rmPrefix} หัก Grade B</p>
                                 <div className="flex items-baseline gap-1">
                                   <span className="text-2xl font-black text-white">{Math.round(rmFlNet).toLocaleString()}</span>
@@ -2651,7 +2725,7 @@ const MPSPlan: React.FC = () => {
                   )}
 
                   {/* Section 4: RM Size Breakdown (Internal vs External) */}
-                  <div className="space-y-4">
+                  <div className="space-y-6">
                     <h4 className="text-sm font-bold text-gray-800 flex items-center gap-2">
                       <Package size={16} className="text-orange-500" />
                       {pc.sizeBreakdownTitle} (Internal vs External)
@@ -2838,7 +2912,7 @@ const MPSPlan: React.FC = () => {
                   </div>
 
                   {/* Section 5: By Product Summary */}
-                  <div className="bg-amber-50 border border-amber-100 rounded-2xl p-6 space-y-4">
+                  <div className="bg-amber-50 border border-amber-100 rounded-2xl p-6 space-y-6">
                     <h4 className="text-sm font-bold text-amber-800 flex items-center gap-2">
                       <Package size={16} className="text-amber-500" />
                       By Product Summary
@@ -2914,7 +2988,7 @@ const MPSPlan: React.FC = () => {
                           if (hasSpecificSizes || (!isBil || bilColLabels.length === 0)) {
                             // Direct render for specific sizes
                             elements.push(
-                              <div key="bl-section" className="bg-gradient-to-br from-blue-50 to-indigo-50 col-span-full p-4 rounded-xl border border-blue-200 shadow-sm">
+                              <div key="bl-section" className="bg-white border border-slate-200 shadow-sm">
                                 <div className="flex justify-between items-center mb-4 border-b border-blue-100 pb-3">
                                   <div>
                                     <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">BL (Debone) - Process 3</p>
@@ -3005,7 +3079,7 @@ const MPSPlan: React.FC = () => {
                             }
 
                             elements.push(
-                              <div key="bl-section-fallback" className="bg-gradient-to-br from-blue-50 to-indigo-50 col-span-full p-4 rounded-xl border border-blue-200 shadow-sm">
+                              <div key="bl-section-fallback" className="bg-white border border-slate-200 shadow-sm">
                                 <div className="flex justify-between items-center mb-4 border-b border-blue-100 pb-3">
                                   <div>
                                     <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">BL (Debone) - Process 3</p>
@@ -3036,7 +3110,7 @@ const MPSPlan: React.FC = () => {
                           
                           if (hasSizes) {
                             elements.push(
-                              <div key={`other-major-${index}`} className="bg-gradient-to-br from-indigo-50 to-purple-50 col-span-full p-4 rounded-xl border border-indigo-200 shadow-sm">
+                              <div key={`other-major-${index}`} className="bg-white border border-slate-200 shadow-sm">
                                 <div className="flex justify-between items-center mb-4 border-b border-indigo-100 pb-3">
                                   <div>
                                     <p className="text-xs font-bold text-indigo-800 uppercase tracking-wider">{bp.name}</p>
@@ -3081,13 +3155,13 @@ const MPSPlan: React.FC = () => {
                 </div>{/* END LEFT: SUPPLY PANEL */}
 
                 {/* ====== RIGHT: DEMAND PANEL ====== */}
-                <div className="space-y-4">
+                <div className="space-y-6">
                   <h4 className="text-sm font-black text-orange-700 uppercase tracking-wider flex items-center gap-2">
                     <ShoppingCart size={16} /> Demand (Orders)
                   </h4>
 
                   {selectedDailyOrders.length === 0 ? (
-                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center">
                       <Package size={32} className="mx-auto text-gray-300 mb-2" />
                       <p className="text-sm text-gray-400 font-medium">No orders on this date</p>
                     </div>
@@ -3260,27 +3334,27 @@ const MPSPlan: React.FC = () => {
                           {mainOrders.length > 0 && (
                             <div className="space-y-2">
                               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Main Products</p>
-                              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                                <table className="w-full text-xs">
-                                  <thead>
-                                    <tr className="bg-gray-50 text-gray-500 uppercase tracking-wider">
-                                      <th className="text-left px-3 py-2 font-bold">SO / Item</th>
-                                      <th className="text-left px-3 py-2 font-bold">Type</th>
-                                      <th className="text-left px-3 py-2 font-bold">Size</th>
-                                      <th className="text-right px-3 py-2 font-bold">Qty (kg)</th>
+                              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                                <table className="w-full text-xs border-collapse">
+                                  <thead className="bg-slate-50 border-b border-slate-200">
+                                    <tr className="text-gray-500 uppercase tracking-wider even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                                      <th className="px-4 py-3 text-left font-bold">SO / Item</th>
+                                      <th className="px-4 py-3 text-left font-bold">Type</th>
+                                      <th className="px-4 py-3 text-left font-bold">Size</th>
+                                      <th className="px-4 py-3 text-right font-bold tabular-nums" title="น้ำหนักรวม (กิโลกรัม)">Qty (kg) <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
                                     </tr>
                                   </thead>
-                                  <tbody>
+                                  <tbody className="divide-y divide-slate-100 bg-white">
                                     {mainOrders.map((order: any, idx: number) => {
                                       const spec = specs[order.itemCode];
                                       const size = spec?.productSize || 'unsize';
                                       return (
                                         <tr key={idx} className="border-t border-gray-100 hover:bg-orange-50/30">
-                                          <td className="px-3 py-2">
+                                          <td className="px-4 py-2.5">
                                             <div className="font-bold text-gray-800">{order.soNumber}</div>
                                             <div className="text-[10px] text-gray-400">{order.itemCode}</div>
                                           </td>
-                                          <td className="px-3 py-2 flex items-center gap-1">
+                                          <td className="px-4 py-2.5 flex items-center ga">
                                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${order.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
                                               {order.type}
                                             </span>
@@ -3290,16 +3364,16 @@ const MPSPlan: React.FC = () => {
                                               </span>
                                             )}
                                           </td>
-                                          <td className="px-3 py-2 font-bold text-gray-700">{size}</td>
-                                          <td className="px-3 py-2 text-right font-bold text-gray-900">{Math.round(order.qty).toLocaleString()}</td>
+                                          <td className="px-4 py-2.5 font-bold text-gray-700">{size}</td>
+                                          <td className="px-4 py-2.5 text-right font-bold text-gray-900 tabular-nums">{Math.round(order.qty).toLocaleString()}</td>
                                         </tr>
                                       );
                                     })}
                                   </tbody>
                                   <tfoot>
-                                    <tr className="bg-gray-900 text-white">
+                                    <tr className="bg-gray-900 text-white even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
                                       <td colSpan={3} className="px-3 py-2 font-bold text-xs uppercase">Total Main Product</td>
-                                      <td className="px-3 py-2 text-right font-bold">{Math.round(mainOrders.reduce((s: number, o: any) => s + o.qty, 0)).toLocaleString()} kg</td>
+                                      <td className="px-4 py-2.5 text-right font-bold tabular-nums">{Math.round(mainOrders.reduce((s: number, o: any) => s + o.qty, 0)).toLocaleString()} kg</td>
                                     </tr>
                                   </tfoot>
                                 </table>
@@ -3619,40 +3693,40 @@ const MPSPlan: React.FC = () => {
                             <div className="space-y-2">
                               <p className="text-[10px] font-bold text-purple-600 uppercase tracking-wider">Co-Products</p>
                               <div className="border border-purple-200 rounded-xl overflow-hidden bg-purple-50/20">
-                                <table className="w-full text-xs">
-                                  <thead>
-                                    <tr className="bg-purple-50/50 text-purple-700 uppercase tracking-wider border-b border-purple-100">
-                                      <th className="text-left px-3 py-2 font-bold">SO / Item</th>
-                                      <th className="text-left px-3 py-2 font-bold">Type</th>
-                                      <th className="text-left px-3 py-2 font-bold">Size</th>
-                                      <th className="text-right px-3 py-2 font-bold">Qty (kg)</th>
+                                <table className="w-full text-xs border-collapse">
+                                  <thead className="bg-slate-50 border-b border-slate-200">
+                                    <tr className="bg-purple-50/50 text-purple-700 uppercase tracking-wider border-purple-100 even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                                      <th className="px-4 py-3 text-left font-bold">SO / Item</th>
+                                      <th className="px-4 py-3 text-left font-bold">Type</th>
+                                      <th className="px-4 py-3 text-left font-bold">Size</th>
+                                      <th className="px-4 py-3 text-right font-bold tabular-nums" title="น้ำหนักรวม (กิโลกรัม)">Qty (kg) <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
                                     </tr>
                                   </thead>
-                                  <tbody>
+                                  <tbody className="divide-y divide-slate-100 bg-white">
                                     {coproductOrders.map((order: any, idx: number) => {
                                       const spec = specs[order.itemCode];
                                       const size = spec?.productSize || 'unsize';
                                       return (
                                         <tr key={idx} className="border-t border-purple-100 hover:bg-purple-100/30">
-                                          <td className="px-3 py-2">
+                                          <td className="px-4 py-2.5">
                                             <div className="font-bold text-gray-800">{order.soNumber}</div>
                                             <div className="text-[10px] text-gray-400">{order.itemCode}</div>
                                           </td>
-                                          <td className="px-3 py-2">
+                                          <td className="px-4 py-2.5">
                                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${order.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
                                               {order.type}
                                             </span>
                                           </td>
-                                          <td className="px-3 py-2 font-bold text-gray-700">{size}</td>
-                                          <td className="px-3 py-2 text-right font-bold text-gray-900">{Math.round(order.qty).toLocaleString()}</td>
+                                          <td className="px-4 py-2.5 font-bold text-gray-700">{size}</td>
+                                          <td className="px-4 py-2.5 text-right font-bold text-gray-900 tabular-nums">{Math.round(order.qty).toLocaleString()}</td>
                                         </tr>
                                       );
                                     })}
                                   </tbody>
                                   <tfoot>
-                                    <tr className="bg-purple-900 text-white">
+                                    <tr className="bg-purple-900 text-white even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
                                       <td colSpan={3} className="px-3 py-2 font-bold text-xs uppercase">Total Co-Product</td>
-                                      <td className="px-3 py-2 text-right font-bold">{Math.round(coproductOrders.reduce((s: number, o: any) => s + o.qty, 0)).toLocaleString()} kg</td>
+                                      <td className="px-4 py-2.5 text-right font-bold tabular-nums">{Math.round(coproductOrders.reduce((s: number, o: any) => s + o.qty, 0)).toLocaleString()} kg</td>
                                     </tr>
                                   </tfoot>
                                 </table>
@@ -3668,40 +3742,40 @@ const MPSPlan: React.FC = () => {
                             <div className="space-y-2">
                               <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">By-Products</p>
                               <div className="border border-amber-200 rounded-xl overflow-hidden bg-amber-50/20">
-                                <table className="w-full text-xs">
-                                  <thead>
-                                    <tr className="bg-amber-50/50 text-amber-700 uppercase tracking-wider border-b border-amber-100">
-                                      <th className="text-left px-3 py-2 font-bold">SO / Item</th>
-                                      <th className="text-left px-3 py-2 font-bold">Type</th>
-                                      <th className="text-left px-3 py-2 font-bold">Size</th>
-                                      <th className="text-right px-3 py-2 font-bold">Qty (kg)</th>
+                                <table className="w-full text-xs border-collapse">
+                                  <thead className="bg-slate-50 border-b border-slate-200">
+                                    <tr className="bg-amber-50/50 text-amber-700 uppercase tracking-wider border-amber-100 even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                                      <th className="px-4 py-3 text-left font-bold">SO / Item</th>
+                                      <th className="px-4 py-3 text-left font-bold">Type</th>
+                                      <th className="px-4 py-3 text-left font-bold">Size</th>
+                                      <th className="px-4 py-3 text-right font-bold tabular-nums" title="น้ำหนักรวม (กิโลกรัม)">Qty (kg) <Info className="w-3.5 h-3.5 inline-block text-slate-400 -mt-0.5 cursor-help" /></th>
                                     </tr>
                                   </thead>
-                                  <tbody>
+                                  <tbody className="divide-y divide-slate-100 bg-white">
                                     {byproductOrders.map((order: any, idx: number) => {
                                       const spec = specs[order.itemCode];
                                       const size = spec?.productSize || 'unsize';
                                       return (
                                         <tr key={idx} className="border-t border-amber-100 hover:bg-amber-100/30">
-                                          <td className="px-3 py-2">
+                                          <td className="px-4 py-2.5">
                                             <div className="font-bold text-gray-800">{order.soNumber}</div>
                                             <div className="text-[10px] text-gray-400">{order.itemCode}</div>
                                           </td>
-                                          <td className="px-3 py-2">
+                                          <td className="px-4 py-2.5">
                                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${order.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
                                               {order.type}
                                             </span>
                                           </td>
-                                          <td className="px-3 py-2 font-bold text-gray-700">{size}</td>
-                                          <td className="px-3 py-2 text-right font-bold text-gray-900">{Math.round(order.qty).toLocaleString()}</td>
+                                          <td className="px-4 py-2.5 font-bold text-gray-700">{size}</td>
+                                          <td className="px-4 py-2.5 text-right font-bold text-gray-900 tabular-nums">{Math.round(order.qty).toLocaleString()}</td>
                                         </tr>
                                       );
                                     })}
                                   </tbody>
                                   <tfoot>
-                                    <tr className="bg-amber-900 text-white">
+                                    <tr className="bg-amber-900 text-white even:bg-slate-50/50 hover:bg-slate-50 transition-colors">
                                       <td colSpan={3} className="px-3 py-2 font-bold text-xs uppercase">Total By-Product</td>
-                                      <td className="px-3 py-2 text-right font-bold">{Math.round(byproductOrders.reduce((s: number, o: any) => s + o.qty, 0)).toLocaleString()} kg</td>
+                                      <td className="px-4 py-2.5 text-right font-bold tabular-nums">{Math.round(byproductOrders.reduce((s: number, o: any) => s + o.qty, 0)).toLocaleString()} kg</td>
                                     </tr>
                                   </tfoot>
                                 </table>
@@ -3720,10 +3794,10 @@ const MPSPlan: React.FC = () => {
               </div>{/* END grid */}
             </div>
 
-            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl flex justify-end">
+            <div className="px-6 py-4 border-t border-gray-100 bg-slate-50/50 rounded-b-2xl flex justify-end">
               <button
                 onClick={() => setShowSupplyModal(false)}
-                className="px-6 py-2 bg-white border border-gray-300 text-gray-700 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-all shadow-sm"
+                className="px-6 py-2 bg-white border border-gray-300 text-gray-700 rounded-xl text-sm font-semibold hover:bg-slate-50 transition-all shadow-sm"
               >
                 Close Breakdown
               </button>
@@ -3733,13 +3807,14 @@ const MPSPlan: React.FC = () => {
       )}
       {/* Split/Move Modal */}
       {splitModal.isOpen && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setSplitModal({ ...splitModal, isOpen: false })}>
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+            onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-gray-50/50">
+            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-slate-50/50">
               <h3 className="font-bold text-gray-900 flex items-center gap-2">
                 <Move className="text-orange-500 w-5 h-5" />
                 Move / Split Order
@@ -3751,7 +3826,7 @@ const MPSPlan: React.FC = () => {
                 <X size={18} />
               </button>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-6">
               <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 text-sm">
                 <p className="font-bold text-orange-900 truncate" title={splitModal.orderDesc}>{splitModal.orderDesc}</p>
                 <div className="flex gap-4 mt-1 text-orange-700">
@@ -3785,7 +3860,7 @@ const MPSPlan: React.FC = () => {
               </div>
 
             </div>
-            <div className="p-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50">
+            <div className="p-4 border-t border-gray-100 flex justify-end gap-3 bg-slate-50/50">
               <button
                 onClick={() => setSplitModal({ ...splitModal, isOpen: false })}
                 className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-200 rounded-xl transition-colors"
@@ -3794,7 +3869,7 @@ const MPSPlan: React.FC = () => {
               </button>
               <button
                 onClick={handleConfirmSplitMove}
-                className="px-6 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold rounded-xl shadow-md hover:from-orange-600 hover:to-red-600 transition-all shadow-orange-200"
+                className="px-6 py-2 bg-orange-500 text-white font-bold rounded-xl shadow-sm hover:from-orange-600 hover:to-red-600 transition-all shadow-orange-200"
               >
                 Confirm Move
               </button>
@@ -3805,11 +3880,12 @@ const MPSPlan: React.FC = () => {
 
       {/* GENERATE PLAN MODAL */}
       {showGenerateModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4" onClick={() => setShowGenerateModal(false)}>
           <motion.div
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-lg overflow-hidden flex flex-col p-8"
+            className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-lg flex flex-col p-8"
+            onClick={e => e.stopPropagation()}
           >
             <div className="flex justify-between items-center mb-6">
               <div>
@@ -3833,20 +3909,16 @@ const MPSPlan: React.FC = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 mb-1.5">Start Date</label>
-                  <input
-                    type="date"
+                  <CustomDatePicker
                     value={generateRange.startDate}
-                    onChange={e => setGenerateRange({ ...generateRange, startDate: e.target.value })}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold text-gray-800 focus:outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 bg-white"
+                    onChange={val => setGenerateRange({ ...generateRange, startDate: val })}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-500 mb-1.5">End Date</label>
-                  <input
-                    type="date"
+                  <CustomDatePicker
                     value={generateRange.endDate}
-                    onChange={e => setGenerateRange({ ...generateRange, endDate: e.target.value })}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold text-gray-800 focus:outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 bg-white"
+                    onChange={val => setGenerateRange({ ...generateRange, endDate: val })}
                   />
                 </div>
               </div>
@@ -3879,7 +3951,7 @@ const MPSPlan: React.FC = () => {
               <button
                 onClick={executeGeneratePlan}
                 disabled={!generateRange.startDate || !generateRange.endDate || generateRange.startDate > generateRange.endDate}
-                className="flex-1 py-3 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-orange-200 transition-all flex justify-center items-center gap-2"
+                className="flex-1 py-3 bg-orange-500 hover:bg-orange-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-sm shadow-orange-200 transition-all flex justify-center items-center gap-2"
               >
                 <Activity className="w-4 h-4" /> Generate {getMonthsInRange(generateRange.startDate, generateRange.endDate).length > 1 ? `${getMonthsInRange(generateRange.startDate, generateRange.endDate).length} Plans` : 'Plan'}
               </button>

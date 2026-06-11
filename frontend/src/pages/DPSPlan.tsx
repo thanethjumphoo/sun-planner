@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users, ChevronDown, Download } from 'lucide-react';
+import CustomSelect from '../components/common/CustomSelect';
+import CustomDatePicker from '../components/common/CustomDatePicker';
 
 const API = import.meta.env.VITE_API_URL;
 
@@ -1548,11 +1550,11 @@ const DPSPlan: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-2xl border border-gray-100">
-          <div className="flex items-center gap-2 px-3">
-            <Calendar className="w-5 h-5 text-gray-400" />
-            <input type="date" value={targetDate} onChange={e => setTargetDate(e.target.value)}
-              className="bg-transparent border-none text-sm font-bold text-gray-700 focus:ring-0 outline-none cursor-pointer" />
-          </div>
+            <CustomDatePicker
+              value={targetDate}
+              onChange={setTargetDate}
+              className="w-36"
+            />
           {!isGenerated ? (
             <button onClick={() => setShowRunModal(true)} className="px-5 py-2.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2">
               <Activity className="w-4 h-4" /> Run Schedule
@@ -2163,10 +2165,9 @@ const DPSPlan: React.FC = () => {
 
         </div>
       )}
-
       {showRunModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
-          <div className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-md overflow-hidden flex flex-col p-6">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4" onClick={() => setShowRunModal(false)}>
+          <div className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-md overflow-hidden flex flex-col p-6" onClick={e => e.stopPropagation()}>
             <h3 className="text-xl font-black text-gray-900 mb-2">Ready to Generate Schedule</h3>
             <p className="text-sm text-gray-500 mb-6">The system has prepared the raw data for {targetDate}. Are you sure you want to proceed with the waterfall allocation?</p>
 
@@ -2194,10 +2195,9 @@ const DPSPlan: React.FC = () => {
         </div>
       )}
 
-      {/* ADD ORDER MODAL */}
       {showAddOrderModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
-          <div className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-md overflow-hidden flex flex-col p-6">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4" onClick={() => setShowAddOrderModal(false)}>
+          <div className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-md overflow-hidden flex flex-col p-6" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-black text-gray-900">Add Custom Order</h3>
               <button onClick={() => setShowAddOrderModal(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
@@ -2206,16 +2206,13 @@ const DPSPlan: React.FC = () => {
             <div className="space-y-4 mb-8">
               <div>
                 <label className="block text-xs font-bold text-gray-500 mb-1">Select Product Spec</label>
-                <select
+                <CustomSelect
+                  options={availableSpecs.map(s => ({ value: s.erpItemCode, label: `${s.erpItemCode} - ${s.erpItemDesc}` }))}
                   value={newOrderForm.itemCode}
-                  onChange={e => setNewOrderForm({ ...newOrderForm, itemCode: e.target.value })}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-semibold focus:outline-none focus:border-blue-500"
-                >
-                  <option value="">-- Choose Product --</option>
-                  {availableSpecs.map(s => (
-                    <option key={s.erpItemCode} value={s.erpItemCode}>{s.erpItemCode} - {s.erpItemDesc}</option>
-                  ))}
-                </select>
+                  onChange={val => setNewOrderForm({ ...newOrderForm, itemCode: val })}
+                  searchable={true}
+                  placeholder="-- Choose Product --"
+                />
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-500 mb-1">Quantity (Kg)</label>
@@ -2239,10 +2236,9 @@ const DPSPlan: React.FC = () => {
         </div>
       )}
 
-      {/* SIZE DETAILS MODAL */}
       {sizeModalData && sizeModalData.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
-          <div className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4" onClick={closeSizeModal}>
+          <div className="bg-white rounded-3xl shadow-xl border border-gray-100 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
             {/* Header */}
             <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
               <div>
@@ -2280,83 +2276,55 @@ const DPSPlan: React.FC = () => {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Items Using This Size</h4>
-                  <select
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        handleAddAllocationToSublot(e.target.value);
-                        e.target.value = ''; // reset
+                  {(() => {
+                    const isMatch = (o: Order) => {
+                      const modalSize = sizeModalData.sizeLabel;
+                      if (modalSize === 'Grade B (Co-Product)' || modalSize === 'Grade B') {
+                        return o.size === 'Grade B' || o.type === 'co-product' || getProductType(o.itemCode) === 'coproduct';
                       }
-                    }}
-                    className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-500 bg-white shadow-sm"
-                  >
-                    <option value="">+ Add Order to Allocate</option>
-                    {(() => {
-                      const isMatch = (o: Order) => {
-                        const modalSize = sizeModalData.sizeLabel;
-                        if (modalSize === 'Grade B (Co-Product)' || modalSize === 'Grade B') {
-                          return o.size === 'Grade B' || o.type === 'co-product' || getProductType(o.itemCode) === 'coproduct';
-                        }
-                        if (modalSize === 'Unsize / Other Grade A' || modalSize === 'unsize') {
-                          return o.size === 'unsize' || !o.size;
-                        }
-                        
-                        // Check if it matches a specific yield node ID
-                        const spec = specsMap[o.itemCode];
-                        const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim()).find((id: any) => id === modalSize);
-                        if (bpId) return true;
-                        
-                        return o.size === modalSize;
-                      };
-                      const matchingUnfulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg > 0);
-                      const matchingFulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg <= 0);
-                      const otherUnfulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg > 0);
-                      const otherFulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg <= 0);
+                      if (modalSize === 'Unsize / Other Grade A' || modalSize === 'unsize') {
+                        return o.size === 'unsize' || !o.size;
+                      }
+                      
+                      // Check if it matches a specific yield node ID
+                      const spec = specsMap[o.itemCode];
+                      const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim()).find((id: any) => id === modalSize);
+                      if (bpId) return true;
+                      
+                      return o.size === modalSize;
+                    };
+                    const matchingUnfulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg > 0);
+                    const matchingFulfilled = orders.filter(o => isMatch(o) && o.unfulfilledKg <= 0);
+                    const otherUnfulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg > 0);
+                    const otherFulfilled = orders.filter(o => !isMatch(o) && o.unfulfilledKg <= 0);
 
-                      return (
-                        <>
-                          {matchingUnfulfilled.length > 0 && (
-                            <optgroup label="Requires This Size (Unfulfilled)">
-                              {matchingUnfulfilled.map(o => (
-                                <option key={o.id} value={o.id}>
-                                  {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {otherUnfulfilled.length > 0 && (
-                            <optgroup label="Other Sizes (Unfulfilled)">
-                              {otherUnfulfilled.map(o => (
-                                <option key={o.id} value={o.id}>
-                                  {o.id} - {o.itemDesc} (Needs: {o.unfulfilledKg.toLocaleString()} kg)
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {matchingFulfilled.length > 0 && (
-                            <optgroup label="Requires This Size (Fulfilled)">
-                              {matchingFulfilled.map(o => (
-                                <option key={o.id} value={o.id}>
-                                  {o.id} - {o.itemDesc}
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {otherFulfilled.length > 0 && (
-                            <optgroup label="Other Sizes (Fulfilled)">
-                              {otherFulfilled.map(o => (
-                                <option key={o.id} value={o.id}>
-                                  {o.id} - {o.itemDesc}
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {matchingUnfulfilled.length === 0 && otherUnfulfilled.length === 0 && matchingFulfilled.length === 0 && otherFulfilled.length === 0 && (
-                            <option disabled>No matching orders</option>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </select>
+                    const opts: Array<{ value: string, label: string }> = [];
+                    matchingUnfulfilled.forEach(o => {
+                      opts.push({ value: o.id, label: `📌 [ตรงไซส์] ${o.id} - ${o.itemDesc} (ขาดอีก: ${o.unfulfilledKg.toLocaleString()} kg)` });
+                    });
+                    otherUnfulfilled.forEach(o => {
+                      opts.push({ value: o.id, label: `🔍 [ไซส์อื่น] ${o.id} - ${o.itemDesc} (ขาดอีก: ${o.unfulfilledKg.toLocaleString()} kg)` });
+                    });
+                    matchingFulfilled.forEach(o => {
+                      opts.push({ value: o.id, label: `✅ [ตรงไซส์-ครบ] ${o.id} - ${o.itemDesc}` });
+                    });
+                    otherFulfilled.forEach(o => {
+                      opts.push({ value: o.id, label: `⚪ [ไซส์อื่น-ครบ] ${o.id} - ${o.itemDesc}` });
+                    });
+
+                    return (
+                      <CustomSelect
+                        options={opts}
+                        value=""
+                        onChange={(val) => {
+                          if (val) handleAddAllocationToSublot(val);
+                        }}
+                        searchable={true}
+                        placeholder="+ Add Order to Allocate"
+                        className="w-64"
+                      />
+                    );
+                  })()}
                 </div>
                 {sizeModalData.allocations.length === 0 ? (
                   <div className="p-8 text-center bg-gray-50 rounded-2xl border border-gray-100 border-dashed">
