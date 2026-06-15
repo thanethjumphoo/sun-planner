@@ -70,6 +70,7 @@ const menuGroups: MenuGroup[] = [
   {
     label: "System Data",
     items: [
+      { title: "System Parameters", icon: Settings, path: "/system-config" },
       { title: "ERP Integration Hub", icon: RefreshCw, path: "/erp-integration" },
       { title: "Machine & Flow Setup", icon: Settings, path: "/machine-setup" },
       { title: "BL Belt Gate Matrix", icon: Settings, path: "/bl-belt-gate-matrix" },

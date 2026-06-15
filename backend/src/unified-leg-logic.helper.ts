@@ -8,6 +8,7 @@ import { StgErpOrderHeader } from './stg-erp-order-header.entity';
 import { ICutMaster } from './icut-master.entity';
 import { BlBeltGateMatrix } from './bl-belt-gate-matrix.entity';
 import { ExternalRmSupply } from './external-rm-supply.entity';
+import { MPS_CONSTANTS } from './constants/mps.constants';
 
 // --- Shared Types & Dependencies ---
 interface UnifiedLegDependencies {
@@ -19,6 +20,7 @@ interface UnifiedLegDependencies {
   masterYieldRepo: any;
   bilWeightDistRepo: any; // For calculating Leg RM sizes from Intake
   chickenReceivingService: any; // To fetch allIntakes
+  sysConfigs?: Record<string, string>;
 }
 
 export async function executeUnifiedLegPlanGeneration(
@@ -32,12 +34,12 @@ export async function executeUnifiedLegPlanGeneration(
   // 1. Validate / Reset Plan
   // Note: We might create a single "LEG" plan, or sync back to two separate plans (BIL & BL) later.
   // For now, let's assume we manage a combined plan named "LEG".
-  const existingApproved = await manager.findOne(MpsPlan, { where: { targetMonth, partType: 'leg', status: 'APPROVED' } });
+  const existingApproved = await manager.findOne(MpsPlan, { where: { targetMonth, partType: MPS_CONSTANTS.PART_TYPES.LEG, status: 'APPROVED' } });
   if (existingApproved) {
     return { success: false, message: `มีแผน LEG ที่ APPROVED แล้วสำหรับเดือน ${targetMonth} ต้อง Reject ก่อนถึงจะสร้างใหม่ได้` };
   }
 
-  let plan = await manager.findOne(MpsPlan, { where: { targetMonth, partType: 'leg', status: 'DRAFT' } });
+  let plan = await manager.findOne(MpsPlan, { where: { targetMonth, partType: MPS_CONSTANTS.PART_TYPES.LEG, status: 'DRAFT' } });
   if (plan) {
     await manager.delete(MpsPlanDaily, { mpsPlan: { id: plan.id } });
     await manager.delete(MpsPlanSupply, { mpsPlan: { id: plan.id } });
@@ -47,7 +49,7 @@ export async function executeUnifiedLegPlanGeneration(
     plan = manager.create(MpsPlan, {
       planName: `MPS ${targetMonth} - Unified BIL / BL Draft`,
       targetMonth,
-      partType: 'leg', // A new unified partType
+      partType: MPS_CONSTANTS.PART_TYPES.LEG, // A new unified partType
       status: 'DRAFT',
       createdBy: 'SYSTEM',
     });
@@ -94,8 +96,8 @@ export async function executeUnifiedLegPlanGeneration(
   const weightMatrix = await deps.bilWeightDistRepo.find();
   
   // Fetch Master Yield for Leg
-  const bilNode = await deps.masterYieldRepo.findOne({ where: { type: 'CATEGORY', name: 'BIL L/C' } });
-  const legYieldPct = bilNode?.yieldPercentage ? Number(bilNode.yieldPercentage) : 0.25;
+  const bilNode = await deps.masterYieldRepo.findOne({ where: { type: 'CATEGORY', name: MPS_CONSTANTS.CATEGORIES.BIL[0] } });
+  const legYieldPct = bilNode?.yieldPercentage ? Number(bilNode.yieldPercentage) : Number(deps.sysConfigs?.['DEFAULT_BIL_YIELD'] ?? MPS_CONSTANTS.DEFAULTS.BIL_YIELD);
 
   for (const dayStr of allDateStrs) {
     let dailyIntakeBirds = 0;
@@ -121,7 +123,8 @@ export async function executeUnifiedLegPlanGeneration(
         if (intakeBirds <= 0 || intakeKg <= 0) return;
 
         const avgWeight = parseFloat((intakeKg / intakeBirds).toFixed(2));
-        const slaughteredWeight = intakeKg * 0.9575 * 0.95;
+        const slaughterYield = Number(deps.sysConfigs?.['SLAUGHTER_YIELD'] ?? MPS_CONSTANTS.DEFAULTS.SLAUGHTER_YIELD);
+        const slaughteredWeight = intakeKg * slaughterYield;
         const legWeightForIntake = slaughteredWeight * legYieldPct;
 
         dailyLegRm += legWeightForIntake;
@@ -160,7 +163,7 @@ export async function executeUnifiedLegPlanGeneration(
   }
 
   // --- Fetch External RM Supply ---
-  const allExternalRms = await manager.find(ExternalRmSupply, { where: { partName: 'BIL L/C' }});
+  const allExternalRms = await manager.find(ExternalRmSupply, { where: { partName: MPS_CONSTANTS.CATEGORIES.BIL[0] }});
   allExternalRms.forEach((ext: any) => {
     const d = deps.parseLocalDate(ext.receivedDate);
     if (d && supplyMap.has(d)) {
@@ -174,12 +177,12 @@ export async function executeUnifiedLegPlanGeneration(
   // 3. Fetch Orders for BOTH BIL and BL
   const specMap = new Map(allSpecs.map((s: any) => [s.erpItemCode, s]));
 
-  const bilItemCodes = await deps.getItemCodesByPartType('bil') || [];
-  const blItemCodes = await deps.getItemCodesByPartType('bl') || [];
+  const bilItemCodes = await deps.getItemCodesByPartType(MPS_CONSTANTS.PART_TYPES.BIL) || [];
+  const blItemCodes = await deps.getItemCodesByPartType(MPS_CONSTANTS.PART_TYPES.BL) || [];
   const combinedItemCodes = [...new Set([...bilItemCodes, ...blItemCodes])];
 
   const icutMaster = await manager.getRepository(ICutMaster).findOne({ where: { isActive: true } });
-  const coproductYieldPct = Number((icutMaster as any)?.coproductYieldPct ?? 0.20);
+  const coproductYieldPct = Number((icutMaster as any)?.coproductYieldPct ?? deps.sysConfigs?.['ICUT_COPRODUCT_YIELD'] ?? MPS_CONSTANTS.DEFAULTS.ICUT_COPRODUCT_YIELD);
   const mainYieldPct = 1.0 - coproductYieldPct;
 
   const blBeltGateMatrix = await manager.getRepository(BlBeltGateMatrix).find();
@@ -199,8 +202,8 @@ export async function executeUnifiedLegPlanGeneration(
 
   const toridasConf = getMachineConfig('toridas', { speed: 1500, yield: 0.75, lines: 3, machinesPerLine: 4, workers: 5 });
   const foodmateConf = getMachineConfig('foodmate', { speed: 6000, yield: 0.70, lines: 1, machinesPerLine: 1, workers: 5 });
-  const HOURS_PER_SHIFT = 9.58;
-  const SHIFTS_PER_DAY = 2;
+  const HOURS_PER_SHIFT = Number(deps.sysConfigs?.['ICUT_HOURS_PER_SHIFT'] ?? MPS_CONSTANTS.MACHINES.ICUT.DEFAULT_HOURS_PER_SHIFT);
+  const SHIFTS_PER_DAY = Number(deps.sysConfigs?.['ICUT_SHIFTS_PER_DAY'] ?? MPS_CONSTANTS.MACHINES.ICUT.DEFAULT_SHIFTS_PER_DAY);
 
   // Toridas pcs/day + Foodmate pcs/day
   const toridasPcsPerDay = toridasConf.lines * toridasConf.machinesPerLine * toridasConf.speed * HOURS_PER_SHIFT * SHIFTS_PER_DAY;
@@ -307,10 +310,12 @@ export async function executeUnifiedLegPlanGeneration(
   const classifyOrder = (order: StgErpOrderLine) => {
     const spec = specMap.get(order.erpOrderItemCode);
     const desc = ((spec as any)?.erpItemDesc || order.erpOrderItemCode || '').toUpperCase();
-    if (desc.includes('BL BLOCK') || desc.includes('BL_BLOCK') || desc.includes('BLBLOCK')) return 'BL_BLOCK';
-    if (desc.includes('BL TH') || desc.includes('BL-TH') || desc.includes('BLTH')) return 'BLTH';
-    if (desc.includes('BL DR') || desc.includes('BL-DR') || desc.includes('BLDR')) return 'BLDR';
-    if (desc.includes('BLK')) return 'BLK';
+    const kw = MPS_CONSTANTS.KEYWORDS;
+
+    if (kw.BL_BLOCK.some((k: string) => desc.includes(k))) return 'BL_BLOCK';
+    if (kw.BL_TH.some((k: string) => desc.includes(k))) return 'BLTH';
+    if (kw.BL_DR.some((k: string) => desc.includes(k))) return 'BLDR';
+    if (kw.BLK.some((k: string) => desc.includes(k))) return 'BLK';
     if (extractBeltGateSizes(desc, (spec as any)?.productSize)) return 'BLK';
     return 'OTHER';
   };
@@ -449,9 +454,7 @@ export async function executeUnifiedLegPlanGeneration(
   const getGradeWeight = (order: StgErpOrderLine) => {
     const header = headerMap.get(order.erpOrderHeaderId);
     const grade = (header?.erpCustomerGrade || '').toUpperCase();
-    if (grade === 'A' || grade.includes('GRADE A')) return 1;
-    if (grade === 'B' || grade.includes('GRADE B')) return 2;
-    return 3;
+    return MPS_CONSTANTS.GRADE_WEIGHTS[grade as keyof typeof MPS_CONSTANTS.GRADE_WEIGHTS] || 8;
   };
 
   rawLines.sort((a, b) => {

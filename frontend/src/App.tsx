@@ -13,6 +13,7 @@ import MasterYield from './pages/MasterYield';
 import MachineSetup from './pages/MachineSetup';
 import ExternalRmInput from './pages/ExternalRmInput';
 import BlBeltGateMatrixSetup from './pages/BlBeltGateMatrixSetup';
+import SystemConfigSetup from './pages/SystemConfigSetup';
 import MainLayout from './components/layout/MainLayout';
 import UserManagement from './pages/UserManagement';
 
@@ -35,6 +36,7 @@ function App() {
           <Route path="/:partId/manual-operation" element={<ManualOperation />} />
           <Route path="/master-yield" element={<MasterYield />} />
           <Route path="/machine-setup" element={<MachineSetup />} />
+          <Route path="/system-config" element={<SystemConfigSetup />} />
           <Route path="/bl-belt-gate-matrix" element={<BlBeltGateMatrixSetup />} />
           <Route path="/external-rm" element={<ExternalRmInput />} />
           <Route path="/user-management" element={<UserManagement />} />

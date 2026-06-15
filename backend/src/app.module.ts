@@ -21,7 +21,7 @@ import { WeightDistribution } from './weight-distribution.entity';
 import { WeightDistributionController } from './weight-distribution.controller';
 import { BilWeightDistribution } from './bil-weight-distribution.entity';
 import { BilWeightDistributionController } from './bil-weight-distribution.controller';
-import { MpsController } from './mps.controller';
+import { MpsModule } from './mps/mps.module';
 import { MpsPlan, MpsPlanDaily, MpsPlanOrder } from './mps-plan.entity';
 import { MpsPlanSupply } from './mps-plan-supply.entity';
 import { MpsPlanSupplySize } from './mps-plan-supply-size.entity';
@@ -30,7 +30,7 @@ import { DpsPlan, DpsSublot, DpsSublotBin, DpsOrder, DpsAllocation } from './dps
 import { ChickenReceivingWeeklySize } from './chicken-receiving/entities/weekly-size.entity';
 import { ManualOperation } from './manual-operation.entity';
 import { ManualOperationController } from './manual-operation.controller';
-import { DpsController } from './dps.controller';
+import { DpsModule } from './dps/dps.module';
 import { FilletConfig, FilletGroup, FilletSizeCalc } from './fillet-size.entity';
 import { FilletSizeController } from './fillet-size.controller';
 import { MasterYield } from './master-yield.entity';
@@ -40,9 +40,11 @@ import { ExternalRmSupplyController } from './external-rm-supply.controller';
 import { ICutMaster } from './icut-master.entity';
 import { BlBeltGateMatrix } from './bl-belt-gate-matrix.entity';
 import { BlBeltGateMatrixController } from './bl-belt-gate-matrix.controller';
+import { SystemConfigModule } from './system-config/system-config.module';
 
 @Module({
   imports: [
+    SystemConfigModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: process.env.NODE_ENV === 'production' ? '.env.production' : ['.env.development', '.env'],
@@ -75,8 +77,10 @@ import { BlBeltGateMatrixController } from './bl-belt-gate-matrix.controller';
       FilletConfig, FilletGroup, FilletSizeCalc, MasterYield, ChickenReceivingWeeklySize, MachineConfig, ExternalRmSupply,
       ICutMaster, BlBeltGateMatrix
     ]),
+    MpsModule,
+    DpsModule,
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, BilWeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController, MachineConfigController, ExternalRmSupplyController, BlBeltGateMatrixController],
+  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, BilWeightDistributionController, ManualOperationController, FilletSizeController, MasterYieldController, MachineConfigController, ExternalRmSupplyController, BlBeltGateMatrixController],
   providers: [AppService, OracleIntegrationService],
 })
 export class AppModule { }

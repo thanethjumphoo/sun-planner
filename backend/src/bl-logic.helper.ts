@@ -7,6 +7,7 @@ import { BlBeltGateMatrix } from './bl-belt-gate-matrix.entity';
 import { ProductSpec } from './product-spec.entity';
 import { StgErpOrderLine } from './stg-erp-order-line.entity';
 import { StgErpOrderHeader } from './stg-erp-order-header.entity';
+import { MPS_CONSTANTS } from './constants/mps.constants';
 
 interface BlDependencies {
   machineConfigs: any[];
@@ -17,6 +18,7 @@ interface BlDependencies {
   masterYieldRepo: any;
   blBeltGateMatrixRepo: Repository<BlBeltGateMatrix>;
   bilWeightDistRepo: any;
+  sysConfigs?: Record<string, string>;
 }
 
 export async function executeBlPlanGeneration(
@@ -36,7 +38,7 @@ export async function executeBlPlanGeneration(
   // 2. Fetch BIL Plan for RM Supply
   // ──────────────────────────────────────
   const bilPlan = await manager.findOne(MpsPlan, {
-    where: { targetMonth, partType: 'bil' },
+    where: { targetMonth, partType: MPS_CONSTANTS.PART_TYPES.BIL },
     relations: ['dailySummaries', 'supplyBreakdown', 'supplyBreakdown.sizes'],
     order: { createdAt: 'DESC' },
   });
@@ -51,12 +53,12 @@ export async function executeBlPlanGeneration(
   // ──────────────────────────────────────
   // 3. Create or Reset BL Plan
   // ──────────────────────────────────────
-  const existingApproved = await manager.findOne(MpsPlan, { where: { targetMonth, partType: 'bl', status: 'APPROVED' } });
+  const existingApproved = await manager.findOne(MpsPlan, { where: { targetMonth, partType: MPS_CONSTANTS.PART_TYPES.BL, status: 'APPROVED' } });
   if (existingApproved) {
     return { success: false, message: `มีแผน BL ที่ APPROVED แล้วสำหรับเดือน ${targetMonth} ต้อง Reject ก่อนถึงจะสร้างใหม่ได้` };
   }
 
-  let plan = await manager.findOne(MpsPlan, { where: { targetMonth, partType: 'bl', status: 'DRAFT' } });
+  let plan = await manager.findOne(MpsPlan, { where: { targetMonth, partType: MPS_CONSTANTS.PART_TYPES.BL, status: 'DRAFT' } });
   if (plan) {
     await manager.delete(MpsPlanDaily, { mpsPlan: { id: plan.id } });
     await manager.delete(MpsPlanSupply, { mpsPlan: { id: plan.id } });
@@ -66,7 +68,7 @@ export async function executeBlPlanGeneration(
     plan = manager.create(MpsPlan, {
       planName: `MPS ${targetMonth} - BL Draft`,
       targetMonth,
-      partType: 'bl',
+      partType: MPS_CONSTANTS.PART_TYPES.BL,
       status: 'DRAFT',
       createdBy: 'SYSTEM',
     });
@@ -115,22 +117,26 @@ export async function executeBlPlanGeneration(
       } catch (e) { /* ignore */ }
 
       // Extract BL data from BIL byProducts
-      // BIL stores BL as key "BL-DEBONE" with { name, qty, processName }
-      const blData = byProducts['BL-DEBONE'] || byProducts['BL'] || byProducts['BL (Debone)'] || {};
-      const bpVals = Object.values(byProducts) as any[];
-      const blThData = bpVals.find(v => v.name && v.name.includes('สะโพก')) || byProducts['BL-TH'] || {};
-      const blDrData = bpVals.find(v => v.name && v.name.includes('น่อง')) || byProducts['BL-DR'] || {};
+      const kw = MPS_CONSTANTS.KEYWORDS;
       
+      const blData = byProducts[kw.BL_DEBONE[0]] || byProducts[kw.BL_DEBONE[1]] || byProducts[kw.BL_DEBONE[2]] || {};
+      const bpVals = Object.values(byProducts) as any[];
+      const blThData = bpVals.find(v => v.name && kw.BL_TH.some((k: string) => v.name.includes(k))) || byProducts[kw.BL_TH[0]] || {};
+      const blDrData = bpVals.find(v => v.name && kw.BL_DR.some((k: string) => v.name.includes(k))) || byProducts[kw.BL_DR[0]] || {};
+      
+      const blThRatio = Number(deps.sysConfigs?.['BL_TH_RATIO'] ?? MPS_CONSTANTS.DEFAULTS.BL_TH_RATIO);
+      const blDrRatio = Number(deps.sysConfigs?.['BL_DR_RATIO'] ?? MPS_CONSTANTS.DEFAULTS.BL_DR_RATIO);
+
       const blKg = Number(blData.qty || blData.kg || blData.quantity || 0);
-      const blThKg = Number(blThData.qty || blThData.kg || blThData.quantity || 0) * 0.75;
-      const blDrKg = Number(blDrData.qty || blDrData.kg || blDrData.quantity || 0) * 0.75;
+      const blThKg = Number(blThData.qty || blThData.kg || blThData.quantity || 0) * blThRatio;
+      const blDrKg = Number(blDrData.qty || blDrData.kg || blDrData.quantity || 0) * blDrRatio;
       
       const intBlKg = Number(blData.internalQty ?? blKg);
       const extBlKg = Number(blData.externalQty ?? 0);
-      const intBlThKg = Number(blThData.internalQty ?? (blThData.qty || blThData.kg || 0)) * 0.75;
-      const extBlThKg = Number(blThData.externalQty ?? 0) * 0.75;
-      const intBlDrKg = Number(blDrData.internalQty ?? (blDrData.qty || blDrData.kg || 0)) * 0.75;
-      const extBlDrKg = Number(blDrData.externalQty ?? 0) * 0.75;
+      const intBlThKg = Number(blThData.internalQty ?? (blThData.qty || blThData.kg || 0)) * blThRatio;
+      const extBlThKg = Number(blThData.externalQty ?? 0) * blThRatio;
+      const intBlDrKg = Number(blDrData.internalQty ?? (blDrData.qty || blDrData.kg || 0)) * blDrRatio;
+      const extBlDrKg = Number(blDrData.externalQty ?? 0) * blDrRatio;
       
       const blRatioInt = blKg > 0 ? intBlKg / blKg : 1;
       const blRatioExt = blKg > 0 ? extBlKg / blKg : 0;
@@ -176,13 +182,13 @@ export async function executeBlPlanGeneration(
       const blThSizes: Record<string, number> = {};
       Object.entries(blThData.sizes || {}).forEach(([size, qty]: any) => {
         const prefixedSize = size.startsWith('BL') ? size : `BL-TH ${size}`;
-        blThSizes[prefixedSize] = Number(qty) * 0.75;
+        blThSizes[prefixedSize] = Number(qty) * blThRatio;
       });
 
       const blDrSizes: Record<string, number> = {};
       Object.entries(blDrData.sizes || {}).forEach(([size, qty]: any) => {
         const prefixedSize = size.startsWith('BL') ? size : `BL-DR ${size}`;
-        blDrSizes[prefixedSize] = Number(qty) * 0.75;
+        blDrSizes[prefixedSize] = Number(qty) * blDrRatio;
       });
       
       Object.entries(blThSizes).forEach(([size, qty]) => {
@@ -270,11 +276,12 @@ export async function executeBlPlanGeneration(
   const allSpecs = await deps.specRepo.find();
   const specMap = new Map(allSpecs.map(s => [s.erpItemCode, s]));
 
-  const allowedItemCodes = await deps.getItemCodesByPartType('bl');
+  const allowedItemCodes = await deps.getItemCodesByPartType(MPS_CONSTANTS.PART_TYPES.BL);
   const startStr = orderStartDate || targetMonth + '-01';
   const start = new Date(`${startStr}T00:00:00`);
   const endStr = orderEndDate || (() => {
-    const maxSpecLead = allSpecs.length > 0 ? Math.max(...allSpecs.map(s => (s as any).maxProductLead || 0)) : 90;
+    const defaultMaxLead = Number(deps.sysConfigs?.['DEFAULT_MAX_LEAD_DAYS'] ?? MPS_CONSTANTS.DEFAULTS.MAX_LEAD_DAYS);
+    const maxSpecLead = allSpecs.length > 0 ? Math.max(...allSpecs.map(s => (s as any).maxProductLead || 0)) : defaultMaxLead;
     const additionalMonths = Math.max(2, Math.ceil(maxSpecLead / 30) + 1);
     const d = new Date(start);
     d.setMonth(d.getMonth() + additionalMonths);
@@ -408,24 +415,22 @@ export async function executeBlPlanGeneration(
   const classifyOrder = (order: StgErpOrderLine) => {
     const spec = specMap.get(order.erpOrderItemCode);
     const desc = ((spec as any)?.erpItemDesc || order.erpOrderItemCode || '').toUpperCase();
+    const kw = MPS_CONSTANTS.KEYWORDS;
     
     let result = 'OTHER';
-    if (desc.includes('BL BLOCK') || desc.includes('BL_BLOCK') || desc.includes('BLBLOCK')) result = 'BL_BLOCK';
-    else if (desc.includes('BL TH') || desc.includes('BL-TH') || desc.includes('BLTH')) result = 'BLTH';
-    else if (desc.includes('BL DR') || desc.includes('BL-DR') || desc.includes('BLDR')) result = 'BLDR';
-    else if (desc.includes('BLK')) result = 'BLK';
+    if (kw.BL_BLOCK.some((k: string) => desc.includes(k))) result = 'BL_BLOCK';
+    else if (kw.BL_TH.some((k: string) => desc.includes(k))) result = 'BLTH';
+    else if (kw.BL_DR.some((k: string) => desc.includes(k))) result = 'BLDR';
+    else if (kw.BLK.some((k: string) => desc.includes(k))) result = 'BLK';
     else if (extractBeltGateSizes(desc, (spec as any)?.productSize)) result = 'BLK';
     
-
     return result;
   };
 
   const getGradeWeight = (order: StgErpOrderLine) => {
     const header = headers.find(h => h.erpOrderHeaderId === order.erpOrderHeaderId);
     const grade = (header?.erpCustomerGrade || '').toUpperCase();
-    if (grade === 'A' || grade.includes('GRADE A')) return 1;
-    if (grade === 'B' || grade.includes('GRADE B')) return 2;
-    return 3;
+    return MPS_CONSTANTS.GRADE_WEIGHTS[grade as keyof typeof MPS_CONSTANTS.GRADE_WEIGHTS] || 8;
   };
 
   const prioritySort = (a: StgErpOrderLine, b: StgErpOrderLine) => {
@@ -503,8 +508,7 @@ export async function executeBlPlanGeneration(
     return dailyTracker.get(dateStr)!;
   };
 
-  // I-CUT Capacity (4 machines * 9.25 hours/shift = 37 hours)
-  const MAX_ICUT_HOURS_PER_DAY = 37;
+  const MAX_ICUT_HOURS_PER_DAY = Number(deps.sysConfigs?.['ICUT_MAX_HOURS_PER_DAY'] ?? MPS_CONSTANTS.MACHINES.ICUT.MAX_HOURS_PER_DAY);
 
   const subtractDays = (d: Date, days: number) => {
     const nd = new Date(d.getTime());
@@ -547,7 +551,7 @@ export async function executeBlPlanGeneration(
   // ══════════════════════════════════════
 
   const icutMaster = await manager.getRepository('ICutMaster').findOne({ where: { isActive: true } });
-  const coproductYieldPct = Number((icutMaster as any)?.coproductYieldPct ?? 0.20); // Default 0.20 (20%)
+  const coproductYieldPct = Number((icutMaster as any)?.coproductYieldPct ?? deps.sysConfigs?.['ICUT_COPRODUCT_YIELD'] ?? MPS_CONSTANTS.DEFAULTS.ICUT_COPRODUCT_YIELD);
   const mainYieldPct = 1.0 - coproductYieldPct;
 
 
@@ -753,7 +757,7 @@ export async function executeBlPlanGeneration(
       const icutHoursRemaining = MAX_ICUT_HOURS_PER_DAY - tracker.icutUsedHours;
       if (icutHoursRemaining <= 0) continue;
 
-      const icutSpeed = spec && (spec as any).icutSpeed ? Number((spec as any).icutSpeed) : 1000;
+      const icutSpeed = spec && (spec as any).icutSpeed ? Number((spec as any).icutSpeed) : Number(deps.sysConfigs?.['ICUT_SPEED'] ?? MPS_CONSTANTS.DEFAULTS.ICUT_SPEED);
       const rmNeeded = remainingQty / yieldMultiplier;
       const maxKgAllowedByTime = icutHoursRemaining * icutSpeed;
       let allocRmQty = Math.round(Math.min(avail, rmNeeded, maxKgAllowedByTime));
@@ -901,7 +905,8 @@ export async function executeBlPlanGeneration(
     if (m) {
       const lo = parseInt(m[1], 10);
       const hi = parseInt(m[2], 10);
-      requiredBlockKey = `BL_BLOCK_${lo + 5}_${hi + 5}`; // Hardcoded 5g step up assumption
+      const stepUp = Number(deps.sysConfigs?.['BL_BLOCK_STEP_UP'] ?? 5);
+      requiredBlockKey = `BL_BLOCK_${lo + stepUp}_${hi + stepUp}`;
     }
 
     for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
@@ -976,7 +981,7 @@ export async function executeBlPlanGeneration(
     const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
     const classification = classifyOrder(order);
     const productType = (spec as any)?.productType || 'Freeze';
-    const productYield = Number((spec as any)?.productYield || 0.90);
+    const productYield = Number((spec as any)?.productYield || deps.sysConfigs?.['MANUAL_PRODUCT_YIELD'] || MPS_CONSTANTS.DEFAULTS.MANUAL_PRODUCT_YIELD);
     const minLead = (spec as any)?.minProductLead ?? 1;
     const maxLead = (spec as any)?.maxProductLead ?? 3;
     const rawOrderQty = Number(order.erpOrderItemQty || 0);
