@@ -408,15 +408,16 @@ export async function executeBlPlanGeneration(
   const classifyOrder = (order: StgErpOrderLine) => {
     const spec = specMap.get(order.erpOrderItemCode);
     const desc = ((spec as any)?.erpItemDesc || order.erpOrderItemCode || '').toUpperCase();
-    if (desc.includes('BL BLOCK') || desc.includes('BL_BLOCK') || desc.includes('BLBLOCK')) return 'BL_BLOCK';
-    if (desc.includes('BL TH') || desc.includes('BL-TH') || desc.includes('BLTH')) return 'BLTH';
-    if (desc.includes('BL DR') || desc.includes('BL-DR') || desc.includes('BLDR')) return 'BLDR';
-    if (desc.includes('BLK')) return 'BLK';
     
-    // If it has a specific size mapping, it's a sized cut (BLK)
-    if (extractBeltGateSizes(desc, (spec as any)?.productSize)) return 'BLK';
+    let result = 'OTHER';
+    if (desc.includes('BL BLOCK') || desc.includes('BL_BLOCK') || desc.includes('BLBLOCK')) result = 'BL_BLOCK';
+    else if (desc.includes('BL TH') || desc.includes('BL-TH') || desc.includes('BLTH')) result = 'BLTH';
+    else if (desc.includes('BL DR') || desc.includes('BL-DR') || desc.includes('BLDR')) result = 'BLDR';
+    else if (desc.includes('BLK')) result = 'BLK';
+    else if (extractBeltGateSizes(desc, (spec as any)?.productSize)) result = 'BLK';
+    
 
-    return 'OTHER';
+    return result;
   };
 
   const getGradeWeight = (order: StgErpOrderLine) => {
@@ -597,9 +598,10 @@ export async function executeBlPlanGeneration(
   };
 
   // ══════════════════════════════════════
-  // Phase 1: Belt Gate SIZING
+  // Phase 1: Sizing (BLK without I-Cut)
   // ══════════════════════════════════════
   for (const order of phase1SizingOrders) {
+
     const spec = specMap.get(order.erpOrderItemCode);
     const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
     const descUpper = itemDesc.toUpperCase();
@@ -733,6 +735,18 @@ export async function executeBlPlanGeneration(
       const allowedExt = !!(spec as any)?.isExternalRmAllowed;
       let avail = sup.internalAvailable[rmType];
       if (allowedExt) avail += sup.externalAvailable[rmType];
+
+      const mapping = extractBeltGateSizes(descUpper, (spec as any)?.productSize);
+      let sizeKeysToUse: string[] = [];
+      if (mapping && mapping.rmSizes.length > 0) {
+        let maxAvail = 0;
+        for (const sz of mapping.rmSizes) {
+          maxAvail += (sup.internalSizes[sz] || 0) + (allowedExt ? (sup.externalSizes[sz] || 0) : 0);
+          sizeKeysToUse.push(sz);
+        }
+        avail = Math.min(avail, maxAvail);
+      }
+
       if (avail <= 0) continue;
 
       const tracker = getTracker(dateStr);
@@ -746,8 +760,25 @@ export async function executeBlPlanGeneration(
       
       if (allocRmQty <= 0) continue;
 
-      const deducted = deductRM(sup, rmType, allocRmQty, allowedExt);
-      allocRmQty = deducted.total;
+      let deducted = { total: 0, extUsed: 0, intUsed: 0 };
+      if (sizeKeysToUse.length > 0) {
+        let remainingToDeduct = allocRmQty;
+        for (const sz of sizeKeysToUse) {
+           if (remainingToDeduct <= 0) break;
+           const availSz = (sup.internalSizes[sz] || 0) + (allowedExt ? (sup.externalSizes[sz] || 0) : 0);
+           const deductAmt = Math.min(availSz, remainingToDeduct);
+           if (deductAmt > 0) {
+              const res = deductRM(sup, rmType, deductAmt, allowedExt, sz);
+              deducted.total += res.total;
+              deducted.extUsed += res.extUsed;
+              deducted.intUsed += res.intUsed;
+              remainingToDeduct -= res.total;
+           }
+        }
+        allocRmQty = deducted.total;
+      } else {
+        deducted = deductRM(sup, rmType, allocRmQty, allowedExt);
+      }
 
       const productProduced = Math.round(allocRmQty * yieldMultiplier);
       const blockProduced = allocRmQty - productProduced;
@@ -940,6 +971,7 @@ export async function executeBlPlanGeneration(
   // Phase 5: Manual BLK (>60g) & Other Trimming (RM remaining)
   // ══════════════════════════════════════
   for (const order of phase5ManualOrders) {
+
     const spec = specMap.get(order.erpOrderItemCode);
     const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
     const classification = classifyOrder(order);
@@ -995,18 +1027,41 @@ export async function executeBlPlanGeneration(
         
         // Fallback to RM BL
         if (allocRmQty < rmNeeded && sup.available.BL > 0) {
-          const normalRmToUse = Math.min(sup.available.BL, rmNeeded - allocRmQty);
-          sup.available.BL -= normalRmToUse;
-          allocRmQty += normalRmToUse;
+          const descUpper = itemDesc.toUpperCase();
+          const mapping = extractBeltGateSizes(descUpper, (spec as any)?.productSize);
+          const allowedExt = !!(spec as any)?.isExternalRmAllowed;
+          
+          let maxBlAvail = sup.available.BL;
+          let sizeKeysToUse: string[] = [];
+          
+          if (mapping && mapping.rmSizes.length > 0) {
+             maxBlAvail = 0;
+             for (const sz of mapping.rmSizes) {
+                maxBlAvail += (sup.internalSizes[sz] || 0) + (allowedExt ? (sup.externalSizes[sz] || 0) : 0);
+                sizeKeysToUse.push(sz);
+             }
+          }
 
-          let remainingToDeduct = normalRmToUse;
-          for (const [sz, qty] of Object.entries(sup.blSizes)) {
-            if (sz.startsWith('BL_BLOCK') || sz === 'TOTAL_BL_BLOCK') continue;
-            if (remainingToDeduct <= 0) break;
-            if (qty > 0) {
-              const deduct = Math.min(qty, remainingToDeduct);
-              sup.blSizes[sz] -= deduct;
-              remainingToDeduct -= deduct;
+          if (maxBlAvail > 0) {
+            const normalRmToUse = Math.min(maxBlAvail, rmNeeded - allocRmQty);
+            
+            if (sizeKeysToUse.length > 0) {
+               let actualDeductedTotal = 0;
+               let remainingToDeduct = normalRmToUse;
+               for (const sz of sizeKeysToUse) {
+                  if (remainingToDeduct <= 0) break;
+                  const availSz = (sup.internalSizes[sz] || 0) + (allowedExt ? (sup.externalSizes[sz] || 0) : 0);
+                  const deductAmt = Math.min(availSz, remainingToDeduct);
+                  if (deductAmt > 0) {
+                     const res = deductRM(sup, 'BL', deductAmt, allowedExt, sz);
+                     actualDeductedTotal += res.total;
+                     remainingToDeduct -= res.total;
+                  }
+               }
+               allocRmQty += actualDeductedTotal;
+            } else {
+               const res = deductRM(sup, 'BL', normalRmToUse, allowedExt);
+               allocRmQty += res.total;
             }
           }
         }

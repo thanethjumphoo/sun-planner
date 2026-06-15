@@ -34,8 +34,94 @@ export async function generateBlExcelPlan(
     }
   });
 
-  // Use standard RM sizes for the Belt Gate Sizes
-  const beltGateSizeList = ['140 DOWN', '160-180', '180-200', '200-220', '220-240', '240-260', '260-280', '280-300', '300-320', '320-340', '340-360', '360-380', '380-400', '400-420', '420-440', '440 UP'];
+  // ─── FIRST PASS: Collect BL size keys from supply.byProducts (same source as frontend modal) ───
+  const allBlSizeKeysSet = new Set<string>();
+  const dailyBlSizesMap = new Map<string, Record<string, { internalVal: number, externalVal: number, totalVal: number }>>();
+
+  const supplies = (plan as any).supplyBreakdown || [];
+  supplies.forEach((supply: any) => {
+    const supDate = new Date(supply.productionDate).toISOString().split('T')[0];
+
+    let bp: any = {};
+    try { bp = JSON.parse(supply.byProducts || '{}'); } catch (e) {}
+    const blData = bp['BL-DEBONE'] || bp['BL'] || bp['BL (Debone)'] || {};
+    const totalBlQty = Number(blData.qty || blData.kg || 0);
+    const blSizesDb = blData.sizes || {};
+    const intTotal = Number(blData.internalQty || 0);
+    const extTotal = Number(blData.externalQty || 0);
+    const intRatio = totalBlQty > 0 ? intTotal / totalBlQty : 1;
+    const extRatio = totalBlQty > 0 ? extTotal / totalBlQty : 0;
+
+    const blSizesFrontend: Record<string, { internalVal: number, externalVal: number, totalVal: number }> = {};
+
+    if (Object.keys(blSizesDb).length > 0) {
+      // Path A: sizes exist in byProducts → use directly (same as frontend line 2712-2715)
+      for (const [sz, qty] of Object.entries(blSizesDb)) {
+        const q = Number(qty);
+        if (q > 0) {
+          blSizesFrontend[sz] = { internalVal: q * intRatio, externalVal: q * extRatio, totalVal: q };
+          allBlSizeKeysSet.add(sz);
+        }
+      }
+    } else if (supply.sizes && Array.isArray(supply.sizes) && supply.sizes.length > 0) {
+      // Path B: no sizes in byProducts → compute from supply.sizes relation (same as frontend line 2665-2711)
+      // Build demand map from orders
+      const d = dailyMap.get(supDate);
+      const demandKgByBilSize: Record<string, number> = {};
+      if (d) {
+        d.orders.forEach((qty: number, itemCode: string) => {
+          const spec = specs.find(s => s.erpItemCode === itemCode);
+          const oSize = spec?.productSize?.trim() || '';
+          if (oSize && oSize.toLowerCase() !== 'unsize' && oSize !== '') {
+            const sizeMatch = oSize.match(/(\d+-\d+|\d+\s*Up|\d+\s*Down)/i);
+            let mappedSize = sizeMatch ? sizeMatch[0] : oSize;
+            if (mappedSize.toLowerCase().includes('down')) mappedSize = mappedSize.replace(/\s+/g, '') + 'Down';
+            if (mappedSize.toLowerCase().includes('up')) mappedSize = mappedSize.replace(/\s+/g, '') + 'Up';
+            mappedSize = mappedSize.replace('DownDown', 'Down').replace('UpUp', 'Up');
+            const oYield = spec?.productYield && Number(spec.productYield) > 0 ? Number(spec.productYield) : 1;
+            demandKgByBilSize[mappedSize] = (demandKgByBilSize[mappedSize] || 0) + (qty / oYield);
+          }
+        });
+      }
+
+      const bilSizesMap: Record<string, number> = {};
+      supply.sizes.forEach((s: any) => {
+        if (s.groupSize) {
+          bilSizesMap[s.groupSize] = (bilSizesMap[s.groupSize] || 0) + Number(s.quantityKg || 0);
+        }
+      });
+
+      Object.keys(bilSizesMap).forEach(bilSz => {
+        const internalQty = bilSizesMap[bilSz];
+        const totalQty = internalQty;
+        let demand = 0;
+        for (const [dSize, dQty] of Object.entries(demandKgByBilSize)) {
+          if (bilSz.toLowerCase().replace(/\s+/g, '') === dSize.toLowerCase().replace(/\s+/g, '')) demand += dQty;
+        }
+        const rem = Math.max(0, totalQty - demand);
+        if (rem > 0) {
+          const blSz = `BL ${bilSz}`;
+          const blQty = rem * 0.75;
+          blSizesFrontend[blSz] = {
+            internalVal: (blSizesFrontend[blSz]?.internalVal || 0) + blQty,
+            externalVal: 0,
+            totalVal: (blSizesFrontend[blSz]?.totalVal || 0) + blQty
+          };
+          allBlSizeKeysSet.add(blSz);
+        }
+      });
+    }
+
+    dailyBlSizesMap.set(supDate, blSizesFrontend);
+  });
+
+  // Sort size keys: numeric-based sorting, "Down" first, then ranges, then "Up"
+  const blSizeKeys = Array.from(allBlSizeKeysSet).sort((a, b) => {
+    const numA = parseInt(a.match(/\d+/)?.[0] || '0', 10);
+    const numB = parseInt(b.match(/\d+/)?.[0] || '0', 10);
+    if (numA !== numB) return numA - numB;
+    return a.localeCompare(b);
+  });
 
   // ─── LAYOUT SETUP (Dates as Rows, Metrics as Columns) ───
   // Row 1: Section Headers
@@ -61,12 +147,12 @@ export async function generateBlExcelPlan(
   colIdx = blockEnd + 1;
 
   const sizeStart = colIdx;
-  const sizeEnd = colIdx + beltGateSizeList.length - 1;
-  if (beltGateSizeList.length > 0) {
-    sectionRow.getCell(sizeStart).value = 'Belt Gate Sizes (RM BL)';
+  const sizeEnd = colIdx + (blSizeKeys.length * 2) - 1;
+  if (blSizeKeys.length > 0) {
+    sectionRow.getCell(sizeStart).value = 'BL Size';
     if (sizeEnd > sizeStart) sheet.mergeCells(1, sizeStart, 1, sizeEnd);
   }
-  colIdx = beltGateSizeList.length > 0 ? sizeEnd + 1 : colIdx;
+  colIdx = blSizeKeys.length > 0 ? sizeEnd + 1 : colIdx;
 
   const prodStart = colIdx;
   const prodEnd = colIdx + itemCodes.length - 1;
@@ -117,7 +203,7 @@ export async function generateBlExcelPlan(
     'Ext. RM Total', 'Ext. BL (เนื้อรวม)', 'Ext. BL-TH (สะโพก)', 'Ext. BL-DR (น่อง)',
     'I-Cut Process (kg)', 'I-Cut Hours', 'I-Cut Cap (hrs)', 'I-Cut Util (%)', 'Manual Trim (kg)',
     'Block Produced', 'Block Used',
-    ...beltGateSizeList,
+    ...blSizeKeys.flatMap(sz => [`Int. ${sz}`, `Ext. ${sz}`]),
     ...itemCodes
   ];
   const headerRow = sheet.addRow(subHeaders);
@@ -143,7 +229,6 @@ export async function generateBlExcelPlan(
     const blKg = Number(rm.bl || 0);
     const blThKg = Number(rm.blTh || 0);
     const blDrKg = Number(rm.blDr || 0);
-    const totalBl = blKg + blThKg + blDrKg;
     
     const totalBlSum = blKg + blThKg + blDrKg;
     
@@ -161,63 +246,13 @@ export async function generateBlExcelPlan(
     const icutHours = Number(trk.icutUsedHours || 0);
     const icutUtil = icutCap > 0 ? (icutHours / icutCap) * 100 : 0;
 
-    const rmBreakdownArr = beltGateSizeList.map(() => 0);
-    const supply = (plan as any).supplies?.find((s: any) => s.productionDate === dateStr || new Date(s.productionDate).toISOString().split('T')[0] === dateStr);
     const rmBlUsed = Number(trk.rmBlUsed || 0);
-
-    if (rmBlUsed > 0) {
-      const bilSizesRecord: Record<string, number> = {};
-      const fullTrk = (() => { try { return JSON.parse(d.summary.trackerJson || '{}'); } catch (e) { return {}; } })();
-      const extSizes = fullTrk.extSizes || {};
-
-      beltGateSizeList.forEach(label => {
-        let kg = 0;
-        if (supply?.sizes) {
-          kg += supply.sizes.filter((sz: any) => sz.groupSize === label).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
-        }
-        if (extSizes[label]) kg += Number(extSizes[label]);
-        bilSizesRecord[label] = kg;
-      });
-
-      const demandKgByBilSize: Record<string, number> = {};
-      d.orders.forEach((qty: number, itemCode: string) => {
-        const spec = specs.find(s => s.erpItemCode === itemCode);
-        const sizeMatch = (spec?.productSize || '').match(/(\d+-\d+|\d+\s*Up|\d+\s*Down)/i);
-        const oSize = sizeMatch ? sizeMatch[0] : 'Unsized';
-        const oYield = spec?.productYield && Number(spec.productYield) > 0 ? Number(spec.productYield) : 1;
-        demandKgByBilSize[oSize] = (demandKgByBilSize[oSize] || 0) + (qty / oYield);
-      });
-
-      let totalRemaining = 0;
-      const blBreakdownRecord: Record<string, number> = {};
-      Object.keys(bilSizesRecord).forEach(bilSz => {
-        const remaining = Math.max(0, bilSizesRecord[bilSz] - (demandKgByBilSize[bilSz] || 0));
-        blBreakdownRecord[bilSz] = remaining;
-        totalRemaining += remaining;
-      });
-
-      if (totalRemaining > 0) {
-        beltGateSizeList.forEach((bilSz, i) => {
-          rmBreakdownArr[i] = Math.round(((blBreakdownRecord[bilSz] || 0) / totalRemaining) * rmBlUsed);
-        });
-      } else {
-        let totalBilSizes = 0;
-        Object.values(bilSizesRecord).forEach(v => totalBilSizes += v);
-        if (totalBilSizes > 0) {
-          beltGateSizeList.forEach((bilSz, i) => {
-            const ratio = bilSizesRecord[bilSz] / totalBilSizes;
-            rmBreakdownArr[i] = Math.round(rmBlUsed * ratio);
-          });
-        }
-      }
-    }
-
     const intRatio = totalBlSum > 0 ? totalIntBl / totalBlSum : 1;
     const extRatio = totalBlSum > 0 ? totalExtBl / totalBlSum : 0;
     const totalIntRm = Math.round(rmBlUsed * intRatio);
     const totalExtRm = Math.round(rmBlUsed * extRatio);
 
-    const rowData = [
+    const rowData: any[] = [
       `${dateObj.getDate()}/${dateObj.toLocaleString('en-US', { month: 'short' })}`,
       dateObj.toLocaleDateString('en-US', { weekday: 'short' }),
       rmBlUsed, blKg, blThKg, blDrKg,
@@ -227,8 +262,12 @@ export async function generateBlExcelPlan(
       Number(trk.blBlockProduced || 0), Number(trk.blBlockUsed || 0)
     ];
 
-    beltGateSizeList.forEach((sz, i) => {
-      rowData.push(rmBreakdownArr[i] || 0);
+    // BL Size columns — use pre-computed data from first pass (same source as frontend modal)
+    const dailySizes = dailyBlSizesMap.get(dateStr) || {};
+    blSizeKeys.forEach(sz => {
+      const sizeData = dailySizes[sz];
+      rowData.push(Math.round(sizeData?.internalVal || 0));
+      rowData.push(Math.round(sizeData?.externalVal || 0));
     });
 
     itemCodes.forEach(code => {

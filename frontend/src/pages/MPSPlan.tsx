@@ -2650,6 +2650,76 @@ const MPSPlan: React.FC = () => {
                     </div>
                   )}
 
+                  {/* Hoist BL Sizes Frontend Calculation for both Section 4 (MPS BL Supply) and Section 4.5 (MPS BIL Breakdown) */}
+                  {(() => {
+                    const bp = JSON.parse(selectedSupply.byProducts || '{}');
+                    const blData = bp['BL-DEBONE'] || bp['BL'] || bp['BL (Debone)'] || {};
+                    const totalBlQty = Number(blData.qty || blData.kg || 0);
+                    const blSizesDb = blData.sizes || {};
+                    const intTotal = Number(blData.internalQty || 0);
+                    const extTotal = Number(blData.externalQty || 0);
+                    const intRatio = totalBlQty > 0 ? intTotal / totalBlQty : 1;
+                    const extRatio = totalBlQty > 0 ? extTotal / totalBlQty : 0;
+                    const blSizesFrontend: Record<string, { internalVal: number, externalVal: number, totalVal: number }> = {};
+                    
+                    if (Object.keys(blSizesDb).length === 0 && selectedSupply.sizes) {
+                      const mainOrders = selectedDailyOrders.filter((o: any) => getProductType(o.itemCode) === 'main');
+                      const demandKgByBilSize: Record<string, number> = {};
+                      mainOrders.forEach((o: any) => {
+                        const spec = specs[o.itemCode];
+                        const oSize = spec?.productSize?.trim();
+                        if (oSize && oSize.toLowerCase() !== 'unsize' && oSize !== '') {
+                          const sizeMatch = oSize.match(/(\d+-\d+|\d+\s*Up|\d+\s*Down)/i);
+                          let mappedSize = sizeMatch ? sizeMatch[0] : oSize;
+                          if (mappedSize.toLowerCase().includes('down')) mappedSize = mappedSize.replace(/\s+/g, '') + 'Down';
+                          if (mappedSize.toLowerCase().includes('up')) mappedSize = mappedSize.replace(/\s+/g, '') + 'Up';
+                          mappedSize = mappedSize.replace('DownDown', 'Down').replace('UpUp', 'Up');
+                          const oYield = spec?.productYield && Number(spec.productYield) > 0 ? Number(spec.productYield) : 1;
+                          demandKgByBilSize[mappedSize] = (demandKgByBilSize[mappedSize] || 0) + (Number(o.qty || 0) / oYield);
+                        }
+                      });
+                      const allBilSizesSet = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
+                      const extSizesObj: Record<string, number> = {};
+                      externalRmSupplies.forEach(ext => {
+                        if (ext.receivedDate.startsWith(selectedDate) && ext.sizeBreakdownJson) {
+                          try {
+                            const extBreakdown = JSON.parse(ext.sizeBreakdownJson);
+                            Object.entries(extBreakdown).forEach(([k, v]) => { allBilSizesSet.add(k); extSizesObj[k] = (extSizesObj[k] || 0) + Number(v); });
+                          } catch (e) {}
+                        }
+                      });
+                      Array.from(allBilSizesSet).forEach(bilSz => {
+                        const internalQty = (selectedSupply.sizes || []).filter((s: any) => s.groupSize === bilSz).reduce((sum: number, s: any) => sum + Number(s.quantityKg || 0), 0);
+                        const externalQty = extSizesObj[bilSz] || 0;
+                        const totalQty = internalQty + externalQty;
+                        let demand = 0;
+                        for (const [dSize, dQty] of Object.entries(demandKgByBilSize)) {
+                          if (bilSz.toLowerCase().replace(/\s+/g, '') === dSize.toLowerCase().replace(/\s+/g, '')) demand += dQty;
+                        }
+                        const rem = Math.max(0, totalQty - demand);
+                        if (rem > 0) {
+                          const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
+                          const blQty = rem * 0.75;
+                          const iR = totalQty > 0 ? internalQty / totalQty : 1;
+                          const eR = totalQty > 0 ? externalQty / totalQty : 0;
+                          blSizesFrontend[blSz] = {
+                            internalVal: (blSizesFrontend[blSz]?.internalVal || 0) + (blQty * iR),
+                            externalVal: (blSizesFrontend[blSz]?.externalVal || 0) + (blQty * eR),
+                            totalVal: (blSizesFrontend[blSz]?.totalVal || 0) + blQty
+                          };
+                        }
+                      });
+                    } else {
+                      for (const [sz, qty] of Object.entries(blSizesDb)) {
+                        if (qty > 0) blSizesFrontend[sz] = { internalVal: qty * intRatio, externalVal: qty * extRatio, totalVal: qty };
+                      }
+                    }
+                    
+                    // Attach to the current daily scope so it can be accessed
+                    (selectedSupply as any)._blSizesFrontend = blSizesFrontend;
+                    return null;
+                  })()}
+
                   {/* Section 4: RM Size Breakdown (Internal vs External) */}
                   <div className="space-y-4">
                     <h4 className="text-sm font-bold text-gray-800 flex items-center gap-2">
@@ -2658,35 +2728,10 @@ const MPSPlan: React.FC = () => {
                     </h4>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                       {(() => {
-                        let blSizes: Record<string, number> = {};
-                        if (partId === 'bl') {
-                          try {
-                            const bp = JSON.parse(selectedSupply.byProducts || '{}');
-                            const blData = bp['BL-DEBONE'] || bp['BL'] || bp['BL (Debone)'] || {};
-                            blSizes = blData.sizes || {};
-                            
-                            // FALLBACK: If backend didn't provide exact sizes, use BIL RM sizes and blColLabelsMap to distribute total BL kg
-                            if (Object.keys(blSizes).length === 0 && selectedSupply.sizes && selectedSupply.sizes.length > 0) {
-                              let totalBilSizes = 0;
-                              const bilSizes: Record<string, number> = {};
-                              selectedSupply.sizes.forEach((sz: any) => {
-                                bilSizes[sz.groupSize] = (bilSizes[sz.groupSize] || 0) + Number(sz.quantityKg || 0);
-                                totalBilSizes += Number(sz.quantityKg || 0);
-                              });
-                              const blKg = Number(blData.qty || blData.kg || 0);
-                              if (totalBilSizes > 0 && blKg > 0) {
-                                Object.keys(bilSizes).forEach(bilSz => {
-                                  const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
-                                  const ratio = bilSizes[bilSz] / totalBilSizes;
-                                  blSizes[blSz] = (blSizes[blSz] || 0) + (blKg * ratio);
-                                });
-                              }
-                            }
-                          } catch (e) {}
-                        }
+                        const blSizesFrontend = (selectedSupply as any)._blSizesFrontend || {};
 
                         const getInternalSizeKg = (groupSize: string) => {
-                          if (partId === 'bl') return Number(blSizes[groupSize] || 0);
+                          if (partId === 'bl') return blSizesFrontend[groupSize]?.internalVal || 0;
                           return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
                         };
 
@@ -2696,7 +2741,10 @@ const MPSPlan: React.FC = () => {
                         if (extDaily && extDaily.sizeBreakdownJson) {
                           try { extSizes = JSON.parse(extDaily.sizeBreakdownJson); } catch (e) {}
                         }
-                        const getExternalSizeKg = (groupSize: string) => extSizes[groupSize] || 0;
+                        const getExternalSizeKg = (groupSize: string) => {
+                          if (partId === 'bl') return blSizesFrontend[groupSize]?.externalVal || 0;
+                          return extSizes[groupSize] || 0;
+                        };
 
                         const filletSizeLabels = [
                           { label: '40 Down', color: 'bg-slate-500' },
@@ -2711,8 +2759,10 @@ const MPSPlan: React.FC = () => {
 
                         const isBilOrBl = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
                         // For BIL and BL, include all sizes from internal and external
-                        const allBilSizes = new Set(partId === 'bl' ? Object.keys(blSizes) : (selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
-                        Object.keys(extSizes).forEach(k => allBilSizes.add(k));
+                        const allBilSizes = new Set(partId === 'bl' ? Object.keys(blSizesFrontend) : (selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
+                        if (partId !== 'bl') {
+                          Object.keys(extSizes).forEach(k => allBilSizes.add(k));
+                        }
 
                         const currentSizeLabels = isBilOrBl
                           ? (Array.from(allBilSizes) as string[])
@@ -2761,6 +2811,51 @@ const MPSPlan: React.FC = () => {
                       })()}
                     </div>
                   </div>
+
+                  {/* Section 4.5: BL Size Breakdown */}
+                  {partId === 'bil' && (
+                    <div className="bg-pink-50 border border-pink-100 rounded-2xl p-6 space-y-4">
+                      <h4 className="text-sm font-bold text-pink-800 flex items-center gap-2">
+                        <Layers size={16} className="text-pink-500" />
+                        BL Size Breakdown (Internal vs External)
+                      </h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                        {(() => {
+                            const blSizesFrontend = (selectedSupply as any)._blSizesFrontend || {};
+                            const hasAnyBl = Object.keys(blSizesFrontend).length > 0;
+
+                          if (!hasAnyBl) {
+                            return <div className="text-sm text-pink-600 italic col-span-full">No BL sizes generated yet.</div>;
+                          }
+
+                          return Object.entries(blSizesFrontend).filter(([_, data]) => Math.round((data as any).totalVal) > 0).map(([sz, data], idx) => {
+                            const dData = data as any;
+                            return (
+                              <div key={idx} className="bg-white border border-pink-100 p-3 rounded-xl shadow-sm hover:border-pink-300 transition-all flex flex-col justify-between">
+                                <div className="flex justify-between items-start mb-2">
+                                  <p className="text-[10px] font-bold text-pink-800 uppercase bg-pink-100 px-1.5 py-0.5 rounded">{sz}</p>
+                                </div>
+                                <div className="space-y-1 mt-1">
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-gray-500 font-medium">Internal:</span>
+                                    <span className="font-bold text-gray-700">{Math.round(dData.internalVal).toLocaleString()} kg</span>
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-blue-500 font-medium">External:</span>
+                                    <span className="font-bold text-blue-700">{Math.round(dData.externalVal).toLocaleString()} kg</span>
+                                  </div>
+                                  <div className="pt-1 mt-1 border-t border-pink-50 flex justify-between items-center text-[11px] font-black">
+                                    <span className="text-pink-600">TOTAL</span>
+                                    <span className="text-pink-700">{Math.round(dData.totalVal).toLocaleString()} kg</span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Final Summary Output */}
                   <div className="bg-gray-900 rounded-2xl p-6 text-white flex flex-col md:flex-row justify-between items-center gap-6">
@@ -2903,132 +2998,8 @@ const MPSPlan: React.FC = () => {
                           const n = name.toUpperCase();
                           return n.includes('BL') && !n.includes('BL-TH') && !n.includes('BL-DR') && !n.includes('สะโพก') && !n.includes('น่อง');
                         };
-                        const blItems = items.filter(bp => isBlMain(bp.name));
                         const otherItems = items.filter(bp => !isBlMain(bp.name));
                         const elements: React.ReactNode[] = [];
-
-                        if (blItems.length > 0) {
-                          const hasSpecificSizes = blItems.some(bp => bp.name.toUpperCase().includes('BLK') || /\d/.test(bp.name));
-                          const totalBl = blItems.reduce((sum, bp) => sum + bp.qty, 0);
-
-                          if (hasSpecificSizes || (!isBil || bilColLabels.length === 0)) {
-                            // Direct render for specific sizes
-                            elements.push(
-                              <div key="bl-section" className="bg-gradient-to-br from-blue-50 to-indigo-50 col-span-full p-4 rounded-xl border border-blue-200 shadow-sm">
-                                <div className="flex justify-between items-center mb-4 border-b border-blue-100 pb-3">
-                                  <div>
-                                    <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">BL (Debone) - Process 3</p>
-                                    <p className="text-[10px] text-blue-500">Output ส่งต่อแผนก BL</p>
-                                  </div>
-                                  <div className="flex items-baseline gap-1 text-right">
-                                    <span className="text-3xl font-black text-blue-900">{Math.round(totalBl).toLocaleString()}</span>
-                                    <span className="text-xs font-bold text-blue-500">kg</span>
-                                  </div>
-                                </div>
-                                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                                  {blItems.filter(bp => bp.qty > 1).map((bp, i) => {
-                                      const hasSizes = bp.sizes && Object.keys(bp.sizes).length > 0;
-                                      return (
-                                        <div key={`bl-${i}`} className="bg-white p-2.5 rounded-lg border border-blue-100 shadow-sm hover:border-blue-300 transition-colors flex flex-col justify-between">
-                                          <div>
-                                            <p className="text-[10px] font-bold text-gray-500 uppercase">{bp.name}</p>
-                                            <p className="text-sm font-black text-blue-700">{Math.round(bp.qty).toLocaleString()} <span className="text-[9px] font-normal text-gray-400">kg</span></p>
-                                          </div>
-                                          {hasSizes && (
-                                            <div className="mt-2 pt-2 border-t border-blue-50 flex gap-1 flex-wrap">
-                                              {Object.entries(bp.sizes!).filter(([_, qty]) => Number(qty) > 1).map(([sz, qty], j) => (
-                                                <div key={j} className="bg-blue-50 px-1.5 py-0.5 rounded text-[8px] border border-blue-100">
-                                                  <span className="font-bold text-blue-800">{sz}</span>
-                                                  <span className="ml-1 text-blue-600">{Math.round(Number(qty)).toLocaleString()}kg</span>
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                </div>
-                              </div>
-                            );
-                          } else {
-                            // Old logic for a single 'BL (Debone)' using bilSizes
-                            const bp = blItems[0];
-                            const roundedQty = Math.max(0, Math.round(bp.qty));
-                            // Calculate Supply by BIL Size
-                            const bilSizes: Record<string, number> = {};
-                            (selectedSupply.sizes || []).forEach((sz: any) => {
-                              bilSizes[sz.groupSize] = (bilSizes[sz.groupSize] || 0) + Number(sz.quantityKg || 0);
-                            });
-
-                            // Calculate Demand by BIL Size for this month
-                            const demandKgByBilSize: Record<string, number> = {};
-                            const allOrders = currentPlan?.dailyPlans?.flatMap((dp: any) => dp.orders || []) || [];
-                            
-                            allOrders.forEach((o: any) => {
-                              if (!isGradeB(o.itemCode || '')) {
-                                if (!demandKgByBilSize[o.size]) demandKgByBilSize[o.size] = 0;
-                                // RM Used = Net Qty / Yield
-                                const oYield = o.yield && o.yield > 0 ? o.yield : 1;
-                                demandKgByBilSize[o.size] += Number(o.qty || 0) / oYield;
-                              }
-                            });
-
-                            // Calculate Remaining
-                            const blBreakdown: Record<string, number> = {};
-                            let totalRemaining = 0;
-                            Object.keys(bilSizes).forEach(bilSz => {
-                              const remaining = Math.max(0, bilSizes[bilSz] - (demandKgByBilSize[bilSz] || 0));
-                              const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
-                              if (!blBreakdown[blSz]) blBreakdown[blSz] = 0;
-                              blBreakdown[blSz] += remaining;
-                              totalRemaining += remaining;
-                            });
-
-                            // Normalize to exactly bp.qty
-                            if (totalRemaining > 0) {
-                              Object.keys(blBreakdown).forEach(blSz => {
-                                blBreakdown[blSz] = (blBreakdown[blSz] / totalRemaining) * bp.qty;
-                              });
-                            } else {
-                              // Fallback: If demand mathematically exceeds supply in this draft,
-                              // distribute bp.qty using the original supply proportions so it's not empty.
-                              let totalBilSizes = 0;
-                              Object.values(bilSizes).forEach(v => totalBilSizes += v);
-                              if (totalBilSizes > 0) {
-                                Object.keys(bilSizes).forEach(bilSz => {
-                                  const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
-                                  const ratio = bilSizes[bilSz] / totalBilSizes;
-                                  if (!blBreakdown[blSz]) blBreakdown[blSz] = 0;
-                                  blBreakdown[blSz] += bp.qty * ratio;
-                                });
-                              }
-                            }
-
-                            elements.push(
-                              <div key="bl-section-fallback" className="bg-gradient-to-br from-blue-50 to-indigo-50 col-span-full p-4 rounded-xl border border-blue-200 shadow-sm">
-                                <div className="flex justify-between items-center mb-4 border-b border-blue-100 pb-3">
-                                  <div>
-                                    <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">BL (Debone) - Process 3</p>
-                                    <p className="text-[10px] text-blue-500">Output ส่งต่อแผนก BL</p>
-                                  </div>
-                                  <div className="flex items-baseline gap-1 text-right">
-                                    <span className="text-3xl font-black text-blue-900">{roundedQty.toLocaleString()}</span>
-                                    <span className="text-xs font-bold text-blue-500">kg</span>
-                                  </div>
-                                </div>
-                                
-                                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                                  {Object.entries(blBreakdown).filter(([_, val]) => val > 1).map(([size, val], i) => (
-                                    <div key={i} className="bg-white p-2.5 rounded-lg border border-blue-100 shadow-sm hover:border-blue-300 transition-colors">
-                                      <p className="text-[10px] font-bold text-gray-500 uppercase">{size}</p>
-                                      <p className="text-sm font-black text-blue-700">{Math.round(val).toLocaleString()} <span className="text-[9px] font-normal text-gray-400">kg</span></p>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            );
-                          }
-                        }
 
                         otherItems.forEach((bp, index) => {
                           const roundedQty = Math.max(0, Math.round(bp.qty));
@@ -3314,52 +3285,75 @@ const MPSPlan: React.FC = () => {
                             <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
                             {(() => {
                               const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
-                              // Derive base sizes from entire plan supply to know all standard bins
-                              const allSupplySizesSet = new Set<string>([
-                                "140 Down", "140-160", "160-180", "180-200", "200-220", 
-                                "220-240", "240-260", "260-280", "280-300", "300-320", 
-                                "320-340", "340-360", "360-380", "380 Up"
-                              ]);
-                              currentPlan?.supplyBreakdown?.forEach((s: any) => {
-                                if (s.sizes) s.sizes.forEach((sz: any) => { if (sz.groupSize) allSupplySizesSet.add(sz.groupSize); });
-                              });
+                              
+                              const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(selectedDate));
+                              let extSizes: Record<string, number> = {};
+                              if (extDaily && extDaily.sizeBreakdownJson) {
+                                try { extSizes = JSON.parse(extDaily.sizeBreakdownJson); } catch (e) {}
+                              }
+
+                              const allSupplySizesSet = new Set<string>();
+                              const globalBlSizesFrontend = (selectedSupply as any)._blSizesFrontend || {};
+                              if (currentPlan?.partType === 'bl') {
+                                Object.keys(globalBlSizesFrontend).forEach(k => allSupplySizesSet.add(k));
+                              } else {
+                                currentPlan?.supplyBreakdown?.forEach((s: any) => {
+                                  if (s.sizes) s.sizes.forEach((sz: any) => { if (sz.groupSize) allSupplySizesSet.add(sz.groupSize); });
+                                });
+                                Object.keys(extSizes).forEach(k => allSupplySizesSet.add(k));
+                              }
+                              
                               // Sort using custom logic to ensure "180 Down" is first and numbers are sorted correctly
                               const allSupplySizes = Array.from(allSupplySizesSet).sort((a, b) => {
-                                if (a.includes('Down') && !b.includes('Down')) return -1;
-                                if (!a.includes('Down') && b.includes('Down')) return 1;
+                                if (a.toLowerCase().includes('down') && !b.toLowerCase().includes('down')) return -1;
+                                if (!a.toLowerCase().includes('down') && b.toLowerCase().includes('down')) return 1;
                                 return a.localeCompare(b, undefined, { numeric: true });
                               });
 
-                              // Parse standard BIL bins into lo/hi values for overlap mapping
-                              const bilBinDefs = allSupplySizes.map(label => {
-                                const s = label.toLowerCase().trim();
-                                let lo = 0, hi = 9999;
-                                if (s.includes('down')) {
-                                  const m = s.match(/(\d+)/);
-                                  if (m) hi = parseInt(m[1], 10);
-                                } else if (s.includes('up')) {
-                                  const m = s.match(/(\d+)/);
-                                  if (m) lo = parseInt(m[1], 10);
+                              const mainOrders = selectedDailyOrders.filter((o: any) => getProductType(o.itemCode) === 'main');
+                              
+                              const bilBinDefs = [
+                                { key: '180 DOWN', lo: 0, hi: 180 },
+                                { key: '210-230', lo: 210, hi: 230 },
+                                { key: '230-260', lo: 230, hi: 260 },
+                                { key: '260-280', lo: 260, hi: 280 },
+                                { key: '280-310', lo: 280, hi: 310 },
+                                { key: '310-330', lo: 310, hi: 330 },
+                                { key: '330-360', lo: 330, hi: 360 },
+                                { key: '360-390', lo: 360, hi: 390 },
+                                { key: '390-410', lo: 390, hi: 410 },
+                                { key: '410-440', lo: 410, hi: 440 },
+                                { key: '440-460', lo: 440, hi: 460 },
+                                { key: '460-490', lo: 460, hi: 490 },
+                                { key: '490-510', lo: 490, hi: 510 },
+                                { key: '510-540', lo: 510, hi: 540 },
+                                { key: '540 UP', lo: 540, hi: 9999 },
+                              ];
+
+                              const blBinDefs = Object.keys(globalBlSizesFrontend).map(k => {
+                                let lo = -1, hi = -1;
+                                if (k.toLowerCase().includes('down')) {
+                                  const m = k.match(/(\d+)/);
+                                  if (m) { lo = 0; hi = parseInt(m[1], 10); }
+                                } else if (k.toLowerCase().includes('up')) {
+                                  const m = k.match(/(\d+)/);
+                                  if (m) { lo = parseInt(m[1], 10); hi = 9999; }
                                 } else {
-                                  const m = s.match(/(\d+)\s*[-–]\s*(\d+)/);
-                                  if (m) {
-                                    lo = parseInt(m[1], 10);
-                                    hi = parseInt(m[2], 10);
-                                  }
+                                  const m = k.match(/(\d+)\s*[-–]\s*(\d+)/);
+                                  if (m) { lo = parseInt(m[1], 10); hi = parseInt(m[2], 10); }
                                 }
-                                return { key: label, lo, hi, label };
+                                return { key: k, lo, hi };
                               });
 
+                              // First pass: look at orders and add any new unmappable size strings
                               const orderSizes: string[] = [];
                               if (isBil) {
                                 mainOrders.forEach((o: any) => {
                                   const spec = specs[o.itemCode];
-                                  const size = spec?.productSize;
-                                  if (size && size.toLowerCase().trim() !== 'unsize' && size.toLowerCase().trim() !== '') {
-                                    const s = size.toLowerCase().trim();
-                                    const match = bilBinDefs.find(b => b.key.toLowerCase() === s);
-                                    if (!match) {
-                                      // Check if it can be parsed as a range and mapped
+                                  const s = (spec?.productSize || 'unsize').toLowerCase().trim();
+                                  if (s !== 'unsize' && s !== '') {
+                                    const exactMatch = allSupplySizes.find(sz => sz.toLowerCase().replace(/\s+/g, '') === s.replace(/\s+/g, ''));
+                                    if (!exactMatch) {
                                       let lo = -1, hi = -1;
                                       if (s.includes('down')) {
                                         const m = s.match(/(\d+)/);
@@ -3373,10 +3367,7 @@ const MPSPlan: React.FC = () => {
                                       }
                                       
                                       if (lo >= 0 && hi >= 0 && hi > lo) {
-                                        const overlaps = bilBinDefs.filter(b => Math.max(lo, b.lo) < Math.min(hi, b.hi));
-                                        if (overlaps.length === 0) orderSizes.push(size.trim()); // completely unmappable
-                                      } else {
-                                        orderSizes.push(size.trim()); // unmappable string
+                                        // Do nothing if completely unmappable
                                       }
                                     }
                                   }
@@ -3401,18 +3392,13 @@ const MPSPlan: React.FC = () => {
                                   { key: '65_70', label: '65-70', groupSize: '65-70', color: 'bg-orange-500' },
                                   { key: '70Up', label: '70 Up', groupSize: '70 Up', color: 'bg-red-500' },
                                 ];
-                              const metrics = calculateDailyMetrics(selectedDate);
-                              const trk = metrics.blTracker || {};
                               
                               // Helper: get supply kg from normalized sizes array
                               const getSupplySizeKg = (groupSize: string): number => {
                                 if (currentPlan?.partType === 'bl') {
-                                  // Look for exact match or 'BL ' prefixed match
-                                  const key1 = `BL ${groupSize}`;
-                                  const key2 = groupSize;
-                                  return Number(trk.beltGateSizes?.[key1] || trk.beltGateSizes?.[key2] || 0);
+                                  return globalBlSizesFrontend[groupSize]?.totalVal || 0;
                                 }
-                                return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0);
+                                return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0) + (extSizes[groupSize] || 0);
                               };
                               const allBinDefs = [
                                 { key: '40Down', lo: 0, hi: 40 },
@@ -3434,7 +3420,7 @@ const MPSPlan: React.FC = () => {
                                   const match = sizeLabels.find(sl => sl.label.toLowerCase() === s);
                                   if (match) return [match.key];
 
-                                  // 2. Range Overlap mapping for BIL/BL
+                                  // 2. Range Overlap mapping
                                   let lo = -1, hi = -1;
                                   if (s.includes('down')) {
                                     const m = s.match(/(\d+)/);
@@ -3457,7 +3443,8 @@ const MPSPlan: React.FC = () => {
                                   }
 
                                   if (lo >= 0 && hi >= 0 && hi >= lo) {
-                                    const overlaps = bilBinDefs.filter(b => {
+                                    const activeBinDefs = currentPlan?.partType === 'bl' ? blBinDefs : bilBinDefs;
+                                    const overlaps = activeBinDefs.filter(b => {
                                       if (lo === hi) return lo >= b.lo && hi <= b.hi; // Point inside bin
                                       return Math.max(lo, b.lo) < Math.min(hi, b.hi); // True overlap
                                     });
@@ -3466,7 +3453,7 @@ const MPSPlan: React.FC = () => {
                                     }
                                   }
 
-                                  return [productSize]; // Fallback to raw size string
+                                  return []; // Fallback to unsize instead of creating new bin
                                 }
 
                                 // Original Fillet range matching logic
@@ -3520,17 +3507,7 @@ const MPSPlan: React.FC = () => {
                                     ordersByBin[key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: o.size, qty: alloc, type: o.type });
                                   }
                                 }
-
-                                // Phase 2: If still short, distribute the shortage evenly among valid bins
-                                if (remainingQty > 0 && o.binKeys.length > 0) {
-                                  const perBin = remainingQty / o.binKeys.length;
-                                  for (const key of o.binKeys) {
-                                    if (!ordersByBin[key]) ordersByBin[key] = [];
-                                    demandByBin[key] = (demandByBin[key] || 0) + perBin;
-                                    supplyRemaining[key] = (supplyRemaining[key] || 0) - perBin;
-                                    ordersByBin[key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: `${o.size} (Shortage)`, qty: perBin, type: o.type });
-                                  }
-                                }
+                                // Removed Phase 2 (Shortage allocation) as per user request
                               });
 
                               // Pass 2: Allocate UNSIZE orders via waterfall (fill remaining capacity per bin)
@@ -3546,13 +3523,7 @@ const MPSPlan: React.FC = () => {
                                   remainingQty -= allocQty;
                                   ordersByBin[sl.key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: 'unsize', qty: allocQty, type: o.type });
                                 }
-                                // If still remaining after all bins full, dump into last non-zero or first bin
-                                if (remainingQty > 0) {
-                                  const fallbackKey = sizeLabels.length > 0 ? sizeLabels[0].key : 'unsize';
-                                  if (!ordersByBin[fallbackKey]) ordersByBin[fallbackKey] = [];
-                                  demandByBin[fallbackKey] = (demandByBin[fallbackKey] || 0) + remainingQty;
-                                  ordersByBin[fallbackKey].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: 'unsize (overflow)', qty: remainingQty, type: o.type });
-                                }
+                                // Removed fallback overflow allocation as per user request
                               });
 
                               return (
@@ -3581,7 +3552,7 @@ const MPSPlan: React.FC = () => {
                                                 </span>
                                               )}
                                             </div>
-                                            <div className="flex gap-4 text-xs mt-0.5">
+                                            <div className="flex gap-4 text-xs mt-0.5 items-center">
                                               <span className="text-emerald-600">Supply: <b>{Math.round(supply).toLocaleString()}</b></span>
                                               <span className="text-orange-600">Demand: <b>{Math.round(demand).toLocaleString()}</b></span>
                                               <span className={remaining >= 0 ? 'text-blue-600' : 'text-red-600 font-bold'}>

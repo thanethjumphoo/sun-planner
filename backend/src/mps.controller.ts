@@ -742,6 +742,14 @@ export class MpsController {
       // ─────────────────────────────────────────────────────────────────────────────
       const isBil = partType === 'bil';
       const weightMatrix = isBil ? await this.bilWeightDistRepo.find() : await this.weightDistRepo.find();
+      
+      const blColLabelsMap: Record<string, string> = {};
+      if (isBil) {
+        (weightMatrix as any[]).forEach(d => {
+          if (d.colLabel) blColLabelsMap[d.colLabel] = d.blColLabel || d.colLabel;
+        });
+      }
+
       const filletCalcs = await this.filletSizeRepo.find();
       const filletMap = new Map<string, string>(); // colLabel -> groupName
       if (!isBil) {
@@ -778,7 +786,7 @@ export class MpsController {
       console.log(`[MPS DEBUG] filletYield: ${filletYield}`);
       // ── END DEBUG ─────────────────────────────────────────────────────────────
 
-      const sizeSupplyMap = new Map<string, { total: number, bins: Record<string, number> }>();
+      const sizeSupplyMap = new Map<string, { total: number, bins: Record<string, number>, initialBins: Record<string, number> }>();
 
       // Use expanded intakes (includes previous month) for size supply map
       allIntakesExpanded.forEach((intake: any) => {
@@ -805,7 +813,8 @@ export class MpsController {
         // Calculate size bins for this date using MANUAL GROUPS
         const existing = sizeSupplyMap.get(d) || {
           total: 0,
-          bins: {}
+          bins: {},
+          initialBins: {}
         };
 
         matchingRows.forEach(row => {
@@ -823,6 +832,7 @@ export class MpsController {
             // Map group name to bin key
             const key = isBil ? groupName : groupName.replace(/\s+/g, '').replace(/-/g, '_');
             existing.bins[key] = (existing.bins[key] || 0) + kg;
+            existing.initialBins[key] = (existing.initialBins[key] || 0) + kg;
           }
         });
 
@@ -840,7 +850,8 @@ export class MpsController {
 
             const existing = sizeSupplyMap.get(d) || {
               total: 0,
-              bins: {}
+              bins: {},
+              initialBins: {}
             };
 
             if (ext.sizeBreakdownJson) {
@@ -848,12 +859,15 @@ export class MpsController {
                 const sizes = JSON.parse(ext.sizeBreakdownJson);
                 for (const [sz, qty] of Object.entries(sizes)) {
                   existing.bins[sz] = (existing.bins[sz] || 0) + Number(qty);
+                  existing.initialBins[sz] = (existing.initialBins[sz] || 0) + Number(qty);
                 }
               } catch (e) {
                 existing.bins['Unsize'] = (existing.bins['Unsize'] || 0) + extKg;
+                existing.initialBins['Unsize'] = (existing.initialBins['Unsize'] || 0) + extKg;
               }
             } else {
               existing.bins['Unsize'] = (existing.bins['Unsize'] || 0) + extKg;
+              existing.initialBins['Unsize'] = (existing.initialBins['Unsize'] || 0) + extKg;
             }
             existing.total += extKg;
             sizeSupplyMap.set(d, existing);
@@ -1912,8 +1926,65 @@ export class MpsController {
           cuttingStaff = p1CuttingStaff + separationCuttingStaff + trimmingWorkers;
           supportStaff = deboneManpower + fixedTrimmingWorkers + xrayManpower;
 
+          // Calculate mapped BL (Debone) Supply sizes based on Remaining RM
+          let mappedBlQty = 0;
+          const blSizes: Record<string, number> = {};
+          const daySizeData = sizeSupplyMap.get(dayStr);
+          if (daySizeData && daySizeData.initialBins) {
+            // Find all Sized demand for this day
+            const demandKgByBilSize: Record<string, number> = {};
+            const dayOrders = mpsOrdersToSave.filter(o => 
+              o.plannedProductionDate.getTime() === new Date(dayStr).getTime() && 
+              o.productType === 'main'
+            );
+            
+            dayOrders.forEach(o => {
+              const spec = specMap.get(o.itemCode);
+              const oSize = spec?.productSize?.trim();
+              if (oSize && oSize.toLowerCase() !== 'unsize' && oSize !== '') {
+                // Match with bin keys based on overlapping ranges logic to mimic frontend
+                // For simplicity and exact matching, we use the original itemSize mapping
+                // We'll use the same regex used in export for a robust mapping
+                const sizeMatch = (o.itemDesc || '').match(/(\d+-\d+|\d+\s*Up|\d+\s*Down)/i);
+                let mappedSize = sizeMatch ? sizeMatch[0] : oSize;
+                
+                // standardize spacing
+                if (mappedSize.toLowerCase().includes('down')) mappedSize = mappedSize.replace(/\s+/g, '') + 'Down'; // e.g. 180Down
+                if (mappedSize.toLowerCase().includes('up')) mappedSize = mappedSize.replace(/\s+/g, '') + 'Up';
+                mappedSize = mappedSize.replace('DownDown', 'Down').replace('UpUp', 'Up'); // cleanup
+
+                if (!demandKgByBilSize[mappedSize]) demandKgByBilSize[mappedSize] = 0;
+                const oYield = spec?.productYield && Number(spec.productYield) > 0 ? Number(spec.productYield) : 1;
+                demandKgByBilSize[mappedSize] += Number(o.quantityKg || 0) / oYield;
+              }
+            });
+
+            for (const bilSz of Object.keys(daySizeData.initialBins)) {
+              // try to match bilSz with mappedSize
+              let demand = 0;
+              for (const [dSize, dQty] of Object.entries(demandKgByBilSize)) {
+                // simple case insensitive match
+                if (bilSz.toLowerCase().replace(/\s+/g, '') === dSize.toLowerCase().replace(/\s+/g, '')) {
+                  demand += dQty;
+                }
+              }
+              const rem = Math.max(0, (daySizeData.initialBins[bilSz] || 0) - demand);
+              if (rem > 0) {
+                const blSz = blColLabelsMap[bilSz] || bilSz;
+                const blQty = rem * toridasConf.yield; // usually 0.75
+                blSizes[blSz] = (blSizes[blSz] || 0) + blQty;
+                mappedBlQty += blQty;
+              }
+            }
+          }
+
+          // Use the mapped sum as the true output quantity to keep reports aligned with sizes
+          const finalBlOutputKg = mappedBlQty > 0 ? mappedBlQty : totalBlOutputKg;
+          
+          console.log(`[DEBUG BL SIZES] dayStr: ${dayStr}, mappedBlQty: ${mappedBlQty}, finalBlOutputKg: ${finalBlOutputKg}, blSizes:`, blSizes);
+
           // Save generated BL to daily byproducts
-          if (totalBlOutputKg > 0) {
+          if (finalBlOutputKg > 0) {
             const daySupply = getOrInitByproductSupply(dayStr);
             if (!daySupply['BL-DEBONE']) {
               daySupply['BL-DEBONE'] = {
@@ -1925,7 +1996,12 @@ export class MpsController {
                 sizes: {}
               };
             }
-            daySupply['BL-DEBONE'].qty += totalBlOutputKg;
+            daySupply['BL-DEBONE'].qty += finalBlOutputKg;
+            
+            // Merge mapped sizes into byProduct sizes
+            for (const [sz, qty] of Object.entries(blSizes)) {
+              daySupply['BL-DEBONE'].sizes[sz] = (daySupply['BL-DEBONE'].sizes[sz] || 0) + qty;
+            }
 
             const intRm = internalSupplyMap.get(dayStr) || 0;
             const extRm = externalSupplyMap.get(dayStr) || 0;
@@ -1933,10 +2009,10 @@ export class MpsController {
             if (totalRm > 0) {
               const intRatio = intRm / totalRm;
               const extRatio = extRm / totalRm;
-              daySupply['BL-DEBONE'].internalQty = (daySupply['BL-DEBONE'].internalQty || 0) + (totalBlOutputKg * intRatio);
-              daySupply['BL-DEBONE'].externalQty = (daySupply['BL-DEBONE'].externalQty || 0) + (totalBlOutputKg * extRatio);
+              daySupply['BL-DEBONE'].internalQty = (daySupply['BL-DEBONE'].internalQty || 0) + (finalBlOutputKg * intRatio);
+              daySupply['BL-DEBONE'].externalQty = (daySupply['BL-DEBONE'].externalQty || 0) + (finalBlOutputKg * extRatio);
             } else {
-              daySupply['BL-DEBONE'].internalQty = (daySupply['BL-DEBONE'].internalQty || 0) + totalBlOutputKg;
+              daySupply['BL-DEBONE'].internalQty = (daySupply['BL-DEBONE'].internalQty || 0) + finalBlOutputKg;
             }
           }
         }
@@ -2734,24 +2810,22 @@ export class MpsController {
       // Section F: RM BIL by Size (dynamic)
       // Section G: Production Plan (dynamic)
 
-      const supplyEnd = 11;       // cols 1..11
-      const p1Col = 12;
-      const p2Col = 13;
-      const p3Start = 14;
+      const supplyEnd = 12;       // cols 1..12 (Date, Day + 10 supply metrics)
+      const p1Col = 13;
+      const p2Col = 14;
+      const p3Start = 15;
       const machColsPerMachine = 7; // Lines | Mach/Line | TotalMach | Shift | Yield | Workers/L/S | TotalWorkers
-      const toridasStart = p3Start;                              // 14
-      const foodmateStart = toridasStart + machColsPerMachine;   // 21
-      const trimmingStart = foodmateStart + machColsPerMachine;  // 28
-      const xrayStart = trimmingStart + machColsPerMachine;      // 35
-      const p3TotalCol = xrayStart + machColsPerMachine;         // 42
-      const p3End = p3TotalCol;                                  // 42
-      const totalCol = p3End + 1;     // 43
+      const toridasStart = p3Start;                              // 15
+      const foodmateStart = toridasStart + machColsPerMachine;   // 22
+      const trimmingStart = foodmateStart + machColsPerMachine;  // 29
+      const xrayStart = trimmingStart + machColsPerMachine;      // 36
+      const p3TotalCol = xrayStart + machColsPerMachine;         // 43
+      const p3End = p3TotalCol;                                  // 43
+      const totalCol = p3End + 1;     // 44
 
-      const blOutputTotalCol = totalCol + 1; // 44
-      const blOutputSizeStart = blOutputTotalCol + 1;
-      const blOutputSizeEnd = blOutputTotalCol + bilSizeLabels.length;
+      const blOutputTotalCol = totalCol + 1; // 45
 
-      const sizeStart = blOutputSizeEnd + 1;
+      const sizeStart = blOutputTotalCol + 1;
       const sizeEnd = sizeStart + bilSizeLabels.length - 1;
       const prodStart = sizeEnd + 1;
       const prodEnd = prodStart + itemCodes.length - 1;
@@ -2767,9 +2841,6 @@ export class MpsController {
       sectionRow.getCell(totalCol).value = 'Total';
 
       sectionRow.getCell(blOutputTotalCol).value = 'BL Output';
-      if (bilSizeLabels.length > 0) {
-        sheet.mergeCells(1, blOutputTotalCol, 1, blOutputSizeEnd);
-      }
 
       sectionRow.getCell(sizeStart).value = 'RM BIL by Size';
       if (bilSizeLabels.length > 1) sheet.mergeCells(1, sizeStart, 1, sizeEnd);
@@ -2787,7 +2858,7 @@ export class MpsController {
         { start: xrayStart, end: xrayStart + machColsPerMachine - 1, color: 'FFF0A0BA' },
         { start: p3TotalCol, end: p3TotalCol, color: 'FF880E4F' },
         { start: totalCol, end: totalCol, color: 'FF3F51B5' },
-        { start: blOutputTotalCol, end: blOutputSizeEnd, color: 'FF2E7D32' },
+        { start: blOutputTotalCol, end: blOutputTotalCol, color: 'FF2E7D32' },
         { start: sizeStart, end: sizeEnd, color: 'FFED7D31' },
         { start: prodStart, end: prodEnd, color: 'FF7030A0' }
       ];
@@ -2859,7 +2930,6 @@ export class MpsController {
         'P3 รวมคน',
         'Total Pax',
         'BL Output (kg)',
-        ...bilSizeLabels.map(sz => `RM ${sz}`), // Breakdown sizes
         ...bilSizeLabels,
         ...itemCodes
       ];
@@ -3026,50 +3096,6 @@ export class MpsController {
           return kg;
         };
 
-        // Calculate RM BL Output Size Breakdown (Raw Material Weight sent to BL)
-        const blBreakdownArr = bilSizeLabels.map(() => 0);
-        if (rmBlUsed > 0) {
-          const bilSizesRecord: Record<string, number> = {};
-          bilSizeLabels.forEach(label => { bilSizesRecord[label] = getSizeKg(supply?.sizes, label); });
-
-          const demandKgByBilSize: Record<string, number> = {};
-          dailyOrders.forEach(o => {
-            const oGrade = gradeMap.get(o.soNumber) || 'A';
-            const sizeMatch = (o.itemDesc || '').match(/(\d+-\d+|\d+\s*Up|\d+\s*Down)/i);
-            const oSize = sizeMatch ? sizeMatch[0] : 'Unsized';
-
-            if (oGrade !== 'B') {
-              if (!demandKgByBilSize[oSize]) demandKgByBilSize[oSize] = 0;
-              const spec = specByCode.get(o.itemCode);
-              const oYield = spec?.productYield && Number(spec.productYield) > 0 ? Number(spec.productYield) : 1;
-              demandKgByBilSize[oSize] += Number(o.quantityKg || 0) / oYield;
-            }
-          });
-
-          const blBreakdownRecord: Record<string, number> = {};
-          let totalRemaining = 0;
-          Object.keys(bilSizesRecord).forEach(bilSz => {
-            const remaining = Math.max(0, bilSizesRecord[bilSz] - (demandKgByBilSize[bilSz] || 0));
-            blBreakdownRecord[bilSz] = remaining;
-            totalRemaining += remaining;
-          });
-
-          if (totalRemaining > 0) {
-            bilSizeLabels.forEach((bilSz, i) => {
-              blBreakdownArr[i] = Math.round(((blBreakdownRecord[bilSz] || 0) / totalRemaining) * rmBlUsed);
-            });
-          } else {
-            let totalBilSizes = 0;
-            Object.values(bilSizesRecord).forEach(v => totalBilSizes += v);
-            if (totalBilSizes > 0) {
-              bilSizeLabels.forEach((bilSz, i) => {
-                const ratio = bilSizesRecord[bilSz] / totalBilSizes;
-                blBreakdownArr[i] = Math.round(rmBlUsed * ratio);
-              });
-            }
-          }
-        }
-
         const toridasTotalMachines = toridasLinesNeeded * toridasConf.machinesPerLine;
         const foodmateTotalMachines = foodmateLinesNeeded * foodmateConf.machinesPerLine;
         const trimTotalMachines = trimLinesNeeded * 1; // 1 machine per line
@@ -3101,7 +3127,6 @@ export class MpsController {
           p3Total,
           totalPax,
           blOutputKg || '-',
-          ...blBreakdownArr.map(kg => kg || '-'),
           ...bilSizeLabels.map(label => Math.round(getSizeKg(supply?.sizes, label)) || '-'),
           ...itemCodes.map(code => d.orders.has(code) ? Math.round(d.orders.get(code)) : '-')
         ];
@@ -3139,7 +3164,7 @@ export class MpsController {
           } else if (colNumber === totalCol) { // Total
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC5CAE9' } };
             cell.font = { color: { argb: 'FF283593' }, bold: true, size: 10 };
-          } else if (colNumber >= blOutputTotalCol && colNumber <= blOutputSizeEnd && cell.value !== '-') { // BL Output + Breakdown
+          } else if (colNumber === blOutputTotalCol && cell.value !== '-') { // BL Output
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8E6C9' } };
             cell.font = { color: { argb: 'FF1B5E20' }, bold: true, size: 9 };
           } else if (colNumber >= prodStart && cell.value !== '-') { // Production
@@ -3176,7 +3201,7 @@ export class MpsController {
       sheet.getColumn(p3TotalCol).width = 10;
       sheet.getColumn(totalCol).width = 11;
 
-      for (let i = blOutputTotalCol; i <= blOutputSizeEnd; i++) sheet.getColumn(i).width = 12;
+      sheet.getColumn(blOutputTotalCol).width = 12;
       for (let i = sizeStart; i <= sizeEnd; i++) sheet.getColumn(i).width = 12;
       for (let i = prodStart; i <= prodEnd; i++) sheet.getColumn(i).width = 15;
 

@@ -654,11 +654,35 @@ export async function executeUnifiedLegPlanGeneration(
               }
 
               const rmNeeded = (remainingQty / activeYield) / rmYieldPct;
-              const rmToUse = Math.min(availRmForDebone, rmNeeded);
+              let maxRmFromSizes = availRmForDebone;
+
+              if (mapping && mapping.rmSizes.length > 0) {
+                maxRmFromSizes = 0;
+                for (const sz of mapping.rmSizes) {
+                  const legKey = sz.replace(/^BL\s*/i, '');
+                  maxRmFromSizes += (sup.legSizes[legKey] || 0);
+                }
+              }
+
+              const rmToUse = Math.min(availRmForDebone, rmNeeded, maxRmFromSizes);
+              
               if (rmToUse > 0) {
                  sup.totalLegRm -= rmToUse;
                  sup.rmBlUsed += rmToUse;
                  capTracker.debonedKg += rmToUse;
+                 
+                 if (mapping && mapping.rmSizes.length > 0) {
+                    let toDeduct = rmToUse;
+                    for (const sz of mapping.rmSizes) {
+                      const legKey = sz.replace(/^BL\s*/i, '');
+                      const availSz = sup.legSizes[legKey] || 0;
+                      if (availSz > 0 && toDeduct > 0) {
+                        const use = Math.min(availSz, toDeduct);
+                        sup.legSizes[legKey] -= use;
+                        toDeduct -= use;
+                      }
+                    }
+                 }
                  
                  productProduced = Math.round((rmToUse * rmYieldPct) * activeYield);
                  generateByproducts(dateStr, rmToUse, spec);
@@ -859,10 +883,34 @@ export async function executeUnifiedLegPlanGeneration(
              }
 
              const rmNeeded = (remainingQty / activeYield) / rmYieldPct;
-             const rmToUse = Math.min(availRmForDebone, rmNeeded);
+             let maxRmFromSizes = availRmForDebone;
+
+             if (mapping && mapping.rmSizes.length > 0) {
+               maxRmFromSizes = 0;
+               for (const sz of mapping.rmSizes) {
+                 const legKey = sz.replace(/^BL\s*/i, '');
+                 maxRmFromSizes += (sup.legSizes[legKey] || 0);
+               }
+             }
+
+             const rmToUse = Math.min(availRmForDebone, rmNeeded, maxRmFromSizes);
+             
              if (rmToUse > 0) {
                 sup.totalLegRm -= rmToUse;
                 capTracker.debonedKg += rmToUse;
+                
+                if (mapping && mapping.rmSizes.length > 0) {
+                   let toDeduct = rmToUse;
+                   for (const sz of mapping.rmSizes) {
+                     const legKey = sz.replace(/^BL\s*/i, '');
+                     const availSz = sup.legSizes[legKey] || 0;
+                     if (availSz > 0 && toDeduct > 0) {
+                       const use = Math.min(availSz, toDeduct);
+                       sup.legSizes[legKey] -= use;
+                       toDeduct -= use;
+                     }
+                   }
+                }
                 
                 productProduced = Math.round((rmToUse * rmYieldPct) * activeYield);
                 generateByproducts(dateStr, rmToUse, spec);
