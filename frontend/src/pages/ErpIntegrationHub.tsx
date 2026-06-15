@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   RefreshCw, XOctagon, AlertTriangle, CheckCircle2, Clock, 
-  FileText, Users, Package, ServerCrash, ChevronDown, ChevronRight, Loader2
+  FileText, Users, Package, ServerCrash, ChevronDown, ChevronRight, Loader2,
+  Search, ChevronLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -20,8 +21,27 @@ const ErpIntegrationHub: React.FC = () => {
   const [expandedHeader, setExpandedHeader] = useState<number | null>(null);
   const [syncResult, setSyncResult] = useState<{type: string, count: number, time: string} | null>(null);
 
+  // Pagination & Search States for Orders
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  // Pagination & Search States for Items
+  const [itemSearchQuery, setItemSearchQuery] = useState('');
+  const [itemCurrentPage, setItemCurrentPage] = useState(1);
+  const itemsPerPageItemTab = 15;
+
   useEffect(() => { fetchTargetItems(); }, []);
   useEffect(() => { if (activeTab === 'orders') { fetchOrderHeaders(); fetchOrderLines(); } }, [activeTab]);
+
+  // Reset page numbers when search queries change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setItemCurrentPage(1);
+  }, [itemSearchQuery]);
 
   // ─── Item Sync ───
   const fetchTargetItems = async () => {
@@ -82,6 +102,40 @@ const ErpIntegrationHub: React.FC = () => {
 
   const getLinesForHeader = (headerId: number) => orderLines.filter(l => l.erpOrderHeaderId === headerId);
 
+  // Filter and Paginate Orders
+  const filteredHeaders = useMemo(() => {
+    if (!searchQuery) return orderHeaders;
+    const q = searchQuery.toLowerCase();
+    return orderHeaders.filter(h => 
+      (h.erpOrderNumber && h.erpOrderNumber.toLowerCase().includes(q)) ||
+      (h.erpOrderType && h.erpOrderType.toLowerCase().includes(q)) ||
+      (h.erpCustomerName && h.erpCustomerName.toLowerCase().includes(q))
+    );
+  }, [orderHeaders, searchQuery]);
+
+  const totalPages = Math.ceil(filteredHeaders.length / itemsPerPage);
+
+  const paginatedHeaders = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredHeaders.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredHeaders, currentPage]);
+
+  // Filter and Paginate Items
+  const filteredItemCodes = useMemo(() => {
+    if (!itemSearchQuery) return itemCodes;
+    const q = itemSearchQuery.toLowerCase();
+    return itemCodes.filter(item => 
+      item.itemCode && item.itemCode.toLowerCase().includes(q)
+    );
+  }, [itemCodes, itemSearchQuery]);
+
+  const itemTotalPages = Math.ceil(filteredItemCodes.length / itemsPerPageItemTab);
+
+  const paginatedItemCodes = useMemo(() => {
+    const startIndex = (itemCurrentPage - 1) * itemsPerPageItemTab;
+    return filteredItemCodes.slice(startIndex, startIndex + itemsPerPageItemTab);
+  }, [filteredItemCodes, itemCurrentPage]);
+
   const tabs = [
     { id: 'orders', label: 'Orders Sync', icon: FileText },
     { id: 'items', label: 'Item Sync', icon: Package },
@@ -132,8 +186,25 @@ const ErpIntegrationHub: React.FC = () => {
                 <SyncButton label="Sync Lines Only" loading={isSyncing === 'lines'} onClick={handleSyncLines} variant="secondary" />
               </div>
 
+              {/* Search Bar */}
+              <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-gray-50 p-4 rounded-xl border border-gray-200/50">
+                <div className="relative w-full md:max-w-md">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <input
+                    type="text"
+                    placeholder="ค้นหา Order Number, Type หรือ Customer..."
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-all font-semibold"
+                  />
+                </div>
+                <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                  พบ {filteredHeaders.length} จาก {orderHeaders.length} รายการ
+                </div>
+              </div>
+
               {/* Order Headers + Lines Table */}
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
                 <table className="w-full text-sm text-left">
                   <thead className="text-xs text-gray-700 uppercase bg-gray-50">
                     <tr>
@@ -148,9 +219,9 @@ const ErpIntegrationHub: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {orderHeaders.length === 0 ? (
-                      <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">No order headers synced yet. Click "Sync All" to import from Oracle ERP.</td></tr>
-                    ) : orderHeaders.map((h) => {
+                    {paginatedHeaders.length === 0 ? (
+                      <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">No order headers found. Click "Sync All" to import or check search query.</td></tr>
+                    ) : paginatedHeaders.map((h) => {
                       const lines = getLinesForHeader(h.erpOrderHeaderId);
                       const isExpanded = expandedHeader === h.erpOrderHeaderId;
                       return (
@@ -195,9 +266,17 @@ const ErpIntegrationHub: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination Controls */}
+              <PaginationControls
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+                totalItems={filteredHeaders.length}
+                itemsPerPage={itemsPerPage}
+              />
             </motion.div>
           )}
-
 
           {/* ═══ ITEMS TAB ═══ */}
           {activeTab === 'items' && (
@@ -209,14 +288,32 @@ const ErpIntegrationHub: React.FC = () => {
                   <SyncButton label="Sync All Items" loading={isSyncing === 'items'} onClick={handleSyncItems} variant="primary" />
                 </div>
               </div>
+
+              {/* Search Bar for Items */}
+              <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-gray-50 p-4 rounded-xl border border-gray-200/50">
+                <div className="relative w-full md:max-w-md">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <input
+                    type="text"
+                    placeholder="ค้นหา Item Code..."
+                    value={itemSearchQuery}
+                    onChange={e => setItemSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-all font-semibold"
+                  />
+                </div>
+                <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                  พบ {filteredItemCodes.length} จาก {itemCodes.length} รายการ
+                </div>
+              </div>
+
               <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
                 <table className="w-full text-sm text-left text-gray-500">
                   <thead className="text-xs text-gray-700 uppercase bg-gray-50"><tr><th className="px-4 py-3 w-16">No.</th><th className="px-4 py-3">Item Code (SEGMENT1)</th><th className="px-4 py-3">Sync Status</th><th className="px-4 py-3">Last Sync</th><th className="px-4 py-3 text-right">Action</th></tr></thead>
                   <tbody>
-                    {itemCodes.length === 0 ? (<tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">No Item Codes added. Click "Manage Item Codes" to add some.</td></tr>
-                    ) : itemCodes.map((item, i) => (
+                    {paginatedItemCodes.length === 0 ? (<tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">No Item Codes found matching search criteria.</td></tr>
+                    ) : paginatedItemCodes.map((item, i) => (
                       <tr key={item.itemCode} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="px-4 py-3 font-medium text-gray-900">{i + 1}</td>
+                        <td className="px-4 py-3 font-medium text-gray-900">{((itemCurrentPage - 1) * itemsPerPageItemTab) + i + 1}</td>
                         <td className="px-4 py-3 font-medium text-blue-600">{item.itemCode}</td>
                         <td className="px-4 py-3">
                           {item.lastSyncStatus === 'SUCCESS' ? (
@@ -234,6 +331,15 @@ const ErpIntegrationHub: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination Controls for Items */}
+              <PaginationControls
+                currentPage={itemCurrentPage}
+                totalPages={itemTotalPages}
+                onPageChange={setItemCurrentPage}
+                totalItems={filteredItemCodes.length}
+                itemsPerPage={itemsPerPageItemTab}
+              />
             </motion.div>
           )}
 
@@ -247,9 +353,9 @@ const ErpIntegrationHub: React.FC = () => {
       {/* ═══ MODAL ═══ */}
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm" onClick={() => setIsModalOpen(false)}>
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-lg overflow-hidden">
+              className="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
               <div className="p-5 border-b border-gray-200 flex justify-between items-center">
                 <h3 className="text-lg font-bold text-gray-900">Add Item Codes</h3>
                 <button onClick={() => setIsModalOpen(false)} className="text-gray-500 hover:text-gray-700"><XOctagon className="w-5 h-5" /></button>
@@ -303,5 +409,72 @@ const SyncButton = ({ label, loading, onClick, variant }: { label: string; loadi
     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}{label}
   </button>
 );
+
+const PaginationControls = ({ currentPage, totalPages, onPageChange, totalItems, itemsPerPage }: any) => {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="bg-white px-6 py-4 border-t border-gray-100 flex items-center justify-between rounded-b-xl mt-4">
+      <div className="text-sm text-gray-500">
+        แสดง <span className="font-semibold text-gray-900">{((currentPage - 1) * itemsPerPage) + 1}</span> ถึง{' '}
+        <span className="font-semibold text-gray-900">{Math.min(currentPage * itemsPerPage, totalItems)}</span> จาก{' '}
+        <span className="font-semibold text-gray-900">{totalItems}</span> รายการ
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          disabled={currentPage === 1}
+          onClick={() => onPageChange(1)}
+          className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white text-xs font-semibold transition-colors"
+        >
+          First
+        </button>
+        <button
+          disabled={currentPage === 1}
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+          className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white text-xs font-semibold transition-colors flex items-center gap-1"
+        >
+          <ChevronLeft size={14} /> ก่อนหน้า
+        </button>
+        
+        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+          let pageNum = currentPage;
+          if (currentPage <= 3) pageNum = i + 1;
+          else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
+          else pageNum = currentPage - 2 + i;
+          
+          if (pageNum < 1 || pageNum > totalPages) return null;
+          
+          return (
+            <button
+              key={pageNum}
+              onClick={() => onPageChange(pageNum)}
+              className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${
+                currentPage === pageNum
+                  ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
+                  : 'border border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {pageNum}
+            </button>
+          );
+        })}
+        
+        <button
+          disabled={currentPage === totalPages}
+          onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+          className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white text-xs font-semibold transition-colors flex items-center gap-1"
+        >
+          ถัดไป <ChevronRight size={14} />
+        </button>
+        <button
+          disabled={currentPage === totalPages}
+          onClick={() => onPageChange(totalPages)}
+          className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white text-xs font-semibold transition-colors"
+        >
+          Last
+        </button>
+      </div>
+    </div>
+  );
+};
 
 export default ErpIntegrationHub;

@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, Save, Plus, Trash2, Box, Store } from 'lucide-react';
+import CustomSelect from '../components/common/CustomSelect';
+import CustomDatePicker from '../components/common/CustomDatePicker';
 
 const API = import.meta.env.VITE_API_URL;
+
+const PART_NAME_OPTIONS = [
+  { value: 'BIL L/C', label: 'BIL L/C' },
+  { value: 'FL', label: 'Fillet' }
+];
 
 const ExternalRmInput: React.FC = () => {
   const [supplies, setSupplies] = useState<any[]>([]);
@@ -105,7 +112,7 @@ const ExternalRmInput: React.FC = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col md:flex-row">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-visible flex flex-col md:flex-row">
         
         {/* Left Side: Form */}
         <div className="w-full md:w-1/3 p-6 bg-gray-50 border-r border-gray-200">
@@ -114,17 +121,19 @@ const ExternalRmInput: React.FC = () => {
           <div className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Received Date</label>
-              <input type="date" className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500" 
-                value={formData.receivedDate} onChange={e => setFormData({...formData, receivedDate: e.target.value})} />
+              <CustomDatePicker
+                value={formData.receivedDate}
+                onChange={val => setFormData({...formData, receivedDate: val})}
+              />
             </div>
             
             <div>
               <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Part Name</label>
-              <select className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500"
-                value={formData.partName} onChange={e => setFormData({...formData, partName: e.target.value})}>
-                <option value="BIL L/C">BIL L/C</option>
-                <option value="FL">Fillet</option>
-              </select>
+              <CustomSelect
+                options={PART_NAME_OPTIONS}
+                value={formData.partName}
+                onChange={val => setFormData({...formData, partName: val})}
+              />
             </div>
             
             <div className="grid grid-cols-2 gap-4">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Save, Plus, Trash2, Loader2, CheckCircle2, AlertTriangle, Scale, Grid3X3, Scissors, Layers } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import CustomSelect from '../components/common/CustomSelect';
 
 const API = import.meta.env.VITE_API_URL;
 
@@ -706,17 +707,13 @@ const WeightDistributionPage: React.FC = () => {
                               <span className="font-mono font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded">{item.filletSize}g</span>
                             </td>
                             <td className="px-6 py-3 text-center">
-                              <select
+                              <CustomSelect
+                                options={filletGroups.map(g => ({ value: g.name, label: g.name }))}
                                 value={currentGroup || ''}
-                                onChange={e => setFilletAssignments(prev => ({ ...prev, [item.col]: e.target.value }))}
-                                className={`w-full max-w-[200px] border rounded-xl px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-violet-300 transition-all ${currentGroup ? 'bg-violet-50 border-violet-200 text-violet-700 font-bold' : 'bg-white border-gray-200 text-gray-400'
-                                  }`}
-                              >
-                                <option value="">-- เลือกกลุ่ม --</option>
-                                {filletGroups.map(g => (
-                                  <option key={g.id} value={g.name}>{g.name}</option>
-                                ))}
-                              </select>
+                                onChange={val => setFilletAssignments(prev => ({ ...prev, [item.col]: val }))}
+                                placeholder="-- เลือกกลุ่ม --"
+                                className="w-full max-w-[200px] mx-auto text-xs"
+                              />
                             </td>
                           </tr>
                         );
@@ -730,11 +727,12 @@ const WeightDistributionPage: React.FC = () => {
             {/* ─── Group Modal (ChickenReceiving Style) ─── */}
             <AnimatePresence>
               {isGroupModalOpen && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setIsGroupModalOpen(false)}>
                   <motion.div
                     initial={{ opacity: 0, scale: 0.95, y: 20 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                    onClick={e => e.stopPropagation()}
                     className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                   >
                     {/* Modal Header */}

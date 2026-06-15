@@ -14,6 +14,8 @@ import MachineSetup from './pages/MachineSetup';
 import ExternalRmInput from './pages/ExternalRmInput';
 import BlBeltGateMatrixSetup from './pages/BlBeltGateMatrixSetup';
 import MainLayout from './components/layout/MainLayout';
+import UserManagement from './pages/UserManagement';
+
 function App() {
   return (
     <Router basename={import.meta.env.BASE_URL}>
@@ -35,6 +37,7 @@ function App() {
           <Route path="/machine-setup" element={<MachineSetup />} />
           <Route path="/bl-belt-gate-matrix" element={<BlBeltGateMatrixSetup />} />
           <Route path="/external-rm" element={<ExternalRmInput />} />
+          <Route path="/user-management" element={<UserManagement />} />
         </Route>
 
         {/* Redirect empty path to login */}

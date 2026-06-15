@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TargetSyncItem } from './target-sync-item.entity';
@@ -111,8 +111,34 @@ export class ErpIntegrationController {
 
   // Get enriched orders for Demand Management (headers + lines + item desc)
   @Get('demand-orders')
-  async getDemandOrders() {
-    return this.oracleService.getDemandOrders();
+  async getDemandOrders(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('status') status?: string,
+    @Query('searchText') searchText?: string,
+    @Query('isManual') isManual?: string,
+    @Query('shipStartDate') shipStartDate?: string,
+    @Query('shipEndDate') shipEndDate?: string,
+    @Query('headerIds') headerIds?: string,
+    @Query('lineIds') lineIds?: string,
+    @Query('grade') grade?: string,
+  ) {
+    return this.oracleService.getDemandOrders({
+      page,
+      limit,
+      startDate,
+      endDate,
+      status,
+      searchText,
+      isManual,
+      shipStartDate,
+      shipEndDate,
+      headerIds,
+      lineIds,
+      grade,
+    } as any);
   }
 
   // Create manual demand order

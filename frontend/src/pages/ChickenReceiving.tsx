@@ -1,6 +1,30 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Calendar as CalendarIcon, Plus, CalendarDays, Activity, Truck, BarChart2, Clock, MapPin, Search, X, Edit, Upload, Trash2 } from 'lucide-react';
 import ImportModal from '../components/ImportModal';
+import CustomSelect from '../components/common/CustomSelect';
+import CustomDatePicker from '../components/common/CustomDatePicker';
+
+const CHICKEN_TYPE_OPTIONS = [
+  { value: 'ไก่เนื้อ', label: 'ไก่เนื้อ' },
+  { value: 'ไก่ไข่', label: 'ไก่ไข่' },
+  { value: 'ไก่พันธุ์', label: 'ไก่พันธุ์' }
+];
+
+const SHIFT_OPTIONS = [
+  { value: 'A', label: 'Shift A (เช้า)' },
+  { value: 'B', label: 'Shift B (ดึก)' }
+];
+
+const SEX_OPTIONS = [
+  { value: 'ผู้', label: 'ตัวผู้' },
+  { value: 'เมีย', label: 'ตัวเมีย' },
+  { value: 'รวม', label: 'รวม' }
+];
+
+const HEALTH_OPTIONS = [
+  { value: 'ปกติ', label: 'ปกติ' },
+  { value: 'ไม่ปกติ', label: 'ไม่ปกติ' }
+];
 
 const tabs = [
   { id: 'monthly', label: 'Monthly Planning', icon: CalendarDays },
@@ -478,16 +502,19 @@ export default function ChickenReceiving() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1">Receive Date</label>
-            <input type="date" name="receive_date" value={formData.receive_date} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500" />
+            <CustomDatePicker
+              value={formData.receive_date}
+              onChange={(val) => setFormData({ ...formData, receive_date: val })}
+            />
           </div>
           {['monthly', 'weekly'].includes(activeTab) ? (
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Chicken Type</label>
-              <select name="chicken_type" value={formData.chicken_type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-                <option value="ไก่เนื้อ">ไก่เนื้อ</option>
-                <option value="ไก่ไข่">ไก่ไข่</option>
-                <option value="ไก่พันธุ์">ไก่พันธุ์</option>
-              </select>
+              <CustomSelect
+                options={CHICKEN_TYPE_OPTIONS}
+                value={formData.chicken_type}
+                onChange={(val) => setFormData({ ...formData, chicken_type: val })}
+              />
             </div>
           ) : (
             <div>
@@ -502,19 +529,20 @@ export default function ChickenReceiving() {
             {activeTab !== 'weekly' && (
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">Chicken Type</label>
-                <select name="chicken_type" value={formData.chicken_type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-                  <option value="ไก่เนื้อ">ไก่เนื้อ</option>
-                  <option value="ไก่ไข่">ไก่ไข่</option>
-                  <option value="ไก่พันธุ์">ไก่พันธุ์</option>
-                </select>
+                <CustomSelect
+                  options={CHICKEN_TYPE_OPTIONS}
+                  value={formData.chicken_type}
+                  onChange={(val) => setFormData({ ...formData, chicken_type: val })}
+                />
               </div>
             )}
             <div className={activeTab === 'weekly' ? 'col-span-2' : ''}>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Shift</label>
-              <select name="shift" value={formData.shift} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-                <option value="A">Shift A (เช้า)</option>
-                <option value="B">Shift B (ดึก)</option>
-              </select>
+              <CustomSelect
+                options={SHIFT_OPTIONS}
+                value={formData.shift}
+                onChange={(val) => setFormData({ ...formData, shift: val })}
+              />
             </div>
           </div>
         )}
@@ -554,20 +582,21 @@ export default function ChickenReceiving() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">Sex (เพศ)</label>
-                <select name="sex" value={formData.sex} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-                  <option value="ผู้">ตัวผู้</option>
-                  <option value="เมีย">ตัวเมีย</option>
-                  <option value="รวม">รวม</option>
-                </select>
+                <CustomSelect
+                  options={SEX_OPTIONS}
+                  value={formData.sex}
+                  onChange={(val) => setFormData({ ...formData, sex: val })}
+                />
               </div>
 
               {activeTab === 'weekly' && (
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1">Health Status</label>
-                  <select name="health" value={formData.health} onChange={handleInputChange} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-                    <option value="ปกติ">ปกติ</option>
-                    <option value="ไม่ปกติ">ไม่ปกติ</option>
-                  </select>
+                  <CustomSelect
+                    options={HEALTH_OPTIONS}
+                    value={formData.health}
+                    onChange={(val) => setFormData({ ...formData, health: val })}
+                  />
                 </div>
               )}
             </div>
@@ -732,10 +761,9 @@ export default function ChickenReceiving() {
         )}
       </div>
 
-      {/* CRUD Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl border border-gray-200 flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setIsModalOpen(false)}>
+          <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl border border-gray-200 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl">
               <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                 {formData.id ? <Edit size={20} className="text-orange-500" /> : <Plus size={20} className="text-orange-500" />}
@@ -746,7 +774,7 @@ export default function ChickenReceiving() {
               </button>
             </div>
 
-            <div className="px-6 py-5 overflow-y-auto flex-1">
+            <div className="px-6 py-5 overflow-y-auto flex-1 min-h-[380px]">
               {renderModalForm()}
             </div>
 

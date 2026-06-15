@@ -1,9 +1,10 @@
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import {
   Sun, Menu, LayoutDashboard, TrendingUp, CalendarDays,
   Truck, Activity, Users, Settings,
-  ClipboardList, Scale, RefreshCw, PieChart, Scissors, ChevronDown, ChevronRight
+  ClipboardList, Scale, RefreshCw, PieChart, Scissors, ChevronDown, ChevronRight,
+  LogOut
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -71,7 +72,8 @@ const menuGroups: MenuGroup[] = [
     items: [
       { title: "ERP Integration Hub", icon: RefreshCw, path: "/erp-integration" },
       { title: "Machine & Flow Setup", icon: Settings, path: "/machine-setup" },
-      { title: "BL Belt Gate Matrix", icon: Settings, path: "/bl-belt-gate-matrix" }
+      { title: "BL Belt Gate Matrix", icon: Settings, path: "/bl-belt-gate-matrix" },
+      { title: "User Management", icon: Users, path: "/user-management" }
       /*{ title: "Reports & Analytics", icon: BarChart3, path: "/reports" },
       { title: "Master Data", icon: Database, path: "/master-data" },
       { title: "Workflow & Alerts", icon: Bell, path: "/workflow" },
@@ -82,11 +84,17 @@ const menuGroups: MenuGroup[] = [
 
 export default function Sidebar({ isOpen, toggleSidebar }: { isOpen: boolean, toggleSidebar: () => void }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [openDropdowns, setOpenDropdowns] = useState<Record<string, boolean>>({});
 
   const toggleDropdown = (title: string) => {
     setOpenDropdowns(prev => ({ ...prev, [title]: !prev[title] }));
     if (!isOpen) toggleSidebar();
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    navigate('/login');
   };
 
   return (
@@ -177,15 +185,31 @@ export default function Sidebar({ isOpen, toggleSidebar }: { isOpen: boolean, to
       </div>
 
       <div className="p-4 border-t border-gray-100 shrink-0 bg-gray-50/50">
-        <div className={`flex items-center ${isOpen ? 'gap-3' : 'justify-center'} cursor-pointer hover:bg-gray-100 p-2 rounded-xl transition-colors`}>
-          <div className="w-9 h-9 shrink-0 rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold shadow-sm ring-2 ring-white">
+        <div className={`flex items-center ${isOpen ? 'gap-3' : 'justify-center'} p-2 rounded-xl`}>
+          <div className="w-9 h-9 shrink-0 rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold shadow-sm ring-2 ring-white select-none">
             AK
           </div>
-          <div className={`flex-1 overflow-hidden transition-all duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 w-0 hidden'}`}>
+          <div className={`flex-1 overflow-hidden transition-all duration-300 ${isOpen ? 'opacity-100 w-auto' : 'opacity-0 w-0 hidden'}`}>
             <div className="text-sm font-bold text-gray-900 truncate">Akashi Planner</div>
             <div className="text-xs text-gray-500 truncate">Production Executive</div>
           </div>
+          <button 
+            onClick={handleLogout}
+            title="ออกจากระบบ"
+            className={`p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors shrink-0 ${isOpen ? 'block' : 'hidden'}`}
+          >
+            <LogOut size={18} />
+          </button>
         </div>
+        {!isOpen && (
+          <button
+            onClick={handleLogout}
+            title="ออกจากระบบ"
+            className="w-full mt-2 p-2 flex justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+          >
+            <LogOut size={18} />
+          </button>
+        )}
       </div>
     </aside>
   );

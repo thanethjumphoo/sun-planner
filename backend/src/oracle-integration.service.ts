@@ -567,13 +567,146 @@ export class OracleIntegrationService implements OnModuleDestroy {
   /**
    * ดึงข้อมูล Orders สำหรับ Demand Management (Header + Lines + Item Desc จาก stg_erp_items)
    */
-  async getDemandOrders(): Promise<any[]> {
-    // Limit to recent 1000 headers to prevent Out of Memory
-    const headers = await this.stgErpOrderHeaderRepository.find({
-      order: { erpOrderDate: 'DESC' }
-    });
+  async getDemandOrders(query?: {
+    page?: string;
+    limit?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: string;
+    searchText?: string;
+    isManual?: string;
+    shipStartDate?: string;
+    shipEndDate?: string;
+    grade?: string;
+  }): Promise<any> {
+    const page = query?.page;
+    const limit = query?.limit;
+    const startDate = query?.startDate;
+    const endDate = query?.endDate;
+    const status = query?.status;
+    const searchText = query?.searchText;
+    const isManual = query?.isManual;
+    const shipStartDate = query?.shipStartDate;
+    const shipEndDate = query?.shipEndDate;
+    const grade = query?.grade;
+    const headerIdsParam = (query as any)?.headerIds;
+    const lineIdsParam = (query as any)?.lineIds;
 
-    if (headers.length === 0) return [];
+    const queryBuilder = this.stgErpOrderHeaderRepository.createQueryBuilder('header');
+
+    if (startDate && endDate) {
+      queryBuilder.andWhere('header.erpOrderDate BETWEEN :startDate AND :endDate', { startDate, endDate });
+    } else if (startDate) {
+      queryBuilder.andWhere('header.erpOrderDate >= :startDate', { startDate });
+    } else if (endDate) {
+      queryBuilder.andWhere('header.erpOrderDate <= :endDate', { endDate });
+    }
+
+    if (shipStartDate && shipEndDate) {
+      let subQueryCondition = `header.erpOrderHeaderId IN (
+        SELECT DISTINCT l.erp_order_header_id 
+        FROM stg_erp_order_lines l 
+        WHERE l.erp_order_ship_date BETWEEN :shipStartDate AND :shipEndDate
+      )`;
+      
+      const binds: any = { shipStartDate, shipEndDate };
+      const orConditions = [];
+
+      if (headerIdsParam) {
+        const ids = headerIdsParam.split(',').map((id: string) => parseInt(id.trim(), 10)).filter(Boolean);
+        if (ids.length > 0) {
+          orConditions.push(`header.erpOrderHeaderId IN (:...headerIds)`);
+          binds.headerIds = ids;
+        }
+      }
+
+      if (lineIdsParam) {
+        const lineIds = lineIdsParam.split(',').map((id: string) => parseInt(id.trim(), 10)).filter(Boolean);
+        if (lineIds.length > 0) {
+          orConditions.push(`header.erpOrderHeaderId IN (
+            SELECT DISTINCT l2.erp_order_header_id 
+            FROM stg_erp_order_lines l2 
+            WHERE l2.erp_order_line_id IN (:...lineIds)
+          )`);
+          binds.lineIds = lineIds;
+        }
+      }
+
+      if (orConditions.length > 0) {
+        subQueryCondition = `(${subQueryCondition} OR ${orConditions.join(' OR ')})`;
+      }
+      
+      queryBuilder.andWhere(subQueryCondition, binds);
+    } else {
+      const binds: any = {};
+      const orConditions = [];
+
+      if (headerIdsParam) {
+        const ids = headerIdsParam.split(',').map((id: string) => parseInt(id.trim(), 10)).filter(Boolean);
+        if (ids.length > 0) {
+          orConditions.push(`header.erpOrderHeaderId IN (:...headerIds)`);
+          binds.headerIds = ids;
+        }
+      }
+
+      if (lineIdsParam) {
+        const lineIds = lineIdsParam.split(',').map((id: string) => parseInt(id.trim(), 10)).filter(Boolean);
+        if (lineIds.length > 0) {
+          orConditions.push(`header.erpOrderHeaderId IN (
+            SELECT DISTINCT l2.erp_order_header_id 
+            FROM stg_erp_order_lines l2 
+            WHERE l2.erp_order_line_id IN (:...lineIds)
+          )`);
+          binds.lineIds = lineIds;
+        }
+      }
+
+      if (orConditions.length > 0) {
+        queryBuilder.andWhere(`(${orConditions.join(' OR ')})`, binds);
+      }
+    }
+
+    if (status && status !== 'ALL') {
+      queryBuilder.andWhere('header.erpOrderStatus = :status', { status });
+    }
+
+    if (grade && grade !== 'ALL') {
+      queryBuilder.andWhere('header.erpCustomerGrade = :grade', { grade });
+    }
+
+    if (isManual !== undefined) {
+      queryBuilder.andWhere('header.isManual = :isManual', { isManual: isManual === 'true' ? 1 : 0 });
+    }
+
+    if (searchText) {
+      queryBuilder.andWhere(
+        '(header.erpOrderNumber LIKE :search OR header.erpCustomerName LIKE :search OR header.erpCustomerNumber LIKE :search)',
+        { search: `%${searchText}%` }
+      );
+    }
+
+    queryBuilder.orderBy('header.erpOrderDate', 'DESC');
+
+    let headers: StgErpOrderHeader[];
+    let total = 0;
+    const pageNum = page ? parseInt(page, 10) : undefined;
+    const limitNum = limit ? parseInt(limit, 10) : undefined;
+
+    if (pageNum && limitNum) {
+      queryBuilder.skip((pageNum - 1) * limitNum).take(limitNum);
+      const [data, count] = await queryBuilder.getManyAndCount();
+      headers = data;
+      total = count;
+    } else {
+      queryBuilder.take(1000);
+      headers = await queryBuilder.getMany();
+    }
+
+    if (headers.length === 0) {
+      return pageNum && limitNum
+        ? { success: true, data: [], total: 0, page: pageNum, limit: limitNum, totalPages: 0 }
+        : [];
+    }
 
     const headerIds = headers.map(h => h.erpOrderHeaderId);
 
@@ -624,7 +757,7 @@ export class OracleIntegrationService implements OnModuleDestroy {
       }
     }
 
-    return headers.map((h) => ({
+    const mappedData = headers.map((h) => ({
       ...h,
       lines: lines
         .filter((l) => l.erpOrderHeaderId === h.erpOrderHeaderId)
@@ -638,6 +771,19 @@ export class OracleIntegrationService implements OnModuleDestroy {
           totalAllocatedQty: allocationMap.get(l.erpOrderLineId) || 0,
         })),
     }));
+
+    if (pageNum && limitNum) {
+      return {
+        success: true,
+        data: mappedData,
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum),
+      };
+    } else {
+      return mappedData;
+    }
   }
 
   /**

@@ -1,7 +1,31 @@
 import { useState, useEffect, useMemo } from 'react';
-import { TrendingUp, Search, Filter, ChevronLeft, ArrowUpDown, Package, AlertTriangle, Calendar, Hash, User, FileText, Tag, Clock, Plus, Trash2, X } from 'lucide-react';
+import { TrendingUp, Search, Filter, ChevronLeft, ChevronRight, ArrowUpDown, Package, AlertTriangle, Calendar, Hash, User, FileText, Tag, Clock, Plus, Trash2, X } from 'lucide-react';
+import CustomSelect from '../components/common/CustomSelect';
+import CustomDatePicker from '../components/common/CustomDatePicker';
 
 const API = import.meta.env.VITE_API_URL;
+
+const STATUS_OPTIONS = [
+  { value: 'ALL', label: 'All Status' },
+  { value: 'BOOKED', label: 'BOOKED' },
+  { value: 'ENTERED', label: 'ENTERED' },
+  { value: 'CANCELLED', label: 'CANCELLED' },
+  { value: 'CLOSED', label: 'CLOSED' }
+];
+
+const GRADE_OPTIONS = [
+  { value: 'ALL', label: 'All Grades' },
+  { value: 'A', label: 'Grade A' },
+  { value: 'B', label: 'Grade B' },
+  { value: 'C', label: 'Grade C' },
+  { value: 'S', label: 'Grade S' }
+];
+
+const PLAN_TYPE_OPTIONS = [
+  { value: 'IVQF', label: 'IVQF (Internal Forecast)' },
+  { value: 'YTR', label: 'YTR (Stock Replenishment)' },
+  { value: 'OTHER', label: 'OTHER' }
+];
 
 interface OrderLine {
   id: number; erpOrderLineId: number; erpOrderHeaderId: number; erpOrderLineNumber: string;
@@ -27,6 +51,12 @@ export default function DemandManagement() {
   const [sortField, setSortField] = useState<'date' | 'customer' | 'number'>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const limit = 50;
+
   // Add Modal State
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingOrderId, setEditingOrderId] = useState<number | null>(null);
@@ -39,18 +69,61 @@ export default function DemandManagement() {
     lines: [{ erpOrderItemCode: '', erpOrderItemQty: 0, erpOrderShipDate: new Date().toISOString().split('T')[0] }]
   });
 
+  // Debounced search text to avoid spamming the backend
+  const [debouncedSearchText, setDebouncedSearchText] = useState(searchText);
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearchText(searchText);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchText]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [activeTab, debouncedSearchText, filterStatus, filterGrade]);
+
+  // Fetch orders when page or filters change
   useEffect(() => {
     fetchOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, activeTab, debouncedSearchText, filterStatus, filterGrade]);
+
+  useEffect(() => {
     fetchItems();
   }, []);
 
   const fetchOrders = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/erp/demand-orders`);
-      if (res.ok) setOrders(await res.json());
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
+      const queryParams = new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+        isManual: String(activeTab === 'MANUAL'),
+      });
+
+      if (debouncedSearchText) queryParams.append('searchText', debouncedSearchText);
+      if (filterStatus !== 'ALL') queryParams.append('status', filterStatus);
+      if (filterGrade !== 'ALL') queryParams.append('grade', filterGrade);
+
+      const res = await fetch(`${API}/api/erp/demand-orders?${queryParams.toString()}`);
+      if (res.ok) {
+        const result = await res.json();
+        if (result.success) {
+          setOrders(result.data || []);
+          setTotal(result.total || 0);
+          setTotalPages(result.totalPages || 1);
+        } else {
+          setOrders(Array.isArray(result) ? result : []);
+          setTotal(Array.isArray(result) ? result.length : 0);
+          setTotalPages(1);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchItems = async () => {
@@ -60,28 +133,10 @@ export default function DemandManagement() {
     } catch (err) { console.error(err); }
   };
 
-  // Unique values for filters
-  const statuses = useMemo(() => ['ALL', ...new Set(orders.map(o => o.erpOrderStatus).filter(Boolean))], [orders]);
-  const grades = useMemo(() => ['ALL', ...new Set(orders.map(o => o.erpCustomerGrade).filter(Boolean))], [orders]);
 
-  // Filtered & sorted orders
-  const filteredOrders = useMemo(() => {
-    let result = orders.filter(o => {
-      // Tab filter
-      if (activeTab === 'ERP' && o.isManual) return false;
-      if (activeTab === 'MANUAL' && !o.isManual) return false;
-
-      if (filterStatus !== 'ALL' && o.erpOrderStatus !== filterStatus) return false;
-      if (filterGrade !== 'ALL' && o.erpCustomerGrade !== filterGrade) return false;
-      if (searchText) {
-        const s = searchText.toLowerCase();
-        return (o.erpOrderNumber || '').toLowerCase().includes(s) ||
-               (o.erpCustomerName || '').toLowerCase().includes(s) ||
-               (o.erpCustomerNumber || '').toLowerCase().includes(s);
-      }
-      return true;
-    });
-
+  // Sorted orders (already filtered & paginated on the server)
+  const sortedOrders = useMemo(() => {
+    const result = [...orders];
     result.sort((a, b) => {
       let cmp = 0;
       if (sortField === 'date') cmp = new Date(a.erpOrderDate).getTime() - new Date(b.erpOrderDate).getTime();
@@ -89,12 +144,11 @@ export default function DemandManagement() {
       else cmp = (a.erpOrderNumber || '').localeCompare(b.erpOrderNumber || '');
       return sortDir === 'desc' ? -cmp : cmp;
     });
-
     return result;
-  }, [orders, searchText, filterStatus, filterGrade, sortField, sortDir, activeTab]);
+  }, [orders, sortField, sortDir]);
 
-  const totalQty = useMemo(() => filteredOrders.reduce((sum, o) => sum + o.lines.reduce((s, l) => s + Number(l.erpOrderItemQty || 0), 0), 0), [filteredOrders]);
-  const totalLines = useMemo(() => filteredOrders.reduce((sum, o) => sum + o.lines.length, 0), [filteredOrders]);
+  const totalQty = useMemo(() => orders.reduce((sum, o) => sum + o.lines.reduce((s, l) => s + Number(l.erpOrderItemQty || 0), 0), 0), [orders]);
+  const totalLines = useMemo(() => orders.reduce((sum, o) => sum + o.lines.length, 0), [orders]);
 
   const toggleSort = (field: typeof sortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -253,10 +307,10 @@ export default function DemandManagement() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-slide-up delay-100">
-        <SummaryCard icon={FileText} label="Total Orders" value={filteredOrders.length} color={activeTab === 'ERP' ? 'orange' : 'blue'} />
+        <SummaryCard icon={FileText} label="Total Orders" value={total} color={activeTab === 'ERP' ? 'orange' : 'blue'} />
         <SummaryCard icon={Hash} label="Total Lines" value={totalLines} color="blue" />
         <SummaryCard icon={Package} label="Total Qty" value={totalQty.toLocaleString()} color="emerald" />
-        <SummaryCard icon={User} label="Customers" value={new Set(filteredOrders.map(o => o.erpCustomerNumber)).size} color="purple" />
+        <SummaryCard icon={User} label="Customers" value={new Set(orders.map(o => o.erpCustomerNumber)).size} color="purple" />
       </div>
 
       {/* Filter Bar */}
@@ -268,16 +322,22 @@ export default function DemandManagement() {
         </div>
         {activeTab === 'ERP' && (
           <>
-            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-              {statuses.map(s => <option key={s} value={s}>{s === 'ALL' ? 'All Status' : s}</option>)}
-            </select>
-            <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-orange-500">
-              {grades.map(g => <option key={g} value={g}>{g === 'ALL' ? 'All Grades' : `Grade ${g}`}</option>)}
-            </select>
+            <CustomSelect
+              options={STATUS_OPTIONS}
+              value={filterStatus}
+              onChange={setFilterStatus}
+              className="w-40"
+            />
+            <CustomSelect
+              options={GRADE_OPTIONS}
+              value={filterGrade}
+              onChange={setFilterGrade}
+              className="w-40"
+            />
           </>
         )}
         <div className="flex items-center gap-3 ml-auto">
-          <div className="flex items-center gap-1 text-xs text-gray-400"><Filter size={14} /> {filteredOrders.length} filtered</div>
+          <div className="flex items-center gap-1 text-xs text-gray-400"><Filter size={14} /> {total} filtered</div>
           {activeTab === 'MANUAL' && (
             <button onClick={() => {
               setEditingOrderId(null);
@@ -324,14 +384,14 @@ export default function DemandManagement() {
                 <tr><td colSpan={activeTab === 'MANUAL' ? 9 : 8} className="px-5 py-16 text-center text-gray-400">
                   <div className="flex flex-col items-center gap-2"><Clock className="w-8 h-8 animate-pulse" /><span>Loading orders...</span></div>
                 </td></tr>
-              ) : filteredOrders.length === 0 ? (
+              ) : sortedOrders.length === 0 ? (
                 <tr><td colSpan={activeTab === 'MANUAL' ? 9 : 8} className="px-5 py-16 text-center text-gray-400">
                   <div className="flex flex-col items-center gap-2">
                     <TrendingUp className="w-8 h-8" />
                     <span>{activeTab === 'ERP' ? 'No orders found. Sync data from ERP Integration Hub first.' : 'No manual orders found. Click "Add Manual Plan" to create one.'}</span>
                   </div>
                 </td></tr>
-              ) : filteredOrders.map(o => {
+              ) : sortedOrders.map(o => {
                 const lineQty = o.lines.reduce((s, l) => s + Number(l.erpOrderItemQty || 0), 0);
                 return (
                   <tr key={o.id} onClick={() => setSelectedOrder(o)}
@@ -365,13 +425,78 @@ export default function DemandManagement() {
             </tbody>
           </table>
         </div>
+        
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <div className="bg-white px-6 py-4 border-t border-gray-100 flex items-center justify-between">
+            <div className="text-sm text-gray-500">
+              แสดง <span className="font-semibold text-gray-900">{((page - 1) * limit) + 1}</span> ถึง{' '}
+              <span className="font-semibold text-gray-900">{Math.min(page * limit, total)}</span> จาก{' '}
+              <span className="font-semibold text-gray-900">{total}</span> รายการ
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                disabled={page === 1}
+                onClick={() => setPage(1)}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white text-xs font-semibold transition-colors"
+              >
+                First
+              </button>
+              <button
+                disabled={page === 1}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white text-xs font-semibold transition-colors flex items-center gap-1"
+              >
+                <ChevronLeft size={14} /> ก่อนหน้า
+              </button>
+              
+              {/* Page Numbers */}
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pageNum = page;
+                if (page <= 3) pageNum = i + 1;
+                else if (page >= totalPages - 2) pageNum = totalPages - 4 + i;
+                else pageNum = page - 2 + i;
+                
+                if (pageNum < 1 || pageNum > totalPages) return null;
+                
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setPage(pageNum)}
+                    className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${
+                      page === pageNum
+                        ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
+                        : 'border border-gray-200 text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+              
+              <button
+                disabled={page === totalPages}
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white text-xs font-semibold transition-colors flex items-center gap-1"
+              >
+                ถัดไป <ChevronRight size={14} />
+              </button>
+              <button
+                disabled={page === totalPages}
+                onClick={() => setPage(totalPages)}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white text-xs font-semibold transition-colors"
+              >
+                Last
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Add/Edit Manual Order Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-scale-in">
-            <div className={`px-6 py-4 border-b border-gray-100 flex items-center justify-between ${editingOrderId ? 'bg-amber-500' : 'bg-blue-600'} text-white`}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowAddModal(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col animate-scale-in" onClick={e => e.stopPropagation()}>
+            <div className={`px-6 py-4 border-b border-gray-100 flex items-center justify-between ${editingOrderId ? 'bg-amber-500' : 'bg-blue-600'} text-white rounded-t-2xl`}>
               <h3 className="text-lg font-bold">{editingOrderId ? 'Edit Manual Demand Plan' : 'Add Manual Demand Plan'}</h3>
               <button onClick={() => setShowAddModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors"><X size={20} /></button>
             </div>
@@ -384,11 +509,11 @@ export default function DemandManagement() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-gray-500 uppercase">Plan Type</label>
-                  <select value={newOrder.erpOrderType} onChange={e => setNewOrder({...newOrder, erpOrderType: e.target.value})} className="w-full px-4 py-2 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
-                    <option value="IVQF">IVQF (Internal Forecast)</option>
-                    <option value="YTR">YTR (Stock Replenishment)</option>
-                    <option value="OTHER">OTHER</option>
-                  </select>
+                  <CustomSelect
+                    options={PLAN_TYPE_OPTIONS}
+                    value={newOrder.erpOrderType}
+                    onChange={val => setNewOrder({...newOrder, erpOrderType: val})}
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-gray-500 uppercase">Customer / Purpose</label>
@@ -396,7 +521,10 @@ export default function DemandManagement() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-gray-500 uppercase">Plan Date</label>
-                  <input type="date" value={newOrder.erpOrderDate} onChange={e => setNewOrder({...newOrder, erpOrderDate: e.target.value})} className="w-full px-4 py-2 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" />
+                  <CustomDatePicker
+                    value={newOrder.erpOrderDate}
+                    onChange={val => setNewOrder({...newOrder, erpOrderDate: val})}
+                  />
                 </div>
               </div>
 
@@ -434,11 +562,14 @@ export default function DemandManagement() {
                       </div>
                       <div className="w-44 space-y-1">
                         <label className="text-[10px] font-bold text-gray-400 uppercase">Target Date</label>
-                        <input type="date" value={line.erpOrderShipDate} onChange={e => {
-                          const updated = [...newOrder.lines];
-                          updated[idx].erpOrderShipDate = e.target.value;
-                          setNewOrder({...newOrder, lines: updated});
-                        }} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-blue-500" />
+                        <CustomDatePicker
+                          value={line.erpOrderShipDate}
+                          onChange={(val) => {
+                            const updated = [...newOrder.lines];
+                            updated[idx].erpOrderShipDate = val;
+                            setNewOrder({...newOrder, lines: updated});
+                          }}
+                        />
                       </div>
                       <button onClick={() => {
                         const updated = newOrder.lines.filter((_, i) => i !== idx);

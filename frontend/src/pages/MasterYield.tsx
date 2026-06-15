@@ -4,6 +4,16 @@ import {
   GitMerge, Plus, Trash2, Edit2, Save, X, ChevronDown, ChevronRight, Package, Leaf
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import CustomSelect from '../components/common/CustomSelect';
+
+const YIELD_TYPE_OPTIONS = [
+  { value: 'ROOT', label: 'ROOT (ระดับตั้งต้น)' },
+  { value: 'CATEGORY', label: 'CATEGORY (หมวดหมู่/ชิ้นส่วนหลัก)' },
+  { value: 'PROCESS', label: 'PROCESS (กระบวนการ)' },
+  { value: 'PRODUCT', label: 'PRODUCT (ผลิตภัณฑ์หลัก)' },
+  { value: 'CO-PRODUCT', label: 'CO-PRODUCT (ผลิตภัณฑ์ร่วม)' },
+  { value: 'BY-PRODUCT', label: 'BY-PRODUCT (ผลพลอยได้)' }
+];
 
 interface MasterYieldNode {
   id: string;
@@ -183,11 +193,12 @@ export default function MasterYield() {
       {/* Modal */}
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm" onClick={() => setIsModalOpen(false)}>
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }} 
               animate={{ opacity: 1, scale: 1 }} 
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={e => e.stopPropagation()}
               className={`bg-white rounded-2xl shadow-2xl border border-gray-200 w-full overflow-hidden ${
                 !editMode && ['PRODUCT', 'CO-PRODUCT', 'BY-PRODUCT'].includes(formData.type) 
                   ? 'max-w-3xl' 
@@ -201,18 +212,11 @@ export default function MasterYield() {
               <div className="p-5 space-y-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">ประเภท (Type)</label>
-                  <select 
-                    value={formData.type} 
-                    onChange={e => setFormData({ ...formData, type: e.target.value })} 
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
-                  >
-                    <option value="ROOT">ROOT (ระดับตั้งต้น)</option>
-                    <option value="CATEGORY">CATEGORY (หมวดหมู่/ชิ้นส่วนหลัก)</option>
-                    <option value="PROCESS">PROCESS (กระบวนการ)</option>
-                    <option value="PRODUCT">PRODUCT (ผลิตภัณฑ์หลัก)</option>
-                    <option value="CO-PRODUCT">CO-PRODUCT (ผลิตภัณฑ์ร่วม)</option>
-                    <option value="BY-PRODUCT">BY-PRODUCT (ผลพลอยได้)</option>
-                  </select>
+                  <CustomSelect
+                    options={YIELD_TYPE_OPTIONS}
+                    value={formData.type}
+                    onChange={val => setFormData({ ...formData, type: val })}
+                  />
                 </div>
 
                 {(() => {
