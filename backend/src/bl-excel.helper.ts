@@ -7,7 +7,8 @@ export async function generateBlExcelPlan(
   plan: MpsPlan,
   orders: MpsPlanOrder[],
   specs: ProductSpec[],
-  orderHeaders: StgErpOrderHeader[]
+  orderHeaders: StgErpOrderHeader[],
+  blColLabelsMap: Record<string, string>
 ): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('BL MPS Plan');
@@ -91,6 +92,10 @@ export async function generateBlExcelPlan(
         }
       });
 
+      const initialRems: { bilSz: string, rem: number, totalQty: number }[] = [];
+      let sumInitialRem = 0;
+      let sumTotalQty = 0;
+
       Object.keys(bilSizesMap).forEach(bilSz => {
         const internalQty = bilSizesMap[bilSz];
         const totalQty = internalQty;
@@ -99,9 +104,26 @@ export async function generateBlExcelPlan(
           if (bilSz.toLowerCase().replace(/\s+/g, '') === dSize.toLowerCase().replace(/\s+/g, '')) demand += dQty;
         }
         const rem = Math.max(0, totalQty - demand);
-        if (rem > 0) {
-          const blSz = `BL ${bilSz}`;
-          const blQty = rem * 0.75;
+        initialRems.push({ bilSz, rem, totalQty });
+        sumInitialRem += rem;
+        sumTotalQty += totalQty;
+      });
+
+      const trk = (supply as any)._tracker || {};
+      const rm = trk.rmBreakdown || {};
+      const blRmTotal = Number(rm.bl || 0);
+
+      initialRems.forEach(({ bilSz, rem, totalQty }) => {
+        let finalRem = 0;
+        if (sumInitialRem > 0) {
+          finalRem = rem * (blRmTotal / sumInitialRem);
+        } else if (sumTotalQty > 0) {
+          finalRem = totalQty * (blRmTotal / sumTotalQty);
+        }
+
+        if (finalRem > 0) {
+          const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
+          const blQty = finalRem * 0.75;
           blSizesFrontend[blSz] = {
             internalVal: (blSizesFrontend[blSz]?.internalVal || 0) + blQty,
             externalVal: 0,

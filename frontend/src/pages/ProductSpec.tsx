@@ -136,8 +136,8 @@ const ProductSpec: React.FC = () => {
     if (!editingId) return;
     setSaving(true);
     try {
-      const r = await fetch(`${API}/api/product-spec/${editingId}/update`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const r = await fetch(`${API}/api/product-spec/${editingId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editData),
       });
       const d = await r.json();

@@ -78,6 +78,7 @@ export class MpsController {
       'fillet': ['สันใน'],
       'bil': ['BIL L/C', 'BIL S/C'],
       'bl': ['BL Processing', 'RM: BL (ทั้งชิ้น)', 'RM: BLDR (น่อง)', 'RM: BLT (สะโพก)'],
+      'leg': ['BIL L/C', 'BIL S/C', 'BL Processing', 'RM: BL (ทั้งชิ้น)', 'RM: BLDR (น่อง)', 'RM: BLT (สะโพก)'],
     };
     const categoryNames = categoryMap[partType];
     if (!categoryNames) return null;
@@ -2621,9 +2622,18 @@ export class MpsController {
       orders = orders.filter(o => allowedAndByproductCodes.includes(o.itemCode));
     }
 
+    // Fetch BIL to BL mapping
+    const bilWeightDist = await this.bilWeightDistRepo.find();
+    const blColLabelsMap: Record<string, string> = {};
+    bilWeightDist.forEach(w => {
+      if (w.blColLabel) {
+        blColLabelsMap[w.colLabel] = w.blColLabel;
+      }
+    });
+
     if (isBlPlan) {
       const specs = await this.specRepo.find();
-      const blWorkbook = await generateBlExcelPlan(plan, orders, specs, []);
+      const blWorkbook = await generateBlExcelPlan(plan, orders, specs, [], blColLabelsMap);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename=MPS_Plan_BL_${plan.targetMonth}.xlsx`);
       await blWorkbook.xlsx.write(res);
@@ -2713,14 +2723,6 @@ export class MpsController {
       externalRmMap.set(dateKey, ext);
     });
 
-    // Fetch BIL to BL mapping
-    const bilWeightDist = await this.bilWeightDistRepo.find();
-    const blColLabelsMap: Record<string, string> = {};
-    bilWeightDist.forEach(w => {
-      if (w.blColLabel) {
-        blColLabelsMap[w.colLabel] = w.blColLabel;
-      }
-    });
     // Distinct BL Size headers
     const uniqueBlSizes = [...new Set(Object.values(blColLabelsMap))].sort();
 

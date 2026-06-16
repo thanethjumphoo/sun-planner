@@ -91,7 +91,7 @@ const MPSPlan: React.FC = () => {
   // BIL Distribution Data
   const [, setBilMatrix] = useState<Record<string, Record<string, number>>>({});
   const [blColLabelsMap, setBlColLabelsMap] = useState<Record<string, string>>({});
-  const [bilColLabels, setBilColLabels] = useState<string[]>([]);
+  const [, setBilColLabels] = useState<string[]>([]);
 
   const fetchYieldNodes = async () => {
     try {
@@ -271,7 +271,12 @@ const MPSPlan: React.FC = () => {
 
   const fetchDemandOrders = async () => {
     try {
-      const res = await fetch(`${API}/api/erp/demand-orders`);
+      const year = currentMonth.getFullYear();
+      const month = currentMonth.getMonth();
+      const shipStartDate = new Date(year, month - 3, 1).toISOString();
+      const shipEndDate = new Date(year, month + 2, 0).toISOString();
+      
+      const res = await fetch(`${API}/api/erp/demand-orders?shipStartDate=${shipStartDate}&shipEndDate=${shipEndDate}`);
       if (res.ok) {
         const data = await res.json();
         setDemandOrders(data);
@@ -1098,17 +1103,22 @@ const MPSPlan: React.FC = () => {
 
     const filteredLines = header.lines.filter((line: any) => {
       if (!line.erpOrderShipDate) return false;
-      if (!specs[line.erpOrderItemCode]) return false;
+      // if (!specs[line.erpOrderItemCode]) return false;
       // Filter by allowed item codes from Master Yield Tree
       if (allowedItemCodes.length > 0 && !allowedItemCodes.includes(line.erpOrderItemCode)) return false;
       
       const shipDate = new Date(line.erpOrderShipDate);
-      const isShipMonth = shipDate.getFullYear() === currentMonth.getFullYear() &&
-        shipDate.getMonth() === currentMonth.getMonth();
+      
+      const monthDiff = (shipDate.getFullYear() - currentMonth.getFullYear()) * 12 + 
+                        (shipDate.getMonth() - currentMonth.getMonth());
+                        
+      // Show orders shipping in the current month, plus up to 2 months ahead 
+      // (to account for maxProductLead times like 30-60 days)
+      const isUpcomingShipment = monthDiff >= 0 && monthDiff <= 2;
 
       const hasPlannedProductionThisMonth = plannedOrders.some((o: any) => o.erpOrderLineId === line.erpOrderLineId);
 
-      return isShipMonth || hasPlannedProductionThisMonth;
+      return isUpcomingShipment || hasPlannedProductionThisMonth;
     });
 
     if (filteredLines.length > 0) {
@@ -1123,7 +1133,7 @@ const MPSPlan: React.FC = () => {
       });
 
       const plannedLines = linesWithStatus.filter((l: any) => !l.isNotPlanned);
-      const unfulfilledLines = linesWithStatus.filter((l: any) => l.isNotPlanned);
+      const unfulfilledLines = linesWithStatus.filter((l: any) => !l.isFull);
 
       acc.push({ ...header, plannedLines, unfulfilledLines });
     }
@@ -2678,7 +2688,7 @@ const MPSPlan: React.FC = () => {
                           demandKgByBilSize[mappedSize] = (demandKgByBilSize[mappedSize] || 0) + (Number(o.qty || 0) / oYield);
                         }
                       });
-                      const allBilSizesSet = new Set((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
+                      const allBilSizesSet = new Set<string>((selectedSupply.sizes || []).map((s: any) => s.groupSize as string));
                       const extSizesObj: Record<string, number> = {};
                       externalRmSupplies.forEach(ext => {
                         if (ext.receivedDate.startsWith(selectedDate) && ext.sizeBreakdownJson) {
@@ -2688,7 +2698,10 @@ const MPSPlan: React.FC = () => {
                           } catch (e) {}
                         }
                       });
-                      Array.from(allBilSizesSet).forEach(bilSz => {
+                      const initialRems: { bilSz: string, rem: number, totalQty: number, iR: number, eR: number }[] = [];
+                      let sumInitialRem = 0;
+                      let sumTotalQty = 0;
+                      Array.from(allBilSizesSet).forEach((bilSz: string) => {
                         const internalQty = (selectedSupply.sizes || []).filter((s: any) => s.groupSize === bilSz).reduce((sum: number, s: any) => sum + Number(s.quantityKg || 0), 0);
                         const externalQty = extSizesObj[bilSz] || 0;
                         const totalQty = internalQty + externalQty;
@@ -2697,11 +2710,28 @@ const MPSPlan: React.FC = () => {
                           if (bilSz.toLowerCase().replace(/\s+/g, '') === dSize.toLowerCase().replace(/\s+/g, '')) demand += dQty;
                         }
                         const rem = Math.max(0, totalQty - demand);
-                        if (rem > 0) {
+                        const iR = totalQty > 0 ? internalQty / totalQty : 1;
+                        const eR = totalQty > 0 ? externalQty / totalQty : 0;
+                        initialRems.push({ bilSz, rem, totalQty, iR, eR });
+                        sumInitialRem += rem;
+                        sumTotalQty += totalQty;
+                      });
+
+                      const dailySummary = currentPlan?.dailySummaries?.find((d: any) => String(d.productionDate).startsWith(selectedDate));
+                      const trackerData = JSON.parse(dailySummary?.blTrackerJson || '{}');
+                      const blRmTotal = Number(trackerData.rmBreakdown?.bl || 0);
+
+                      initialRems.forEach(({ bilSz, rem, totalQty, iR, eR }) => {
+                        let finalRem = 0;
+                        if (sumInitialRem > 0) {
+                          finalRem = rem * (blRmTotal / sumInitialRem);
+                        } else if (sumTotalQty > 0) {
+                          finalRem = totalQty * (blRmTotal / sumTotalQty);
+                        }
+
+                        if (finalRem > 0) {
                           const blSz = blColLabelsMap[bilSz] || `BL ${bilSz}`;
-                          const blQty = rem * 0.75;
-                          const iR = totalQty > 0 ? internalQty / totalQty : 1;
-                          const eR = totalQty > 0 ? externalQty / totalQty : 0;
+                          const blQty = finalRem * 0.75;
                           blSizesFrontend[blSz] = {
                             internalVal: (blSizesFrontend[blSz]?.internalVal || 0) + (blQty * iR),
                             externalVal: (blSizesFrontend[blSz]?.externalVal || 0) + (blQty * eR),
@@ -2710,7 +2740,8 @@ const MPSPlan: React.FC = () => {
                         }
                       });
                     } else {
-                      for (const [sz, qty] of Object.entries(blSizesDb)) {
+                      for (const [sz, qtyRaw] of Object.entries(blSizesDb)) {
+                        const qty = Number(qtyRaw);
                         if (qty > 0) blSizesFrontend[sz] = { internalVal: qty * intRatio, externalVal: qty * extRatio, totalVal: qty };
                       }
                     }
@@ -2991,8 +3022,6 @@ const MPSPlan: React.FC = () => {
                         if (items.length === 0) {
                           return <div className="text-sm text-amber-600 italic col-span-full">No By Products generated for the selected orders.</div>;
                         }
-
-                        const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
                         
                         const isBlMain = (name: string) => {
                           const n = name.toUpperCase();
@@ -3280,21 +3309,19 @@ const MPSPlan: React.FC = () => {
 
 
 
-                          {/* Demand by Size Summary — expandable */}
-                          <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 space-y-3">
-                            <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Demand by RM Size</p>
-                            {(() => {
-                              const isBil = currentPlan?.partType === 'bil' || currentPlan?.partType === 'bl' || currentPlan?.partType === 'leg';
-                              
-                              const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(selectedDate));
-                              let extSizes: Record<string, number> = {};
-                              if (extDaily && extDaily.sizeBreakdownJson) {
-                                try { extSizes = JSON.parse(extDaily.sizeBreakdownJson); } catch (e) {}
-                              }
-
+                                                                              {/* Demand by Size Summary — expandable */}
+                          {(() => {
+                            const extDaily = externalRmSupplies.find(s => String(s.receivedDate).startsWith(selectedDate));
+                            let extSizes: Record<string, number> = {};
+                            if (extDaily && extDaily.sizeBreakdownJson) {
+                              try { extSizes = JSON.parse(extDaily.sizeBreakdownJson); } catch (e) {}
+                            }
+                            
+                            const globalBlSizesFrontend = (selectedSupply as any)._blSizesFrontend || {};
+                            
+                            const renderDemandBySize = (title: string, mode: 'bil' | 'bl' | 'fillet', targetOrders: any[]) => {
                               const allSupplySizesSet = new Set<string>();
-                              const globalBlSizesFrontend = (selectedSupply as any)._blSizesFrontend || {};
-                              if (currentPlan?.partType === 'bl') {
+                              if (mode === 'bl') {
                                 Object.keys(globalBlSizesFrontend).forEach(k => allSupplySizesSet.add(k));
                               } else {
                                 currentPlan?.supplyBreakdown?.forEach((s: any) => {
@@ -3303,15 +3330,12 @@ const MPSPlan: React.FC = () => {
                                 Object.keys(extSizes).forEach(k => allSupplySizesSet.add(k));
                               }
                               
-                              // Sort using custom logic to ensure "180 Down" is first and numbers are sorted correctly
                               const allSupplySizes = Array.from(allSupplySizesSet).sort((a, b) => {
                                 if (a.toLowerCase().includes('down') && !b.toLowerCase().includes('down')) return -1;
                                 if (!a.toLowerCase().includes('down') && b.toLowerCase().includes('down')) return 1;
                                 return a.localeCompare(b, undefined, { numeric: true });
                               });
 
-                              const mainOrders = selectedDailyOrders.filter((o: any) => getProductType(o.itemCode) === 'main');
-                              
                               const bilBinDefs = [
                                 { key: '180 DOWN', lo: 0, hi: 180 },
                                 { key: '210-230', lo: 210, hi: 230 },
@@ -3345,15 +3369,16 @@ const MPSPlan: React.FC = () => {
                                 return { key: k, lo, hi };
                               });
 
-                              // First pass: look at orders and add any new unmappable size strings
                               const orderSizes: string[] = [];
-                              if (isBil) {
-                                mainOrders.forEach((o: any) => {
+                              if (mode !== 'fillet') {
+                                targetOrders.forEach((o: any) => {
                                   const spec = specs[o.itemCode];
                                   const s = (spec?.productSize || 'unsize').toLowerCase().trim();
                                   if (s !== 'unsize' && s !== '') {
                                     const exactMatch = allSupplySizes.find(sz => sz.toLowerCase().replace(/\s+/g, '') === s.replace(/\s+/g, ''));
-                                    if (!exactMatch) {
+                                    if (exactMatch) {
+                                      orderSizes.push(exactMatch);
+                                    } else {
                                       let lo = -1, hi = -1;
                                       if (s.includes('down')) {
                                         const m = s.match(/(\d+)/);
@@ -3365,17 +3390,16 @@ const MPSPlan: React.FC = () => {
                                         const m = s.match(/(\d+)\s*[-–]\s*(\d+)/);
                                         if (m) { lo = parseInt(m[1], 10); hi = parseInt(m[2], 10); }
                                       }
-                                      
                                       if (lo >= 0 && hi >= 0 && hi > lo) {
-                                        // Do nothing if completely unmappable
+                                        orderSizes.push(s);
                                       }
                                     }
                                   }
                                 });
                               }
-                              
+
                               const uniqueSizes = Array.from(new Set([...allSupplySizes, ...orderSizes]));
-                              const sizeLabels = isBil
+                              const sizeLabels = mode !== 'fillet'
                                 ? uniqueSizes.map((label, idx) => ({
                                   key: label,
                                   label,
@@ -3392,14 +3416,14 @@ const MPSPlan: React.FC = () => {
                                   { key: '65_70', label: '65-70', groupSize: '65-70', color: 'bg-orange-500' },
                                   { key: '70Up', label: '70 Up', groupSize: '70 Up', color: 'bg-red-500' },
                                 ];
-                              
-                              // Helper: get supply kg from normalized sizes array
+
                               const getSupplySizeKg = (groupSize: string): number => {
-                                if (currentPlan?.partType === 'bl') {
+                                if (mode === 'bl') {
                                   return globalBlSizesFrontend[groupSize]?.totalVal || 0;
                                 }
                                 return (selectedSupply.sizes || []).filter((sz: any) => sz.groupSize === groupSize).reduce((sum: number, sz: any) => sum + Number(sz.quantityKg || 0), 0) + (extSizes[groupSize] || 0);
                               };
+
                               const allBinDefs = [
                                 { key: '40Down', lo: 0, hi: 40 },
                                 { key: '40_45', lo: 40, hi: 45 },
@@ -3410,17 +3434,16 @@ const MPSPlan: React.FC = () => {
                                 { key: '65_70', lo: 65, hi: 70 },
                                 { key: '70Up', lo: 70, hi: 999 },
                               ];
+
                               const getSizeBinKeys = (productSize: string): string[] => {
                                 if (!productSize) return [];
                                 const s = productSize.toLowerCase().trim();
                                 if (s === 'unsize' || s === '') return [];
 
-                                if (isBil) {
-                                  // 1. Direct match
+                                if (mode !== 'fillet') {
                                   const match = sizeLabels.find(sl => sl.label.toLowerCase() === s);
                                   if (match) return [match.key];
 
-                                  // 2. Range Overlap mapping
                                   let lo = -1, hi = -1;
                                   if (s.includes('down')) {
                                     const m = s.match(/(\d+)/);
@@ -3443,20 +3466,16 @@ const MPSPlan: React.FC = () => {
                                   }
 
                                   if (lo >= 0 && hi >= 0 && hi >= lo) {
-                                    const activeBinDefs = currentPlan?.partType === 'bl' ? blBinDefs : bilBinDefs;
+                                    const activeBinDefs = mode === 'bl' ? blBinDefs : bilBinDefs;
                                     const overlaps = activeBinDefs.filter(b => {
-                                      if (lo === hi) return lo >= b.lo && hi <= b.hi; // Point inside bin
-                                      return Math.max(lo, b.lo) < Math.min(hi, b.hi); // True overlap
+                                      if (lo === hi) return lo >= b.lo && hi <= b.hi;
+                                      return Math.max(lo, b.lo) < Math.min(hi, b.hi);
                                     });
-                                    if (overlaps.length > 0) {
-                                      return overlaps.map(b => b.key);
-                                    }
+                                    if (overlaps.length > 0) return overlaps.map(b => b.key);
                                   }
-
-                                  return []; // Fallback to unsize instead of creating new bin
+                                  return [];
                                 }
 
-                                // Original Fillet range matching logic
                                 if (s.includes('40 down') || s === '40down') return ['40Down'];
                                 if (s.includes('70 up') || s === '70up' || s.includes('60 up') || s === '60up') return ['60_65', '65_70', '70Up'];
                                 const rangeMatch = s.match(/(\d+)\s*[-–]\s*(\d+)/);
@@ -3468,19 +3487,16 @@ const MPSPlan: React.FC = () => {
                                 return [];
                               };
 
-                              // Build per-bin demand + order details
                               const demandByBin: Record<string, number> = {};
                               const ordersByBin: Record<string, { soNumber: string; itemCode: string; size: string; qty: number; type: string }[]> = {};
                               sizeLabels.forEach(sl => { demandByBin[sl.key] = 0; ordersByBin[sl.key] = []; });
 
-                              // Build supply remaining map for waterfall
                               const supplyRemaining: Record<string, number> = {};
                               sizeLabels.forEach(sl => { supplyRemaining[sl.key] = getSupplySizeKg(sl.groupSize); });
 
-                              // Pass 1: Allocate SIZED orders first (they have specific bins)
                               const sizedOrders: any[] = [];
                               const unsizedOrders: any[] = [];
-                              mainOrders.forEach((o: any) => {
+                              targetOrders.forEach((o: any) => {
                                 const spec = specs[o.itemCode];
                                 const size = spec?.productSize || 'unsize';
                                 const binKeys = getSizeBinKeys(size);
@@ -3493,8 +3509,6 @@ const MPSPlan: React.FC = () => {
 
                               sizedOrders.forEach(o => {
                                 let remainingQty = o.qty;
-                                
-                                // Phase 1: Waterfall fill from available supply in overlapping bins
                                 for (const key of o.binKeys) {
                                   if (remainingQty <= 0) break;
                                   const avail = Math.max(0, supplyRemaining[key] || 0);
@@ -3507,10 +3521,8 @@ const MPSPlan: React.FC = () => {
                                     ordersByBin[key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: o.size, qty: alloc, type: o.type });
                                   }
                                 }
-                                // Removed Phase 2 (Shortage allocation) as per user request
                               });
 
-                              // Pass 2: Allocate UNSIZE orders via waterfall (fill remaining capacity per bin)
                               unsizedOrders.forEach(o => {
                                 let remainingQty = o.qty;
                                 for (const sl of sizeLabels) {
@@ -3523,69 +3535,96 @@ const MPSPlan: React.FC = () => {
                                   remainingQty -= allocQty;
                                   ordersByBin[sl.key].push({ soNumber: o.soNumber, itemCode: o.itemCode, size: 'unsize', qty: allocQty, type: o.type });
                                 }
-                                // Removed fallback overflow allocation as per user request
                               });
 
                               return (
-                                <div className="space-y-1">
-                                  {sizeLabels.map(sl => {
-                                    const supply = getSupplySizeKg(sl.groupSize);
-                                    const demand = demandByBin[sl.key] || 0;
-                                    if (supply === 0 && demand === 0) return null;
-                                    const remaining = supply - demand;
-                                    const isExpanded = expandedSizeBins[sl.key] || false;
-                                    const orders = ordersByBin[sl.key] || [];
+                                <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 space-y-3 mt-4">
+                                  <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">{title}</p>
+                                  <div className="space-y-1">
+                                    {sizeLabels.map(sl => {
+                                      const supply = getSupplySizeKg(sl.groupSize);
+                                      const demand = demandByBin[sl.key] || 0;
+                                      if (supply === 0 && demand === 0) return null;
+                                      const remaining = supply - demand;
+                                      const isExpanded = expandedSizeBins[sl.key] || false;
+                                      const orders = ordersByBin[sl.key] || [];
 
-                                    return (
-                                      <div key={sl.key}>
-                                        <div
-                                          className="bg-white rounded-lg p-2.5 border border-orange-100 flex items-center gap-3 cursor-pointer hover:bg-orange-50/50 transition-colors"
-                                          onClick={() => setExpandedSizeBins(prev => ({ ...prev, [sl.key]: !prev[sl.key] }))}
-                                        >
-                                          <div className={`w-2 h-8 rounded-full ${sl.color}`} />
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2">
-                                              <span className="text-[10px] font-bold text-gray-500 uppercase">{sl.label}</span>
-                                              {orders.length > 0 && (
-                                                <span className="text-[9px] text-gray-400">
-                                                  {isExpanded ? '▲' : '▼'} {orders.length} orders
-                                                </span>
-                                              )}
-                                            </div>
-                                            <div className="flex gap-4 text-xs mt-0.5 items-center">
-                                              <span className="text-emerald-600">Supply: <b>{Math.round(supply).toLocaleString()}</b></span>
-                                              <span className="text-orange-600">Demand: <b>{Math.round(demand).toLocaleString()}</b></span>
-                                              <span className={remaining >= 0 ? 'text-blue-600' : 'text-red-600 font-bold'}>
-                                                {remaining >= 0 ? 'Rem' : 'Short'}: <b>{Math.round(Math.abs(remaining)).toLocaleString()}</b>
-                                              </span>
-                                            </div>
-                                          </div>
-                                        </div>
-                                        {/* Expanded order list */}
-                                        {isExpanded && orders.length > 0 && (
-                                          <div className="ml-5 mt-1 mb-2 border-l-2 border-orange-200 pl-3 space-y-1">
-                                            {orders.map((ord: any, idx: number) => (
-                                              <div key={idx} className="flex items-center gap-2 text-[11px] py-1 px-2 bg-white/80 rounded border border-gray-100">
-                                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${ord.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
-                                                  {ord.type === 'chilled' ? 'C' : 'F'}
-                                                </span>
-                                                <span className="font-bold text-gray-700">{ord.soNumber}</span>
-                                                <span className="text-gray-400 text-[10px]">{ord.itemCode}</span>
-                                                <span className="text-gray-400 text-[10px]">({ord.size})</span>
-                                                <span className="ml-auto font-bold text-gray-900">{Math.round(ord.qty).toLocaleString()} kg</span>
+                                      return (
+                                        <div key={sl.key}>
+                                          <div
+                                            className="bg-white rounded-lg p-2.5 border border-orange-100 flex items-center gap-3 cursor-pointer hover:bg-orange-50/50 transition-colors"
+                                            onClick={() => setExpandedSizeBins(prev => ({ ...prev, [sl.key]: !prev[sl.key] }))}
+                                          >
+                                            <div className={`w-2 h-8 rounded-full ${sl.color}`} />
+                                            <div className="flex-1 min-w-0">
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-[10px] font-bold text-gray-500 uppercase">{sl.label}</span>
+                                                {orders.length > 0 && (
+                                                  <span className="text-[9px] text-gray-400">
+                                                    {isExpanded ? '▲' : '▼'} {orders.length} orders
+                                                  </span>
+                                                )}
                                               </div>
-                                            ))}
+                                              <div className="flex gap-4 text-xs mt-0.5 items-center">
+                                                <span className="text-emerald-600">Supply: <b>{Math.round(supply).toLocaleString()}</b></span>
+                                                <span className="text-orange-600">Demand: <b>{Math.round(demand).toLocaleString()}</b></span>
+                                                <span className={remaining >= 0 ? 'text-blue-600' : 'text-red-600 font-bold'}>
+                                                  {remaining >= 0 ? 'Rem' : 'Short'}: <b>{Math.round(Math.abs(remaining)).toLocaleString()}</b>
+                                                </span>
+                                              </div>
+                                            </div>
                                           </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
+                                          {isExpanded && orders.length > 0 && (
+                                            <div className="ml-5 mt-1 mb-2 border-l-2 border-orange-200 pl-3 space-y-1">
+                                              {orders.map((ord: any, idx: number) => (
+                                                <div key={idx} className="flex items-center gap-2 text-[11px] py-1 px-2 bg-white/80 rounded border border-gray-100">
+                                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${ord.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
+                                                    {ord.type === 'chilled' ? 'C' : 'F'}
+                                                  </span>
+                                                  <span className="font-bold text-gray-700">{ord.soNumber}</span>
+                                                  <span className="text-gray-400 text-[10px]">{ord.itemCode}</span>
+                                                  <span className="text-gray-400 text-[10px]">({ord.size})</span>
+                                                  <span className="ml-auto font-bold text-gray-900">{Math.round(ord.qty).toLocaleString()} kg</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
                               );
-                            })()}
-                          </div>
+                            };
 
-                          {/* Co-Product Orders Table */}
+                            const isBlItemDesc = (desc: string) => {
+                              const d = desc.toUpperCase();
+                              return d.includes('BL ') || d.includes('BLK') || d.includes('BL-') || d.startsWith('BL');
+                            };
+
+                            const filteredOrders = partId === 'leg' 
+                                ? mainOrders 
+                                : mainOrders.filter((o: any) => allowedItemCodes.includes(o.itemCode));
+
+                            if (partId === 'leg') {
+                              const bilOrders = mainOrders.filter(o => !isBlItemDesc(specs[o.itemCode]?.erpItemDesc || ''));
+                              const blOrders = mainOrders.filter(o => isBlItemDesc(specs[o.itemCode]?.erpItemDesc || ''));
+                              return (
+                                <>
+                                  {bilOrders.length > 0 && renderDemandBySize('Demand by RM Size (BIL)', 'bil', bilOrders)}
+                                  {blOrders.length > 0 && renderDemandBySize('Demand by RM Size (BL)', 'bl', blOrders)}
+                                </>
+                              );
+                            } else if (partId === 'bl') {
+                              return renderDemandBySize('Demand by RM Size', 'bl', filteredOrders);
+                            } else if (partId === 'bil') {
+                              return renderDemandBySize('Demand by RM Size', 'bil', filteredOrders);
+                            } else {
+                              return renderDemandBySize('Demand by RM Size', 'fillet', filteredOrders);
+                            }
+                          })()}
+
+{/* Co-Product Orders Table */}
                           {coproductOrders.length > 0 && (
                             <div className="space-y-2">
                               <p className="text-[10px] font-bold text-purple-600 uppercase tracking-wider">Co-Products</p>

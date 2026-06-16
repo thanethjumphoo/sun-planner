@@ -44,6 +44,21 @@ export async function executeUnifiedLegPlanGeneration(
     await manager.delete(MpsPlanOrder, { mpsPlan: { id: plan.id } });
     await manager.delete(MpsExceptionReport, { mpsPlan: { id: plan.id } });
   } else {
+    // Also clean up any lingering DRAFT 'bil' or 'bl' plans for this month to avoid allocation conflicts
+    const legacyPlans = await manager.find(MpsPlan, {
+      where: [
+        { targetMonth, partType: 'bil', status: 'DRAFT' },
+        { targetMonth, partType: 'bl', status: 'DRAFT' }
+      ]
+    });
+    for (const lp of legacyPlans) {
+      await manager.delete(MpsPlanDaily, { mpsPlan: { id: lp.id } });
+      await manager.delete(MpsPlanSupply, { mpsPlan: { id: lp.id } });
+      await manager.delete(MpsPlanOrder, { mpsPlan: { id: lp.id } });
+      await manager.delete(MpsExceptionReport, { mpsPlan: { id: lp.id } });
+      await manager.delete(MpsPlan, { id: lp.id });
+    }
+
     plan = manager.create(MpsPlan, {
       planName: `MPS ${targetMonth} - Unified BIL / BL Draft`,
       targetMonth,
@@ -245,6 +260,41 @@ export async function executeUnifiedLegPlanGeneration(
   const byProductItemCodes = allSpecs.filter((s: any) => isByproductSpec(s)).map((s: any) => s.erpItemCode);
   const combinedWithByProductCodes = [...new Set([...combinedItemCodes, ...byProductItemCodes])];
 
+  const getProcessFromYieldTree = (itemCode: string): { category: string, process: string, type: string } => {
+    const spec = specMap.get(itemCode);
+    if (!spec?.masterYieldIds) return { category: 'UNKNOWN', process: 'UNKNOWN', type: 'UNKNOWN' };
+    
+    const yieldIds = spec.masterYieldIds.split(',').map((id: string) => id.trim());
+    
+    for (const yieldId of yieldIds) {
+      let current = findNode(allYieldNodes, yieldId);
+      let type = current?.type || 'UNKNOWN';
+      let processName = 'UNKNOWN';
+      let categoryName = 'UNKNOWN';
+      
+      // First check if the node itself is CO-PRODUCT or BY-PRODUCT
+      if (type === 'CO-PRODUCT' || type === 'BY-PRODUCT') {
+        type = type.replace('-', '_'); // CO_PRODUCT, BY_PRODUCT
+      }
+      
+      // Walk up the tree to find PROCESS and CATEGORY
+      while (current) {
+        if (current.type === 'PROCESS' && processName === 'UNKNOWN') {
+          processName = current.name;
+        }
+        if (current.type === 'CATEGORY' && categoryName === 'UNKNOWN') {
+          categoryName = current.name;
+        }
+        current = current.parentId ? findNode(allYieldNodes, current.parentId) : null;
+      }
+      
+      if (processName !== 'UNKNOWN' || categoryName !== 'UNKNOWN') {
+        return { category: categoryName, process: processName, type };
+      }
+    }
+    return { category: 'UNKNOWN', process: 'UNKNOWN', type: 'UNKNOWN' };
+  };
+
   // Helper functions for BL detailed processing
   const extractBeltGateSizes = (desc: string, specSize?: string): { rmSizes: string[], targetProduct: string, yieldPct: number } | null => {
     for (const rule of blBeltGateMatrix as any[]) {
@@ -305,14 +355,33 @@ export async function executeUnifiedLegPlanGeneration(
   };
 
   const classifyOrder = (order: StgErpOrderLine) => {
+    const { category, process, type } = getProcessFromYieldTree(order.erpOrderItemCode);
     const spec = specMap.get(order.erpOrderItemCode);
-    const desc = ((spec as any)?.erpItemDesc || order.erpOrderItemCode || '').toUpperCase();
-    if (desc.includes('BL BLOCK') || desc.includes('BL_BLOCK') || desc.includes('BLBLOCK')) return 'BL_BLOCK';
-    if (desc.includes('BL TH') || desc.includes('BL-TH') || desc.includes('BLTH')) return 'BLTH';
-    if (desc.includes('BL DR') || desc.includes('BL-DR') || desc.includes('BLDR')) return 'BLDR';
-    if (desc.includes('BLK')) return 'BLK';
-    if (extractBeltGateSizes(desc, (spec as any)?.productSize)) return 'BLK';
-    return 'OTHER';
+    
+    let classification = 'MANUAL_TRIM'; // Default
+    
+    // CO-PRODUCT (e.g. BL BLOCK) → 'BL_BLOCK'
+    if (type === 'CO_PRODUCT') {
+      classification = 'BL_BLOCK';
+    }
+    // I-Cut process → check process name
+    else if (process.toLowerCase().includes('i-cut') || process.toLowerCase().includes('icut')) {
+      classification = 'ICUT';
+    }
+    // Manual Trimming → 'MANUAL_TRIM'
+    else if (process.toLowerCase().includes('manual') || process.toLowerCase().includes('คนตัด')) {
+      classification = 'MANUAL_TRIM';
+    }
+    else {
+      // Belt Gate matrix fallback (for special BLK sizing)
+      const desc = ((spec as any)?.erpItemDesc || order.erpOrderItemCode || '').toUpperCase();
+      if (extractBeltGateSizes(desc, (spec as any)?.productSize)) classification = 'ICUT';
+      
+      // If it has icutSpeed > 0 in spec → I-Cut
+      else if (Number((spec as any)?.icutSpeed || 0) > 0) classification = 'ICUT';
+    }
+    
+    return { classification, category, process };
   };
 
   const dailyTracker = new Map<string, { icutUsedKg: number; icutUsedHours: number; manualUsedKg: number; blBlockProduced: number; blBlockUsed: number }>();
@@ -324,7 +393,7 @@ export async function executeUnifiedLegPlanGeneration(
   };
 
   // I-Cut hours: total available machine hours per day
-  const MAX_ICUT_HOURS_PER_DAY = Math.round(HOURS_PER_SHIFT * SHIFTS_PER_DAY); // ~19 hrs/day (2 shifts × 9.58 hrs)
+  const MAX_ICUT_HOURS_PER_DAY = 37; // 2 machines * 2 shifts * 9.25 hrs/shift
 
   const dailyByproductSupply = new Map<string, any>();
   const getOrInitByproductSupply = (dateStr: string) => {
@@ -548,7 +617,7 @@ export async function executeUnifiedLegPlanGeneration(
              productProduced = Math.round(allocRmQty * rmYieldPct);
            }
         } else if (isBl) {
-           const classification = classifyOrder(order);
+           const { classification } = classifyOrder(order);
            const icutSpeed = Number((spec as any)?.icutSpeed || 0);
            const productYield = Number((spec as any)?.productYield || 0.75);
            const tracker = getTracker(dateStr);
@@ -574,7 +643,7 @@ export async function executeUnifiedLegPlanGeneration(
                    }
                  }
               }
-           } else if (classification === 'BLK' && icutSpeed === 0 && !extractBeltGateSizes(itemDesc, (spec as any)?.productSize)) {
+           } else if (classification === 'MANUAL_TRIM') {
               // Manual Trimming from BL BLOCK first, then RM
               const availBlock = sup.blSizes['TOTAL_BL_BLOCK'] || 0;
               let blockUsed = 0;
@@ -610,7 +679,7 @@ export async function executeUnifiedLegPlanGeneration(
                  productProduced += producedFromRm;
                  generateByproducts(dateStr, rmToUse, spec);
               }
-           } else if (icutSpeed > 0) {
+           } else if (classification === 'ICUT') {
               // I-Cut Process
               const icutHoursRemaining = MAX_ICUT_HOURS_PER_DAY - tracker.icutUsedHours;
               if (icutHoursRemaining > 0 && availRmForDebone > 0) {
@@ -778,7 +847,7 @@ export async function executeUnifiedLegPlanGeneration(
        let productProduced = 0;
 
        if (isBl) {
-          const classification = classifyOrder(order);
+          const { classification } = classifyOrder(order);
           const icutSpeed = Number((spec as any)?.icutSpeed || 0);
           const productYield = Number((spec as any)?.productYield || 0.75);
           const tracker = getTracker(dateStr);
@@ -804,7 +873,7 @@ export async function executeUnifiedLegPlanGeneration(
                   }
                 }
              }
-          } else if (classification === 'BLK' && icutSpeed === 0 && !extractBeltGateSizes(itemDesc, (spec as any)?.productSize)) {
+          } else if (classification === 'MANUAL_TRIM') {
              // Manual Trimming from BL BLOCK first, then RM
              const availBlock = sup.blSizes['TOTAL_BL_BLOCK'] || 0;
              let blockUsed = 0;
@@ -914,10 +983,6 @@ export async function executeUnifiedLegPlanGeneration(
                 
                 productProduced = Math.round((rmToUse * rmYieldPct) * activeYield);
                 generateByproducts(dateStr, rmToUse, spec);
-                
-                if (classification === 'BLK' && !mapping) {
-                   tracker.manualUsedKg += rmToUse;
-                }
              }
           }
           capacityTracker.set(dateStr, capTracker);

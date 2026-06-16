@@ -698,7 +698,12 @@ export class OracleIntegrationService implements OnModuleDestroy {
       headers = data;
       total = count;
     } else {
-      queryBuilder.take(1000);
+      // Only apply a safety limit when NO date filters are present.
+      // When shipStartDate/shipEndDate filters are active, return ALL matching
+      // headers so the Demand Plan tab shows complete data.
+      if (!shipStartDate && !shipEndDate && !startDate && !endDate) {
+        queryBuilder.take(1000);
+      }
       headers = await queryBuilder.getMany();
     }
 
