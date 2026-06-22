@@ -1,16 +1,10 @@
-const { DataSource } = require("typeorm");
-
-const AppDataSource = new DataSource({
-    type: "sqlite",
-    database: "c:/Users/PCSLHICT-THANETH/Documents/github/sun-planner/backend/database/sun-planner.sqlite",
-    entities: [__dirname + "/src/entities/*.ts"],
-    synchronize: false,
+const { DataSource } = require('typeorm');
+const ds = new DataSource({
+  type: 'sqlite',
+  database: 'C:/Users/PCSLHICT-THANETH/Documents/github/sun-planner/backend/database.sqlite'
 });
-
-AppDataSource.initialize()
-    .then(async () => {
-        const supplies = await AppDataSource.query(`SELECT id, production_date, by_products FROM mps_plan_supply ORDER BY id DESC LIMIT 5`);
-        console.log(supplies);
-        process.exit(0);
-    })
-    .catch((error) => console.log(error));
+ds.initialize().then(async () => {
+  const res = await ds.query(`SELECT * FROM stg_product_spec WHERE erpItemCode = '111114213'`);
+  console.log(res);
+  process.exit(0);
+});

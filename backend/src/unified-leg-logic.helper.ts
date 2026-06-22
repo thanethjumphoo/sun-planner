@@ -318,19 +318,19 @@ export async function executeUnifiedLegPlanGeneration(
       const s = sToUse.toLowerCase().trim();
       const allBinDefs = [
         { key: 'BL 140 Down', lo: 0, hi: 140 },
-        { key: 'BL 140-160', lo: 140, hi: 160 },
-        { key: 'BL 160-180', lo: 160, hi: 180 },
-        { key: 'BL 180-200', lo: 180, hi: 200 },
-        { key: 'BL 200-220', lo: 200, hi: 220 },
-        { key: 'BL 220-240', lo: 220, hi: 240 },
-        { key: 'BL 240-260', lo: 240, hi: 260 },
-        { key: 'BL 260-280', lo: 260, hi: 280 },
-        { key: 'BL 280-300', lo: 280, hi: 300 },
-        { key: 'BL 300-320', lo: 300, hi: 320 },
-        { key: 'BL 320-340', lo: 320, hi: 340 },
-        { key: 'BL 340-360', lo: 340, hi: 360 },
-        { key: 'BL 360-380', lo: 360, hi: 380 },
-        { key: 'BL 380 Up', lo: 380, hi: 9999 }
+        { key: 'BL 141-160', lo: 141, hi: 160 },
+        { key: 'BL 161-180', lo: 161, hi: 180 },
+        { key: 'BL 181-200', lo: 181, hi: 200 },
+        { key: 'BL 201-220', lo: 201, hi: 220 },
+        { key: 'BL 221-240', lo: 221, hi: 240 },
+        { key: 'BL 241-260', lo: 241, hi: 260 },
+        { key: 'BL 261-280', lo: 261, hi: 280 },
+        { key: 'BL 281-300', lo: 281, hi: 300 },
+        { key: 'BL 301-320', lo: 301, hi: 320 },
+        { key: 'BL 321-340', lo: 321, hi: 340 },
+        { key: 'BL 341-360', lo: 341, hi: 360 },
+        { key: 'BL 361-380', lo: 361, hi: 380 },
+        { key: 'BL 380 Up', lo: 381, hi: 9999 }
       ];
       
       let lo = -1, hi = -1;
@@ -668,16 +668,56 @@ export async function executeUnifiedLegPlanGeneration(
               
               const remainingToProduce = remainingQty - blockUsed;
               if (remainingToProduce > 0 && availRmForDebone > 0) {
-                 const rmNeeded = (remainingToProduce / productYield) / rmYieldPct;
-                 const rmToUse = Math.min(availRmForDebone, rmNeeded);
-                 sup.totalLegRm -= rmToUse;
-                 sup.rmBlUsed += rmToUse;
-                 capTracker.debonedKg += rmToUse;
-                 tracker.manualUsedKg += (rmToUse * rmYieldPct);
+                 const mapping = extractBeltGateSizes(itemDesc, (spec as any)?.productSize);
+                 let activeYield = productYield;
+                 if (mapping) activeYield = mapping.yieldPct / 100;
+
+                 const rmNeeded = (remainingToProduce / activeYield) / rmYieldPct;
+                 let maxRmFromSizes = availRmForDebone;
+
+                 if (mapping && mapping.rmSizes.length > 0) {
+                   maxRmFromSizes = 0;
+                   for (const sz of mapping.rmSizes) {
+                     const legKey = sz.replace(/^BL\s*/i, '');
+                     maxRmFromSizes += (sup.legSizes[legKey] || 0);
+                   }
+                 }
+
+                 const rmToUse = Math.min(availRmForDebone, rmNeeded, maxRmFromSizes);
                  
-                 const producedFromRm = Math.round((rmToUse * rmYieldPct) * productYield);
-                 productProduced += producedFromRm;
-                 generateByproducts(dateStr, rmToUse, spec);
+                 if (rmToUse > 0) {
+                    sup.totalLegRm -= rmToUse;
+                    sup.rmBlUsed += rmToUse;
+                    capTracker.debonedKg += rmToUse;
+                    tracker.manualUsedKg += (rmToUse * rmYieldPct);
+                    
+                    if (mapping && mapping.rmSizes.length > 0) {
+                       let toDeduct = rmToUse;
+                       for (const sz of mapping.rmSizes) {
+                         const legKey = sz.replace(/^BL\s*/i, '');
+                         const availSz = sup.legSizes[legKey] || 0;
+                         if (availSz > 0 && toDeduct > 0) {
+                           const use = Math.min(availSz, toDeduct);
+                           sup.legSizes[legKey] -= use;
+                           toDeduct -= use;
+                         }
+                       }
+                    }
+                    
+                    const producedFromRm = Math.round((rmToUse * rmYieldPct) * activeYield);
+                    productProduced += producedFromRm;
+                    generateByproducts(dateStr, rmToUse, spec);
+
+                    // The remaining % that falls out of spec for BL Sizing (e.g. 35%) becomes BL BLOCK for BLK production
+                    if (mapping && activeYield < 1.0) {
+                       const blockProduced = (rmToUse * rmYieldPct) - producedFromRm;
+                       if (blockProduced > 0) {
+                          sup.blSizes['TOTAL_BL_BLOCK'] = (sup.blSizes['TOTAL_BL_BLOCK'] || 0) + blockProduced;
+                          tracker.blBlockProduced += blockProduced;
+                          sup.blSizes['BL_BLOCK_UNSIZED'] = (sup.blSizes['BL_BLOCK_UNSIZED'] || 0) + blockProduced;
+                       }
+                    }
+                 }
               }
            } else if (classification === 'ICUT') {
               // I-Cut Process

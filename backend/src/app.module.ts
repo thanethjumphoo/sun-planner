@@ -76,7 +76,7 @@ import { BlBeltGateMatrixController } from './bl-belt-gate-matrix.controller';
       ICutMaster, BlBeltGateMatrix
     ]),
   ],
-  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, BilWeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController, MachineConfigController, ExternalRmSupplyController, BlBeltGateMatrixController],
+  controllers: [AppController, ErpIntegrationController, ProductSpecController, WeightDistributionController, BilWeightDistributionController, MpsController, ManualOperationController, DpsController, FilletSizeController, MasterYieldController, MachineConfigController, ExternalRmSupplyController, BlBeltGateMatrixController, require('./debug.controller').DebugController],
   providers: [AppService, OracleIntegrationService],
 })
 export class AppModule { }
