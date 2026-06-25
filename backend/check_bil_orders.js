@@ -9,7 +9,12 @@ async function run() {
       database: process.env.DB_NAME,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
+    const res = await pool.request().query(`
+      SELECT o.item_code, o.quantity_kg, p.product_type 
+      FROM mps_plan_orders o 
+      LEFT JOIN product_specs p ON o.item_code = p.erp_item_code 
+      WHERE o.mps_plan_id = 6227
+    `);
     console.log(res.recordset);
     sql.close();
   } catch(e) {

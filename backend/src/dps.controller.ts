@@ -77,6 +77,11 @@ export class DpsController {
         sublot.avgLiveWeight = sl.avgLiveWeight;
         sublot.coProductKg = Number((sl.coProductKg || 0).toFixed(1));
         sublot.supportManpower = sl.supportManpower || 0;
+        
+        sublot.bilManpower = sl.bilManpower === '' || sl.bilManpower == null ? null : Number(sl.bilManpower);
+        sublot.bilSpeed = sl.bilSpeed === '' || sl.bilSpeed == null ? null : Number(sl.bilSpeed);
+        sublot.bilHours = sl.bilHours === '' || sl.bilHours == null ? null : Number(sl.bilHours);
+        sublot.bilPieceWeight = sl.bilPieceWeight === '' || sl.bilPieceWeight == null ? null : Number(sl.bilPieceWeight);
 
         sublot.bins = Object.keys(sl.bins).map(binKey => {
           const bin = new DpsSublotBin();

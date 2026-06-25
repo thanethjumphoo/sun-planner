@@ -248,13 +248,30 @@ export async function executeUnifiedLegPlanGeneration(
     return undefined;
   };
 
-  const isByproductSpec = (spec: any): boolean => {
-    if (!spec || !spec.masterYieldIds) return false;
+  const bilCategoryNames = ['BIL L/C', 'BIL S/C'];
+  const blCategoryNames = ['BL Processing', 'RM: BL (ทั้งชิ้น)', 'RM: BLDR (น่อง)', 'RM: BLT (สะโพก)'];
+
+  const bilCategoryNodes = allYieldNodes.filter((n: any) => 
+    (n.type === 'CATEGORY' || n.type === 'ROOT') && bilCategoryNames.includes(n.name)
+  );
+  const blCategoryNodes = allYieldNodes.filter((n: any) => 
+    (n.type === 'CATEGORY' || n.type === 'ROOT') && blCategoryNames.includes(n.name)
+  );
+
+  const isByproductOf = (spec: any, nodes: any[]): boolean => {
+    if (!spec || !spec.masterYieldIds || nodes.length === 0) return false;
     const ids = spec.masterYieldIds.split(',').map((id: string) => id.trim());
     return ids.some((id: string) => {
-      const node = findNode(allYieldNodes, id);
-      return node && (node.type === 'BY-PRODUCT');
+      const node = findNode(nodes, id);
+      return node && (node.type === 'BY-PRODUCT' || node.type === 'CO-PRODUCT');
     });
+  };
+
+  const isBilByproduct = (spec: any) => isByproductOf(spec, bilCategoryNodes);
+  const isBlByproduct = (spec: any) => isByproductOf(spec, blCategoryNodes);
+
+  const isByproductSpec = (spec: any): boolean => {
+    return isBilByproduct(spec) || isBlByproduct(spec);
   };
 
   const byProductItemCodes = allSpecs.filter((s: any) => isByproductSpec(s)).map((s: any) => s.erpItemCode);
@@ -403,26 +420,81 @@ export async function executeUnifiedLegPlanGeneration(
     return dailyByproductSupply.get(dateStr);
   };
 
-  const generateByproducts = (dateStr: string, rmQty: number, spec: any) => {
+  const generateByproducts = (dateStr: string, rmQty: number, spec: any, forceBilNode?: boolean) => {
+    if (forceBilNode) {
+       const findBilNode = (nodes: any[]): any => {
+         if (!nodes) return null;
+         for (const n of nodes) {
+           if (n.name && n.name.toUpperCase().includes('BIL L/C')) return n;
+           if (n.children) {
+             const found = findBilNode(n.children);
+             if (found) return found;
+           }
+         }
+         return null;
+       };
+       const processNode = findBilNode(allYieldNodes);
+       if (processNode) {
+          const daySupply = getOrInitByproductSupply(dateStr);
+          const traverseAndGenerate = (node: any, currentQty: number) => {
+            const children = allYieldNodes.filter((n: any) => n.parentId === node.id);
+            children.forEach((child: any) => {
+              const childYield = Number(child.yieldPercentage) || 0;
+              const byProdQty = currentQty * childYield;
+              
+              if (byProdQty > 0 && child.type !== 'PROCESS' && child.type !== 'CATEGORY') {
+                if (!daySupply[child.id]) {
+                  daySupply[child.id] = { name: child.name, qty: 0 };
+                }
+                daySupply[child.id].qty += byProdQty;
+                // console.log(`[DEBUG BYPROD] Added ${child.name} qty=${byProdQty} for date ${dateStr}`);
+              }
+              
+              if ((child.type === 'PROCESS' || child.type === 'CATEGORY' || children.length > 0) && childYield > 0) {
+                traverseAndGenerate(child, byProdQty);
+              } else if (child.type === 'PROCESS' || child.type === 'CATEGORY' || children.length > 0) {
+                traverseAndGenerate(child, currentQty);
+              }
+            });
+          };
+          traverseAndGenerate(processNode, rmQty);
+       }
+       return;
+    }
+
     if (!spec || !spec.masterYieldIds) return;
     const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
     const pId = processIds[0];
     if (!pId) return;
     const node = findNode(allYieldNodes, pId);
     if (!node) return;
-    const processNode = node.parentId ? findNode(allYieldNodes, node.parentId) : node;
-    if (processNode && processNode.children) {
+    const processNode = (node.type === 'PROCESS' || node.type === 'CATEGORY') 
+      ? node 
+      : (node.parentId ? findNode(allYieldNodes, node.parentId) : node);
+    if (processNode) {
       const daySupply = getOrInitByproductSupply(dateStr);
-      processNode.children.forEach((child: any) => {
-        if (child.id === pId) return; // Skip the main item itself
-        const byProdQty = rmQty * (Number(child.yieldPercentage) || 0);
-        if (byProdQty > 0) {
-          if (!daySupply[child.id]) {
-            daySupply[child.id] = { name: child.name, qty: 0 };
+      const traverseAndGenerate = (node: any, currentQty: number) => {
+        const children = allYieldNodes.filter((n: any) => n.parentId === node.id);
+        children.forEach((child: any) => {
+          if (child.id === pId) return; // Skip the main item itself
+          const childYield = Number(child.yieldPercentage) || 0;
+          const byProdQty = currentQty * childYield;
+          
+          if (byProdQty > 0 && child.type !== 'PROCESS' && child.type !== 'CATEGORY') {
+            if (!daySupply[child.id]) {
+              daySupply[child.id] = { name: child.name, qty: 0 };
+            }
+            daySupply[child.id].qty += byProdQty;
           }
-          daySupply[child.id].qty += byProdQty;
-        }
-      });
+          
+          if ((child.type === 'PROCESS' || child.type === 'CATEGORY' || children.length > 0) && childYield > 0) {
+            traverseAndGenerate(child, byProdQty);
+          } else if (child.type === 'PROCESS' || child.type === 'CATEGORY' || children.length > 0) {
+            traverseAndGenerate(child, currentQty);
+          }
+        });
+      };
+      traverseAndGenerate(processNode, rmQty);
     }
   };
 
@@ -450,6 +522,14 @@ export async function executeUnifiedLegPlanGeneration(
       intakeBirds: val.intakeBirds,
       totalWeight: val.totalWeight,
     });
+  }
+
+  // Generate global BIL byproducts from the total leg RM available each day
+  // Since all RM is processed as BIL before being deboned, we generate byproducts here.
+  for (const [key, val] of initialSupplyMap.entries()) {
+    if (val.totalLegRm > 0) {
+      generateByproducts(key, val.totalLegRm, null, true);
+    }
   }
 
   const startStr = orderStartDate || targetMonth + '-01';
@@ -539,12 +619,29 @@ export async function executeUnifiedLegPlanGeneration(
     if (prioDiff !== 0) return prioDiff;
 
     // 4th Priority: BIL over BL (If everything else is equal, BIL gets meat first)
+    const specA = specMap.get(a.erpOrderItemCode);
+    const specB = specMap.get(b.erpOrderItemCode);
+    const pIdsA = specA?.masterYieldIds ? specA.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+    const pIdsB = specB?.masterYieldIds ? specB.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+    
     const isABil = bilItemCodes.includes(a.erpOrderItemCode);
     const isBBil = bilItemCodes.includes(b.erpOrderItemCode);
     if (isABil && !isBBil) return -1;
     if (!isABil && isBBil) return 1;
 
     return 0;
+  });
+
+  // Filter by PartType (only bil or bl)
+  rawLines = rawLines.filter(line => {
+    const spec = specMap.get(line.erpOrderItemCode);
+    const processIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+    const isBil = bilItemCodes.includes(line.erpOrderItemCode);
+    const isBl = blItemCodes.includes(line.erpOrderItemCode);
+    if (!isBil && !isBl && !isByproductSpec(spec)) {
+       return false;
+    }
+    return true;
   });
 
   // 5. Unified Allocation Loop
@@ -557,15 +654,21 @@ export async function executeUnifiedLegPlanGeneration(
 
   for (const order of rawLines) {
     const spec = specMap.get(order.erpOrderItemCode);
-    if (spec && isByproductSpec(spec)) {
+    if (spec && isBilByproduct(spec)) {
       if ((spec as any).productType === 'chilled') {
         byprodChillOrders.push(order);
       } else {
         byprodFreezeOrders.push(order);
       }
+    } else if (spec && isBlByproduct(spec)) {
+      // Ignore BL byproducts in the unified leg plan because they are not generated from the initial BIL breakdown
+      continue;
     } else {
       // Must be BIL or BL
-      if (combinedItemCodes.includes(order.erpOrderItemCode)) {
+      const processIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+      const isBil = bilItemCodes.includes(order.erpOrderItemCode);
+      const isBl = blItemCodes.includes(order.erpOrderItemCode);
+      if (isBil || isBl) {
         mainOrders.push(order);
       }
     }
@@ -575,12 +678,18 @@ export async function executeUnifiedLegPlanGeneration(
   const capacityTracker = new Map<string, { debonedKg: number }>();
   const unfulfilledMainOrders: any[] = [];
 
-  const allocateMainOrders = (ordersToProcess: any[]) => {
+  const allocateMainOrders = (ordersToProcess: any[], listName: string = 'unknown') => {
+    console.log(`[DEBUG LEG] allocateMainOrders called for ${listName} with ${ordersToProcess.length} orders.`);
     for (const order of ordersToProcess) {
+      const spec = specMap.get(order.erpOrderItemCode);
+      const processIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
       const isBil = bilItemCodes.includes(order.erpOrderItemCode);
       const isBl = blItemCodes.includes(order.erpOrderItemCode);
       
-      const spec = specMap.get(order.erpOrderItemCode);
+      if (isBil || isBl) {
+        console.log(`[DEBUG] Order ${order.erpOrderItemCode} isBil=${isBil} isBl=${isBl}`);
+      }
+      
       const itemDesc = (spec as any)?.erpItemDesc || order.erpOrderItemCode;
       const minLead = (spec as any)?.minProductLead ?? 1;
       const maxLead = (spec as any)?.maxProductLead ?? 3;
@@ -590,8 +699,8 @@ export async function executeUnifiedLegPlanGeneration(
       
       const shipDate = new Date(order.erpOrderShipDate);
 
-      // Yield logic: BIL = 100% (1:1), BL = 75% (need 1.33x RM)
-      const rmYieldPct = isBl ? 0.75 : 1.0; 
+      // Yield logic: BIL = 100% (1:1), BL = Toridas yield from config (usually 75%)
+      const rmYieldPct = isBl ? toridasConf.yield : 1.0; 
 
       // Find the best production date (backward scheduling)
       for (let leadDay = minLead; leadDay <= maxLead; leadDay++) {
@@ -611,6 +720,7 @@ export async function executeUnifiedLegPlanGeneration(
         if (isBil) {
            const rmNeeded = (remainingQty / 1.0) / rmYieldPct;
            allocRmQty = Math.min(sup.totalLegRm, rmNeeded);
+           console.log(`[DEBUG] BIL order ${order.erpOrderItemCode} date=${dateStr} rmNeeded=${rmNeeded} allocRmQty=${allocRmQty}`);
            if (allocRmQty > 0) {
              sup.totalLegRm -= allocRmQty;
              sup.rmBilUsed += allocRmQty;
@@ -837,7 +947,9 @@ export async function executeUnifiedLegPlanGeneration(
       }
 
       if (remainingQty > 0) {
-        if ((spec as any)?.productType === 'FREEZE' && blItemCodes.includes(order.erpOrderItemCode)) {
+        const pIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+        const isBlOrder = pIds.some((id: string) => blItemCodes.includes(id));
+        if ((spec as any)?.productType === 'FREEZE' && isBlOrder) {
            unfulfilledMainOrders.push({ order, spec, itemDesc, remainingQty, shipDate, isBil, isBl, rmYieldPct });
         } else {
            exceptionsToSave.push(manager.create(MpsExceptionReport, {
@@ -858,14 +970,18 @@ export async function executeUnifiedLegPlanGeneration(
   // Primary vs Secondary Split Logic based on partType context
   const requestedPartType = body.partType || 'bil';
   const isBilPlan = requestedPartType.toLowerCase() === 'bil';
-  const isPrimary = (itemCode: string) => isBilPlan ? bilItemCodes.includes(itemCode) : blItemCodes.includes(itemCode);
+  const isPrimary = (itemCode: string) => {
+    const spec = specMap.get(itemCode);
+    const pIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+    return isBilPlan ? bilItemCodes.includes(itemCode) : blItemCodes.includes(itemCode);
+  };
 
   const primaryOrders = mainOrders.filter(o => isPrimary(o.erpOrderItemCode));
   const secondaryOrders = mainOrders.filter(o => !isPrimary(o.erpOrderItemCode));
 
   // Run allocation phases
-  allocateMainOrders(primaryOrders);
-  allocateMainOrders(secondaryOrders);
+  allocateMainOrders(primaryOrders, 'primary');
+  allocateMainOrders(secondaryOrders, 'secondary');
 
   // --- Forward Sweep Pass for Leftover RM (FREEZE BL Orders only) ---
   for (const item of unfulfilledMainOrders) {
@@ -1086,6 +1202,12 @@ export async function executeUnifiedLegPlanGeneration(
       for (const bpId of bpIds) {
         if (remainingQty <= 0) break;
         const bpSupply = daySupply[bpId] ? daySupply[bpId].qty : 0;
+        
+        if (order.erpOrderItemCode === '111119118') {
+          console.log(`[DEBUG] Order 111119118: dateStr=${dateStr}, bpId=${bpId}, bpSupply=${bpSupply}, remainingQty=${remainingQty}`);
+          console.log(`[DEBUG] daySupply=${JSON.stringify(daySupply)}`);
+        }
+        
         if (bpSupply <= 0) continue;
         
         const allocQty = Math.round(Math.min(bpSupply, remainingQty));
@@ -1111,6 +1233,7 @@ export async function executeUnifiedLegPlanGeneration(
     }
     
     if (remainingQty > 0) {
+      const bpIdsStr = spec?.masterYieldIds || 'none';
       exceptionsToSave.push(manager.create(MpsExceptionReport, {
         mpsPlan: plan,
         erpOrderLineId: order.erpOrderLineId,
@@ -1119,7 +1242,7 @@ export async function executeUnifiedLegPlanGeneration(
         shipDate: shipDate,
         requiredKg: Number(order.erpOrderItemQty || 0),
         shortageKg: remainingQty,
-        reason: 'Insufficient byproduct supply for Chill byproduct order',
+        reason: `Shortage: ${remainingQty}kg. Checked IDs: ${bpIdsStr}. Check API logs for more info.`,
       }));
     }
   }

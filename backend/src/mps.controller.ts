@@ -371,7 +371,6 @@ export class MpsController {
       const targetMonth = body.targetMonth;
       const partType = body.partType || 'fillet';
 
-      // BL Allocation Override — delegate to dedicated helper
       if (partType === 'bl') {
         const formatDateLocal = (val: any): string => {
           if (typeof val === 'string') return val.split('T')[0];
@@ -392,6 +391,30 @@ export class MpsController {
           masterYieldRepo: this.masterYieldRepo,
           blBeltGateMatrixRepo: this.blBeltGateMatrixRepo,
           bilWeightDistRepo: this.bilWeightDistRepo,
+        });
+      }
+      
+      // LEG Unified Allocation Override
+      if (partType === 'leg') {
+        const formatDateLocal = (val: any): string => {
+          if (typeof val === 'string') return val.split('T')[0];
+          if (val instanceof Date) {
+            const y = val.getFullYear();
+            const m = String(val.getMonth() + 1).padStart(2, '0');
+            const d = String(val.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+          }
+          return String(val);
+        };
+        return await executeUnifiedLegPlanGeneration(body, manager, {
+          machineConfigs,
+          getItemCodesByPartType: (pt: string) => this.getItemCodesByPartType(pt),
+          parseLocalDate: formatDateLocal,
+          formatDate: formatDateLocal,
+          specRepo: this.specRepo,
+          masterYieldRepo: this.masterYieldRepo,
+          bilWeightDistRepo: this.bilWeightDistRepo,
+          chickenReceivingService: this.chickenReceivingService,
         });
       }
 
@@ -1036,20 +1059,49 @@ export class MpsController {
       };
 
       const generateByproducts = (dateStr: string, rmQty: number, spec: any, intUsed: number, extUsed: number) => {
-        if (!spec || !spec.masterYieldIds) return;
-        const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
-        const pId = processIds[0];
-        if (!pId) return;
-        const node = findNode(allYieldNodes, pId);
-        if (!node) return;
-        const processNode = node.parentId ? findNode(allYieldNodes, node.parentId) : node;
-        if (processNode && processNode.children) {
-          const daySupply = getOrInitByproductSupply(dateStr);
-          const mainYieldPct = spec.productYield ? Number(spec.productYield) : 1;
-          processNode.children.forEach((child: any) => {
-            if (child.id === pId) return;
-            const byProdQty = rmQty * (child.yieldPercentage || 0);
-            if (byProdQty > 0) {
+        let processNode: any = null;
+        let mainItemIdToSkip: string | null = null;
+        
+        const isBilPlan = partType.toLowerCase() === 'bil';
+        if (isBilPlan) {
+          const findBilNode = (nodes: any[]): any => {
+            if (!nodes) return null;
+            for (const n of nodes) {
+              if (n.name && n.name.toUpperCase().includes('BIL L/C')) return n;
+              if (n.children) {
+                const found = findBilNode(n.children);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          processNode = findBilNode(allYieldNodes);
+        } else if (spec && spec.masterYieldIds) {
+          const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
+          mainItemIdToSkip = processIds[0];
+          if (mainItemIdToSkip) {
+            const node = findNode(allYieldNodes, mainItemIdToSkip);
+            if (node) {
+              processNode = node.parentId ? findNode(allYieldNodes, node.parentId) : node;
+            }
+          }
+        }
+
+        if (!processNode) return;
+
+        const daySupply = getOrInitByproductSupply(dateStr);
+        const mainYieldPct = spec?.productYield ? Number(spec.productYield) : 1;
+
+        const traverseAndGenerate = (currentNode: any, currentQty: number) => {
+          if (!currentNode.children) return;
+          
+          currentNode.children.forEach((child: any) => {
+            if (child.id === mainItemIdToSkip) return;
+
+            const childYield = child.yieldPercentage ? Number(child.yieldPercentage) : 0;
+            const byProdQty = childYield > 0 ? currentQty * childYield : 0;
+
+            if ((child.type === 'BY-PRODUCT' || child.type === 'CO-PRODUCT') && byProdQty > 0) {
               if (!daySupply[child.id]) {
                 daySupply[child.id] = {
                   name: child.name,
@@ -1074,11 +1126,20 @@ export class MpsController {
 
               const nameLower = (child.name || '').toLowerCase();
               const shouldHaveSize = nameLower.includes('สะโพก') || nameLower.includes('น่อง') || nameLower.includes('อก') || nameLower.includes('ปีก') || nameLower.includes('bl') || nameLower.includes('เนื้อเลาะ');
-              const byprodSize = shouldHaveSize ? calculateByproductSize(spec.productSize, mainYieldPct, child.yieldPercentage || 0) : 'Unsize';
+              const byprodSize = shouldHaveSize ? calculateByproductSize(spec?.productSize || '', mainYieldPct, childYield) : 'Unsize';
               daySupply[child.id].sizes[byprodSize] = (daySupply[child.id].sizes[byprodSize] || 0) + byProdQty;
             }
+
+            if ((child.type === 'PROCESS' || child.type === 'CATEGORY' || (child.children && child.children.length > 0)) && childYield > 0) {
+              traverseAndGenerate(child, byProdQty);
+            } else if (child.type === 'PROCESS' || child.type === 'CATEGORY' || (child.children && child.children.length > 0)) {
+              // Pass down without modifying quantity if yield is not set (1:1 process)
+              traverseAndGenerate(child, currentQty);
+            }
           });
-        }
+        };
+
+        traverseAndGenerate(processNode, rmQty);
       };
 
       const mpsOrdersToSave: MpsPlanOrder[] = [];
@@ -1528,6 +1589,21 @@ export class MpsController {
         { name: 'Secondary Freeze', orders: secondaryFreezeOrders, type: 'freeze' }
       ];
 
+      // Pre-generate byproducts for BIL plan using a Push model
+      // BIL processes all chicken intake directly, so byproducts are generated from total RM
+      if (isBilPlan) {
+        const _year = parseInt(targetMonth.split('-')[0], 10);
+        const _month = parseInt(targetMonth.split('-')[1], 10);
+        const _daysInMonth = new Date(_year, _month, 0).getDate();
+        for (let i = 1; i <= _daysInMonth; i++) {
+          const dStr = `${targetMonth}-${i.toString().padStart(2, '0')}`;
+          const dailyTotalRaw = supplyMap.get(dStr) || 0;
+          if (dailyTotalRaw > 0) {
+            generateByproducts(dStr, dailyTotalRaw, null, dailyTotalRaw, 0);
+          }
+        }
+      }
+
       for (const phase of allocationPhases) {
         console.log(`[MPS-ALLOC] Starting phase: ${phase.name} with ${phase.orders.length} orders`);
         if (phase.type === 'chill') {
@@ -1540,12 +1616,14 @@ export class MpsController {
       // --- Allocate By-Products Orders ---
 
       // 2. Allocate Byproduct CHILL Orders
+      console.log(`[BP-ALLOC-START] byprodChillOrders length = ${byprodChillOrders.length}`);
       for (const order of byprodChillOrders) {
         totalDemandKg += order.qty;
         let remainingQty = order.qty;
 
         const spec = specMap.get(order.erpOrderItemCode);
         const bpIds = spec?.masterYieldIds ? spec.masterYieldIds.split(',').map((id: any) => id.trim()) : [];
+        console.log(`[BP-ALLOC-ORDER] ${order.erpOrderItemCode} qty=${order.qty} bpIds=${bpIds}`);
 
         if (bpIds.length > 0) {
           for (let d = subtractDays(order.shipDate, 1); d >= subtractDays(order.shipDate, 3); d = subtractDays(d, 1)) {
@@ -1553,15 +1631,18 @@ export class MpsController {
 
             const dateStr = formatDate(d);
             const daySupply = dailyByproductSupply.get(dateStr);
+            console.log(`[BP-ALLOC-CHECK] dateStr=${dateStr} daySupplyExists=${!!daySupply}`);
             if (!daySupply) continue;
 
             for (const bpId of bpIds) {
               if (remainingQty <= 0) break;
               const bpSupply = daySupply[bpId] ? daySupply[bpId].qty : 0;
+              console.log(`[BP-ALLOC] Order ${order.erpOrderItemCode} qty ${order.qty} checking date ${dateStr} for bpId ${bpId}. bpSupply = ${bpSupply}`);
 
               if (bpSupply <= 0) continue;
 
               const allocQty = Math.round(Math.min(bpSupply, remainingQty));
+              console.log(`[BP-ALLOC] -> allocQty = ${allocQty}`);
               if (allocQty <= 0) continue;
 
               mpsOrdersToSave.push(manager.create(MpsPlanOrder, {
@@ -2516,14 +2597,24 @@ export class MpsController {
 
   // 9. Get Approved Orders for DPS (Daily Production Scheduling)
   @Get('approved-orders/:date')
-  async getApprovedOrdersForDate(@Param('date') date: string) {
-    const orders = await this.mpsOrderRepo.createQueryBuilder('order')
+  async getApprovedOrdersForDate(@Param('date') date: string, @Query('partType') partType: string) {
+    let pt = partType;
+    if (pt === 'bil' || pt === 'bl') {
+      pt = 'leg';
+    }
+
+    const query = this.mpsOrderRepo.createQueryBuilder('order')
       .leftJoinAndSelect('order.mpsPlan', 'plan')
       .leftJoin('stg_erp_order_lines', 'sol', 'sol.erp_order_line_id = order.erp_order_line_id')
       .addSelect('sol.priority', 'priority')
       .where('plan.status = :status', { status: 'APPROVED' })
-      .andWhere('order.planned_production_date = :date', { date })
-      .getRawAndEntities();
+      .andWhere('order.planned_production_date = :date', { date });
+
+    if (pt) {
+      query.andWhere('plan.part_type = :partType', { partType: pt });
+    }
+
+    const orders = await query.getRawAndEntities();
 
     // Merge priority into entities
     const merged = orders.entities.map((order, idx) => {
@@ -2533,9 +2624,16 @@ export class MpsController {
       };
     });
 
+    // Filter by specific partType if requested (bil or bl) from the unified leg plan
+    let filteredOrders = merged;
+    if (partType === 'bil' || partType === 'bl') {
+      const allowedCodes = await this.getItemCodesByPartType(partType) || [];
+      filteredOrders = merged.filter(o => allowedCodes.includes(o.itemCode));
+    }
+
     // Grouping identical orders (same itemCode, productType)
     const groupedMap = new Map<string, any>();
-    for (const order of merged) {
+    for (const order of filteredOrders) {
       const key = `${order.itemCode}_${order.productType || 'unknown'}`;
       if (!groupedMap.has(key)) {
         groupedMap.set(key, { ...order, quantityKg: Number(order.quantityKg) });

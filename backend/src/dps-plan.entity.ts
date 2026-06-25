@@ -80,6 +80,18 @@ export class DpsSublot {
   @Column({ name: 'support_manpower', type: 'int', default: 0 })
   supportManpower: number;
 
+  @Column({ name: 'bil_manpower', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  bilManpower: number | null;
+
+  @Column({ name: 'bil_speed', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  bilSpeed: number | null;
+
+  @Column({ name: 'bil_hours', type: 'decimal', precision: 10, scale: 2, nullable: true })
+  bilHours: number | null;
+
+  @Column({ name: 'bil_piece_weight', type: 'decimal', precision: 10, scale: 4, nullable: true })
+  bilPieceWeight: number | null;
+
   @OneToMany(() => DpsSublotBin, bin => bin.sublot, { cascade: true })
   bins: DpsSublotBin[];
 }

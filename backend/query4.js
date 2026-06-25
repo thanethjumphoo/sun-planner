@@ -9,8 +9,9 @@ async function run() {
       database: process.env.DB_NAME,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
-    console.log(res.recordset);
+
+    const res = await pool.request().query("SELECT id, name, type, parentId FROM master_yield WHERE id IN ('00C3423E-F36B-1410-8FBD-004B1A6D4ABE', '61BE63A5-A659-F111-A9AC-E0071B8A3D2C')");
+    console.log('Parent Nodes:', res.recordset);
     sql.close();
   } catch(e) {
     console.error(e);

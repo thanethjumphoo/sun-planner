@@ -34,6 +34,11 @@ export class MasterYieldController {
     });
   }
 
+  @Get('nodes')
+  async getAllNodes() {
+    return this.masterYieldRepository.find();
+  }
+
   @Post()
   async createNode(@Body() data: Partial<MasterYield>) {
     const node = this.masterYieldRepository.create(data);

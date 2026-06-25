@@ -98,21 +98,22 @@ const MPSPlan: React.FC = () => {
       const res = await fetch(`${API}/api/master-yield`);
       if (res.ok) {
         const tree = await res.json();
-        const typeMap = new Map<string, string>();
         const flatNodes: any[] = [];
         const traverse = (nodes: any[]) => {
-          nodes.forEach(node => {
-            flatNodes.push(node);
-            if (node.type) {
-              typeMap.set(node.id, node.type);
-            }
-            if (node.children) {
-              traverse(node.children);
-            }
+          nodes.forEach(n => {
+            flatNodes.push(n);
+            if (n.children && n.children.length > 0) traverse(n.children);
           });
         };
         traverse(tree);
         setYieldTree(flatNodes);
+      }
+      
+      const nodesRes = await fetch(`${API}/api/master-yield/nodes`);
+      if (nodesRes.ok) {
+        const allNodes = await nodesRes.json();
+        const typeMap = new Map<string, string>();
+        allNodes.forEach((n: any) => typeMap.set(n.id, n.type));
         setYieldNodeTypeMap(typeMap);
       }
     } catch (e) {
@@ -254,9 +255,9 @@ const MPSPlan: React.FC = () => {
     if (spec.masterYieldIds) {
       const processIds = spec.masterYieldIds.split(',').map(id => id.trim());
       for (const id of processIds) {
-        const nodeType = yieldNodeTypeMap.get(id);
-        if (nodeType === 'CO-PRODUCT') return 'coproduct';
-        if (nodeType === 'BY-PRODUCT') return 'byproduct';
+        const nodeType = yieldNodeTypeMap.get(id) || yieldNodeTypeMap.get(id.toLowerCase()) || yieldNodeTypeMap.get(id.toUpperCase());
+        if (nodeType?.toUpperCase() === 'CO-PRODUCT') return 'coproduct';
+        if (nodeType?.toUpperCase() === 'BY-PRODUCT') return 'byproduct';
       }
     }
 
@@ -264,7 +265,162 @@ const MPSPlan: React.FC = () => {
   };
 
 
-  const isMainProductSpec = (itemCode: string): boolean => {
+  
+  const renderDemandByYieldTreeGroup = (
+    title: string,
+    themeColor: string,
+    ordersList: any[],
+    typeFilter: 'coproduct' | 'byproduct',
+    currentSupply: any
+  ) => {
+    let byProductsSupply: Record<string, { name: string; qty: number; processName?: string }> = {};
+    if (currentSupply && currentSupply.byProducts) {
+      try {
+        byProductsSupply = JSON.parse(currentSupply.byProducts);
+      } catch (e) {
+        console.error('Error parsing byProducts', e);
+      }
+    }
+
+    const resolveByproductName = (key: string): string => {
+      if (byProductsSupply[key]?.name) return byProductsSupply[key].name;
+      if (specs[key]) return specs[key].erpItemDesc || specs[key].erpItemCode || key;
+      const foundSpec: any = Object.values(specs).find((s: any) =>
+        s.masterYieldIds?.split(',').map((id: any) => id.trim().toLowerCase()).includes(key.toLowerCase())
+      );
+      if (foundSpec) return foundSpec.erpItemDesc || foundSpec.erpItemCode || key;
+      return key;
+    };
+
+    interface GroupedItem {
+      name: string;
+      supplyQty: number;
+      demandQty: number;
+      orders: any[];
+    }
+
+    const groupedMap: Record<string, GroupedItem> = {};
+
+    const getOrCreateGroup = (name: string): GroupedItem => {
+      if (!groupedMap[name]) groupedMap[name] = { name, supplyQty: 0, demandQty: 0, orders: [] };
+      return groupedMap[name];
+    };
+
+    Object.keys(byProductsSupply).forEach(key => {
+      const sInfo = byProductsSupply[key];
+      if (sInfo && sInfo.qty > 0) {
+        let nodeType = yieldNodeTypeMap.get(key) || yieldNodeTypeMap.get(key.toLowerCase()) || yieldNodeTypeMap.get(key.toUpperCase());
+        
+        // Fallback if nodeType is missing from tree map (e.g. deep nodes)
+        if (!nodeType) {
+          const foundSpec: any = Object.values(specs).find((s: any) =>
+            s.masterYieldIds?.split(',').map((id: any) => id.trim().toLowerCase()).includes(key.toLowerCase())
+          );
+          if (foundSpec) {
+            const specType = getProductType(foundSpec.erpItemCode);
+            if (specType === 'coproduct') nodeType = 'CO-PRODUCT';
+            if (specType === 'byproduct') nodeType = 'BY-PRODUCT';
+          } else if (sInfo.processName === 'BIL L/C' || sInfo.processName === 'Debone Process') {
+             // Heuristic: Process 3 typically yields by-products
+             nodeType = 'BY-PRODUCT';
+          }
+        }
+
+        const isMatch = typeFilter === 'coproduct' ? nodeType?.toUpperCase() === 'CO-PRODUCT' : nodeType?.toUpperCase() === 'BY-PRODUCT';
+        if (isMatch) {
+          const name = resolveByproductName(key);
+          const grp = getOrCreateGroup(name);
+          grp.supplyQty += sInfo.qty;
+        }
+      }
+    });
+
+    ordersList.forEach(o => {
+      const spec = specs[o.itemCode];
+      const bpId = spec?.masterYieldIds?.split(',').map((id: any) => id.trim())[0];
+      const key = bpId || o.itemCode;
+      const name = resolveByproductName(key);
+      const grp = getOrCreateGroup(name);
+      grp.demandQty += o.qty;
+      grp.orders.push(o);
+    });
+
+    const groups = Object.values(groupedMap);
+    if (groups.length === 0) return null;
+
+    const borderTheme = themeColor === 'purple' ? 'border-purple-200 bg-purple-50/20' : 'border-amber-200 bg-amber-50/20';
+    const titleTheme = themeColor === 'purple' ? 'text-purple-700' : 'text-amber-700';
+    const lineTheme = themeColor === 'purple' ? 'bg-purple-500' : 'bg-amber-500';
+    const expandedBorder = themeColor === 'purple' ? 'border-purple-200' : 'border-amber-200';
+    const hoverTheme = themeColor === 'purple' ? 'hover:bg-purple-50/50' : 'hover:bg-amber-50/50';
+
+    return (
+      <div className={`border ${borderTheme} rounded-xl p-4 space-y-3`}>
+        <p className={`text-[10px] font-bold ${titleTheme} uppercase tracking-wider`}>{title}</p>
+        <div className="space-y-1">
+          {groups.map(group => {
+            const supplyQty = Math.round(group.supplyQty);
+            const demandQty = Math.round(group.demandQty);
+            const remaining = supplyQty - demandQty;
+            if (supplyQty === 0 && demandQty === 0) return null;
+            const isExpanded = expandedSizeBins[group.name] || false;
+            const ords = group.orders;
+
+            return (
+              <div key={group.name}>
+                <div
+                  className={`bg-white rounded-lg p-2.5 border border-gray-100 flex items-center gap-3 cursor-pointer ${hoverTheme} transition-colors`}
+                  onClick={() => setExpandedSizeBins((prev: any) => ({ ...prev, [group.name]: !prev[group.name] }))}
+                >
+                  <div className={`w-2 h-8 rounded-full ${lineTheme}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-gray-600 uppercase">{group.name}</span>
+                      {ords.length > 0 && (
+                        <span className="text-[9px] text-gray-400">
+                          {isExpanded ? '▲' : '▼'} {ords.length} orders
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-4 text-xs mt-0.5">
+                      <span className="text-emerald-600">Supply: <b>{supplyQty.toLocaleString()}</b></span>
+                      <span className="text-orange-600">Demand: <b>{demandQty.toLocaleString()}</b></span>
+                      <span className={remaining >= 0 ? 'text-blue-600' : 'text-red-600 font-bold'}>
+                        {remaining >= 0 ? 'Rem' : 'Short'}: <b>{Math.abs(remaining).toLocaleString()}</b>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                {isExpanded && ords.length > 0 && (
+                  <div className={`ml-5 mt-1 mb-2 border-l-2 ${expandedBorder} pl-3 space-y-1`}>
+                    {ords.map((ord: any, idx: number) => {
+                      const spec = specs[ord.itemCode];
+                      return (
+                      <div key={idx} className="flex items-center gap-2 text-[11px] py-1 px-2 bg-white/80 rounded border border-gray-100">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${ord.type === 'chilled' ? 'bg-orange-100 text-orange-700' : 'bg-cyan-100 text-cyan-700'}`}>
+                          {ord.type === 'chilled' ? 'C' : 'F'}
+                        </span>
+                        {Number(spec?.icutSpeed) > 0 && (
+                          <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200 uppercase tracking-tighter">
+                            I-CUT
+                          </span>
+                        )}
+                        <span className="font-bold text-gray-700">{ord.soNumber}</span>
+                        <span className="text-gray-400 text-[10px]">{ord.itemCode}</span>
+                        <span className="ml-auto font-bold text-gray-900">{Math.round(ord.qty).toLocaleString()} kg</span>
+                      </div>
+                    )})}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+const isMainProductSpec = (itemCode: string): boolean => {
     const type = getProductType(itemCode);
     return type === 'main';
   };
@@ -2952,27 +3108,20 @@ const MPSPlan: React.FC = () => {
                       {(() => {
                         const process3ByProducts = (selectedSupply as any)._process3ByProducts || {};
                         const bpKeys = Object.keys(process3ByProducts);
-                        if (bpKeys.length === 0) return <div className="text-sm text-amber-600 italic">No Process 3 By-Products generated yet.</div>;
-                        
-                        const byproductOrders = selectedDailyOrders.filter((o: any) => getProductType(o.itemCode) === 'byproduct');
 
                         return (
                           <div className="space-y-6">
+                            {/* Demand by By-Product Summary removed from here */}
+
+                            {bpKeys.length === 0 && <div className="text-sm text-amber-600 italic">No Process 3 By-Products generated yet.</div>}
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
                               {bpKeys.map((bpName, bpidx) => {
                                 const bpData = process3ByProducts[bpName] as any;
                                 const totalVal = Math.round(bpData.totalVal);
                                 if (totalVal <= 0) return null;
                                 
-                                // Find orders for this by-product
-                                const orders = byproductOrders.filter((o: any) => {
-                                   const spec = specs[o.itemCode] as any;
-                                   const isMappedById = spec?.masterYieldIds?.includes(bpData.id);
-                                   const isMappedByName = spec?.productName === bpName || spec?.description === bpName;
-                                   return isMappedById || isMappedByName;
-                                });
-                                const demand = orders.reduce((sum: number, o: any) => sum + (Number(o.qty) || 0), 0);
-                                const rem = totalVal - demand;
+                                
+
 
                                 return (
                                   <div key={bpidx} className="bg-white border border-amber-200 p-4 rounded-xl shadow-sm hover:shadow-md hover:border-amber-400 transition-all flex flex-col justify-between h-full">
@@ -2991,33 +3140,7 @@ const MPSPlan: React.FC = () => {
                                         <span className="text-amber-700">Supply</span>
                                         <span className="text-amber-800 text-right">{totalVal.toLocaleString()} kg</span>
                                       </div>
-                                      {orders.length > 0 && (
-                                        <>
-                                          <div className="pt-1 mt-1 flex flex-wrap justify-between items-center text-xs font-black p-1.5 gap-x-2 gap-y-0.5">
-                                            <span className="text-orange-600">Demand</span>
-                                            <span className="text-orange-700 text-right">{Math.round(demand).toLocaleString()} kg</span>
-                                          </div>
-                                          <div className={`pt-1 mt-1 flex flex-wrap justify-between items-center text-xs font-black p-1.5 rounded gap-x-2 gap-y-0.5 ${rem < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                                            <span>Remaining</span>
-                                            <span className="text-right">{Math.round(rem).toLocaleString()} kg</span>
-                                          </div>
-                                        </>
-                                      )}
                                     </div>
-
-                                    {orders.length > 0 && (
-                                      <div className="mt-auto pt-3 border-t border-amber-100">
-                                        <p className="text-[10px] font-bold text-amber-600 mb-1.5">MAPPED ORDERS</p>
-                                        <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                                          {orders.map((o: any, oidx: number) => (
-                                            <div key={oidx} className="flex justify-between items-center text-[10px] bg-amber-50 p-1.5 rounded border border-amber-100/50">
-                                              <span className="text-amber-800 font-medium truncate pr-2" title={o.soNumber}>{o.soNumber}</span>
-                                              <span className="text-amber-900 font-bold whitespace-nowrap">{Math.round(o.qty).toLocaleString()} kg</span>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
                                   </div>
                                 );
                               })}
@@ -3256,7 +3379,7 @@ const MPSPlan: React.FC = () => {
                       const coproductOrders = selectedDailyOrders.filter((o: any) => getProductType(o.itemCode) === 'coproduct' && Math.round(Number(o.qty)) > 0);
                       const byproductOrders = selectedDailyOrders.filter((o: any) => getProductType(o.itemCode) === 'byproduct' && Math.round(Number(o.qty)) > 0);
 
-                      const renderDemandByYieldTreeGroup = (
+                      /* MOVED */ (
                         title: string,
                         themeColor: string,
                         ordersList: any[],
@@ -3851,7 +3974,7 @@ const MPSPlan: React.FC = () => {
                           )}
 
                           {/* Demand by Co-Product Summary — expandable */}
-                          {renderDemandByYieldTreeGroup('Demand by Co-Product', 'purple', coproductOrders, 'coproduct')}
+                          {renderDemandByYieldTreeGroup('Demand by Co-Product', 'purple', coproductOrders, 'coproduct', selectedSupply)}
 
                           {/* By-Product Orders Table */}
                           {byproductOrders.length > 0 && (
@@ -3900,7 +4023,7 @@ const MPSPlan: React.FC = () => {
                           )}
 
                           {/* Demand by By-Product Summary — expandable */}
-                          {renderDemandByYieldTreeGroup('Demand by By-Product', 'amber', byproductOrders, 'byproduct')}
+                          {renderDemandByYieldTreeGroup('Demand by By-Product', 'amber', byproductOrders, 'byproduct', selectedSupply)}
                         </>
                       );
                     })()

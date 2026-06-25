@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users, ChevronDown, Download } from 'lucide-react';
+import { Layers, Activity, CheckCircle, Package, TrendingUp, Calendar, X, Info, Edit2, Check, Plus, RefreshCw, Trash2, Users, ChevronDown, Download, ArrowRight } from 'lucide-react';
 import CustomSelect from '../components/common/CustomSelect';
 import CustomDatePicker from '../components/common/CustomDatePicker';
 
@@ -82,9 +82,46 @@ const normalizeSize = (sz: string | undefined | null) => {
   return match || sz.trim();
 };
 
-const getMatchingBins = (size: string, isBil: boolean): string[] => {
+const getMatchingBins = (size: string, isBil: boolean, yieldRate: number = 1.0, blMatrix: any[] = [], sizeColumns: string[] = []): string[] => {
   if (!size || size === 'unsize' || size === 'Grade B') return [];
-  if (isBil) return [size];
+  
+  const parseSizeRange = (s: string): { min: number, max: number } | null => {
+    let min = -1, max = -1;
+    const nums = s.match(/\d+(\.\d+)?/g);
+    const lower = s.toLowerCase();
+    if (nums && nums.length >= 2) {
+      min = parseFloat(nums[0]);
+      max = parseFloat(nums[1]);
+    } else if (nums && nums.length === 1) {
+      const val = parseFloat(nums[0]);
+      if (lower.includes('up') || lower.includes('>')) { min = val; max = 9999; }
+      else if (lower.includes('down') || lower.includes('<')) { min = 0; max = val; }
+    }
+    return min !== -1 && max !== -1 ? { min, max } : null;
+  };
+
+  if (isBil) {
+    // If it's a BL order (yield ~0.74), map the BL size to BIL bins using the matrix
+    if (yieldRate === 0.74 && blMatrix.length > 0) {
+       const mappedBins = blMatrix
+         .filter(m => m.targetProduct === size)
+         .sort((a, b) => a.priority - b.priority)
+         .map(m => m.rmSize);
+       if (mappedBins.length > 0) return mappedBins;
+    }
+    
+    // For BIL orders, find overlapping bins from sizeColumns
+    const oRange = parseSizeRange(size);
+    if (oRange && sizeColumns.length > 0) {
+      const matches = sizeColumns.filter(c => {
+        const cRange = parseSizeRange(c);
+        if (!cRange) return false;
+        return cRange.min < oRange.max && cRange.max > oRange.min;
+      });
+      if (matches.length > 0) return matches;
+    }
+    return [size];
+  }
 
   // If exact match with a label, return its key
   if (Object.values(sizeLabelMap).includes(size)) {
@@ -100,31 +137,13 @@ const getMatchingBins = (size: string, isBil: boolean): string[] => {
     { label: '55-60', min: 55, max: 60 },
     { label: '60-65', min: 60, max: 65 },
     { label: '65-70', min: 65, max: 70 },
-    { label: '70 Up', min: 70, max: 999 }
+    { label: '70 Up', min: 70, max: 9999 }
   ];
 
-  let oMin = -1;
-  let oMax = -1;
-  const nums = size.match(/\d+(\.\d+)?/g);
-  const lower = size.toLowerCase();
-
-  if (nums && nums.length >= 2) {
-    oMin = parseFloat(nums[0]);
-    oMax = parseFloat(nums[1]);
-  } else if (nums && nums.length === 1) {
-    const val = parseFloat(nums[0]);
-    if (lower.includes('up') || lower.includes('>')) {
-      oMin = val;
-      oMax = 999;
-    } else if (lower.includes('down') || lower.includes('<')) {
-      oMin = 0;
-      oMax = val;
-    }
-  }
-
-  if (oMin !== -1 && oMax !== -1) {
+  const oRange = parseSizeRange(size);
+  if (oRange) {
     const matches = binRanges
-      .filter(b => b.min < oMax && b.max > oMin)
+      .filter(b => b.min < oRange.max && b.max > oRange.min)
       .map(b => {
         const key = Object.keys(sizeLabelMap).find(k => sizeLabelMap[k] === b.label);
         return key || b.label;
@@ -162,20 +181,18 @@ const DPSPlan: React.FC = () => {
   const [newOrderForm, setNewOrderForm] = useState({ itemCode: '', qty: '' });
 
   const [yieldNodeTypeMap, setYieldNodeTypeMap] = useState<Map<string, string>>(new Map());
+  const [yieldNodeNameMap, setYieldNodeNameMap] = useState<Map<string, string>>(new Map());
   const [yieldTree, setYieldTree] = useState<any[]>([]);
   const [specsMap, setSpecsMap] = useState<Record<string, any>>({});
   const [sizeColumns, setSizeColumns] = useState<string[]>([]);
   const [machineConfigs, setMachineConfigs] = useState<any[]>([]);
+  const [blBeltGateMatrix, setBlBeltGateMatrix] = useState<any[]>([]);
+  const [bilCapacityInputs, setBilCapacityInputs] = useState<Record<string, { manpower: number | string, speed: number | string, hours: number | string, pieceWeight: number | string }>>({});
+  const [blPiecesInputs, setBlPiecesInputs] = useState<Record<string, { toridasYield: number | string, blYield: number | string }>>({});
 
   const getProductType = (itemCode: string): 'main' | 'coproduct' | 'byproduct' => {
     const spec = specsMap[itemCode];
     if (!spec) return 'main';
-
-    if (spec.type) {
-      const type = spec.type.toLowerCase().trim();
-      if (type === 'co-product' || type === 'coproduct') return 'coproduct';
-      if (type === 'by-product' || type === 'byproduct') return 'byproduct';
-    }
 
     if (spec.masterYieldIds) {
       const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
@@ -191,10 +208,35 @@ const DPSPlan: React.FC = () => {
 
 
 
+  const getLegYield = (itemCode: string, itemDesc: string): number => {
+    if (!isBil) return 1.0;
+    const desc = itemDesc.toUpperCase();
+    if (desc.includes('BONE-IN')) return 1.0;
+    if (desc.includes('LEG') && !desc.includes('BONELESS')) return 0.99;
+    const specType = specsMap[itemCode]?.type?.toLowerCase() || '';
+    if (specType === 'bl') return 0.74;
+    if (specType === 'leg') return 0.99;
+    if (specType === 'bil') return 1.0;
+    if (desc.includes('BL')) return 0.74;
+    return 0.74; // default to BL for unknown leg items
+  };
+
   const getDisplayLabel = (key: string): string => {
     if (key.includes(',')) {
       const parts: string[] = key.split(',').map((p: string) => getDisplayLabel(p.trim()));
       return Array.from(new Set(parts)).join(', ');
+    }
+    if (key === 'Grade B' || key === 'Grade B (Co-Product)') return 'Grade B (Co-Product)';
+    if (key === 'unsize' || key === 'Unsize / Other Grade A') return 'Unsize / Other Grade A';
+    if (yieldNodeNameMap.has(key)) return yieldNodeNameMap.get(key) || key;
+    return key;
+  };
+
+  const getSizeLabel = (key: string): string => {
+    if (key.includes(',')) {
+      const parts = key.split(',').map((p: string) => p.trim());
+      if (parts.length > 0 && sizeLabelMap[parts[0]]) return sizeLabelMap[parts[0]];
+      return parts[0];
     }
     if (key === 'Grade B' || key === 'Grade B (Co-Product)') return 'Grade B (Co-Product)';
     if (key === 'unsize' || key === 'Unsize / Other Grade A') return 'Unsize / Other Grade A';
@@ -243,9 +285,8 @@ const DPSPlan: React.FC = () => {
   };
 
   const computeYieldTreeSubproducts = (sl: Sublot) => {
-    if (isBil) return; // BIL does not have co-products or by-products in the yield tree
-
-    const categoryNode = yieldTree.find(n => n.name === 'สันใน');
+    const categoryName = isBil ? 'BIL L/C' : 'สันใน';
+    const categoryNode = yieldTree.find(n => n.name === categoryName);
     const categorySubproducts: any[] = [];
     const traverseSubproducts = (node: any) => {
       if (node.type === 'BY-PRODUCT' || node.type === 'CO-PRODUCT') {
@@ -257,6 +298,34 @@ const DPSPlan: React.FC = () => {
     };
     if (categoryNode && categoryNode.children) {
       categoryNode.children.forEach(traverseSubproducts);
+    }
+
+    // 1. Reset all co-product / by-product bins and coProductKg to 0
+    categorySubproducts.forEach(subprod => {
+      sl.bins[subprod.id] = 0;
+    });
+    sl.coProductKg = 0;
+
+    if (isBil) {
+      // For BIL, calculate total deboned RM (initial FG - current FG bins)
+      let currentRm = 0;
+      Object.keys(sl.bins).forEach(binSize => {
+        if (!yieldNodeTypeMap.has(binSize)) currentRm += sl.bins[binSize];
+      });
+      const debonedRm = Math.max(0, sl.initialTotalFg - currentRm);
+      
+      if (debonedRm > 0) {
+         categorySubproducts.forEach(subprod => {
+            const pct = Number(subprod.yieldPercentage || 0);
+            const subprodKg = Number((debonedRm * pct).toFixed(1));
+            sl.bins[subprod.id] = (sl.bins[subprod.id] || 0) + subprodKg;
+            
+            if (subprod.type === 'CO-PRODUCT') {
+               sl.coProductKg = Number(((sl.coProductKg || 0) + subprodKg).toFixed(1));
+            }
+         });
+      }
+      return; // Skip the standard Fillet logic for BIL
     }
 
     // 1. Reset all co-product / by-product bins and coProductKg to 0
@@ -490,13 +559,16 @@ const DPSPlan: React.FC = () => {
     const alloc = { ...targetSl.allocations[allocIndex] };
     const oldQty = alloc.qty;
     const diff = Number((newQty - oldQty).toFixed(1));
+    const order = orders.find(o => o.id === orderId);
+    const yieldRate = order ? getLegYield(order.itemCode, order.itemDesc) : 1.0;
+    const diffRm = Number((diff / yieldRate).toFixed(1));
 
     if (alloc.size === 'Grade B') {
-      if (diff > 0 && sourceSl.coProductKg < diff) return;
-      sourceSl.coProductKg = Number((sourceSl.coProductKg - diff).toFixed(1));
+      if (diffRm > 0 && sourceSl.coProductKg < diffRm) return;
+      sourceSl.coProductKg = Number((sourceSl.coProductKg - diffRm).toFixed(1));
     } else {
-      if (diff > 0 && (sourceSl.bins[alloc.size] || 0) < diff) return;
-      sourceSl.bins = { ...sourceSl.bins, [alloc.size]: Number(((sourceSl.bins[alloc.size] || 0) - diff).toFixed(1)) };
+      if (diffRm > 0 && (sourceSl.bins[alloc.size] || 0) < diffRm) return;
+      sourceSl.bins = { ...sourceSl.bins, [alloc.size]: Number(((sourceSl.bins[alloc.size] || 0) - diffRm).toFixed(1)) };
     }
 
     const newAllocations = [...targetSl.allocations];
@@ -563,10 +635,128 @@ const DPSPlan: React.FC = () => {
     saveDbUpdate(newSublots, orders);
   };
 
+  const handleCommitBlAllocation = async (sl: Sublot, mainBins: {label: string, kg: number, pcs: number}[], estPieces: number, totalPcs: number) => {
+    if (estPieces <= 0 || mainBins.length === 0) return;
+    if (!window.confirm(`ยืนยันการส่งเนื้อไปทำ BL? (Est. BL Pieces: ${totalPcs}, Cap: ${estPieces})`)) return;
+
+    const newSublots = [...sublots];
+    const sourceSlIndex = newSublots.findIndex(s => s.id === sl.id);
+    if (sourceSlIndex === -1) return;
+
+    const sourceSl = { ...newSublots[sourceSlIndex] };
+    const nextSlIndex = sourceSlIndex + 1;
+    const hasNextSl = nextSlIndex < newSublots.length;
+
+    let ratioBL = 1;
+    if (totalPcs > estPieces) {
+      ratioBL = estPieces / totalPcs;
+    }
+
+    const allocationsToAdd: any[] = [];
+    const newOrders = [...orders];
+
+    const addDummyOrder = (id: string, desc: string) => {
+      if (!newOrders.find(o => o.id === id)) {
+        newOrders.push({
+          id,
+          itemCode: id,
+          itemDesc: desc,
+          type: 'Transfer',
+          size: 'Any',
+          qty: 999999, // large demand
+          fulfilledKg: 0,
+          unfulfilledKg: 999999,
+          priority: 99
+        });
+      }
+    };
+
+    addDummyOrder('L-9999991', 'Transfer to BL');
+    addDummyOrder('L-9999992', 'Transfer to Next Sublot');
+
+    mainBins.forEach(bin => {
+      const binKey = Object.keys(sourceSl.bins).find(k => getDisplayLabel(k) === bin.label);
+      if (!binKey) return;
+
+      const kgToBL = Number((bin.kg * ratioBL).toFixed(1));
+      const kgToNext = Number((bin.kg - kgToBL).toFixed(1));
+
+      if (kgToBL > 0) {
+        allocationsToAdd.push({
+          orderId: 'L-9999991',
+          itemDesc: 'Transfer to BL',
+          size: binKey,
+          qty: kgToBL,
+          sizeLabel: bin.label
+        });
+        sourceSl.bins[binKey] = Number((sourceSl.bins[binKey] - kgToBL).toFixed(1));
+      }
+
+      if (kgToNext > 0) {
+        allocationsToAdd.push({
+          orderId: 'L-9999992',
+          itemDesc: `Transfer to Next Sublot`,
+          size: binKey,
+          qty: kgToNext,
+          sizeLabel: bin.label
+        });
+        sourceSl.bins[binKey] = Number((sourceSl.bins[binKey] - kgToNext).toFixed(1));
+
+        if (hasNextSl) {
+          const nextSl = { ...newSublots[nextSlIndex] };
+          nextSl.bins = { ...nextSl.bins };
+          nextSl.bins[binKey] = Number(((nextSl.bins[binKey] || 0) + kgToNext).toFixed(1));
+          newSublots[nextSlIndex] = nextSl;
+        }
+      }
+    });
+
+    sourceSl.allocations = [...sourceSl.allocations, ...allocationsToAdd];
+    newSublots[sourceSlIndex] = sourceSl;
+
+    setSublots(newSublots);
+    setOrders(newOrders);
+    await saveDbUpdate(newSublots, newOrders);
+  };
+
+  const handleUndoBlAllocation = async (sl: Sublot) => {
+    if (!window.confirm(`ต้องการยกเลิกการส่งเนื้อไปทำ BL ทั้งหมดใน Sublot นี้ใช่หรือไม่?`)) return;
+    const newSublots = [...sublots];
+    const sourceSlIndex = newSublots.findIndex(s => s.id === sl.id);
+    if (sourceSlIndex === -1) return;
+    const sourceSl = { ...newSublots[sourceSlIndex] };
+    const nextSlIndex = sourceSlIndex + 1;
+    const hasNextSl = nextSlIndex < newSublots.length;
+
+    const blAllocs = sourceSl.allocations.filter(a => a.orderId === 'L-9999991' || a.orderId === 'L-9999992');
+    if (blAllocs.length === 0) return;
+
+    let nextSl = hasNextSl ? { ...newSublots[nextSlIndex] } : null;
+    if (nextSl) nextSl.bins = { ...nextSl.bins };
+
+    blAllocs.forEach(a => {
+      sourceSl.bins[a.size] = Number(((sourceSl.bins[a.size] || 0) + a.qty).toFixed(1));
+      
+      if (a.orderId === 'L-9999992' && nextSl) {
+        nextSl.bins[a.size] = Number(((nextSl.bins[a.size] || 0) - a.qty).toFixed(1));
+        if (nextSl.bins[a.size] < 0) nextSl.bins[a.size] = 0;
+      }
+    });
+
+    sourceSl.allocations = sourceSl.allocations.filter(a => a.orderId !== 'L-9999991' && a.orderId !== 'L-9999992');
+
+    newSublots[sourceSlIndex] = sourceSl;
+    if (nextSl) newSublots[nextSlIndex] = nextSl;
+
+    setSublots(newSublots);
+    await saveDbUpdate(newSublots, orders);
+  };
+
   const saveDbUpdate = async (currentSublots: Sublot[], currentOrders: Order[]) => {
+    const validOrders = currentOrders.filter(o => o.id !== 'L-9999991' && o.id !== 'L-9999992');
     const totalSupplyKg = currentSublots.reduce((sum, s) => sum + s.totalWeightKg, 0);
-    const totalDemandKg = currentOrders.reduce((sum, o) => sum + o.qty, 0);
-    const totalFulfilled = currentOrders.reduce((sum, o) => sum + o.fulfilledKg, 0);
+    const totalDemandKg = validOrders.reduce((sum, o) => sum + o.qty, 0);
+    const totalFulfilled = validOrders.reduce((sum, o) => sum + o.fulfilledKg, 0);
     const fulfillmentRate = totalDemandKg > 0 ? (totalFulfilled / totalDemandKg) * 100 : 0;
 
     const allAllocs: any[] = [];
@@ -584,7 +774,13 @@ const DPSPlan: React.FC = () => {
 
     const payload = {
       totalSupplyKg, totalDemandKg, fulfillmentRate,
-      sublots: currentSublots,
+      sublots: currentSublots.map(sl => ({
+        ...sl,
+        bilManpower: bilCapacityInputs[sl.id]?.manpower ?? null,
+        bilSpeed: bilCapacityInputs[sl.id]?.speed ?? null,
+        bilHours: bilCapacityInputs[sl.id]?.hours ?? null,
+        bilPieceWeight: bilCapacityInputs[sl.id]?.pieceWeight ?? null,
+      })),
       orders: currentOrders,
       allocations: allAllocs
     };
@@ -612,11 +808,16 @@ const DPSPlan: React.FC = () => {
         if (yieldRes.ok) {
           parsedYieldTree = await yieldRes.json();
           const flatNodes: any[] = [];
+          const typeMap = new Map<string, string>();
+          const nameMap = new Map<string, string>();
           const traverse = (nodes: any[]) => {
             nodes.forEach(node => {
               flatNodes.push(node);
               if (node.type) {
                 typeMap.set(node.id, node.type);
+              }
+              if (node.name) {
+                nameMap.set(node.id, node.name);
               }
               if (node.children) {
                 traverse(node.children);
@@ -627,6 +828,7 @@ const DPSPlan: React.FC = () => {
           parsedYieldTree = flatNodes;
           setYieldTree(flatNodes);
           setYieldNodeTypeMap(typeMap);
+          setYieldNodeNameMap(nameMap);
         }
       } catch (e) {
         console.error("Error loading yield nodes in fetchData", e);
@@ -767,12 +969,28 @@ const DPSPlan: React.FC = () => {
               slaughteredWeight,
               rmFlTotal,
               shift: s.shift || 'A',
-              supportManpower: s.supportManpower || 0
+              supportManpower: s.supportManpower || 0,
+              bilManpower: s.bilManpower,
+              bilSpeed: s.bilSpeed,
+              bilHours: s.bilHours,
+              bilPieceWeight: s.bilPieceWeight
             };
           });
 
           setOrders(mappedOrders);
           setSublots(mappedSublots);
+
+          const loadedInputs: any = {};
+          mappedSublots.forEach((sl: any) => {
+            loadedInputs[sl.id] = {
+              manpower: sl.bilManpower ?? '',
+              speed: sl.bilSpeed ?? '',
+              hours: sl.bilHours ?? '',
+              pieceWeight: sl.bilPieceWeight ?? ''
+            };
+          });
+          setBilCapacityInputs(loadedInputs);
+
           setPlanId(dbPlan.data.id);
           setIsGenerated(true);
           hasDbPlan = true;
@@ -781,12 +999,17 @@ const DPSPlan: React.FC = () => {
 
       const matrixUrl = isBil ? `${API}/api/bil-weight-distribution` : `${API}/api/weight-distribution`;
 
-      const [intakeRes, orderRes, wdRes, erpItemsRes] = await Promise.all([
+      const [intakeRes, orderRes, wdRes, erpItemsRes, blMatrixRes] = await Promise.all([
         fetch(`${API}/api/chicken-receiving/daily`),
-        fetch(`${API}/api/mps/approved-orders/${targetDate}`),
+        fetch(`${API}/api/mps/approved-orders/${targetDate}?partType=${partId || 'fillet'}`),
         fetch(matrixUrl),
-        fetch(`${API}/api/product-spec/erp-items`)
+        fetch(`${API}/api/product-spec/erp-items`),
+        fetch(`${API}/api/bl-belt-gate-matrix`)
       ]);
+
+      if (blMatrixRes.ok) {
+        setBlBeltGateMatrix(await blMatrixRes.json());
+      }
 
       // 1. Load Matrix
       let loadedMatrix = null;
@@ -983,7 +1206,20 @@ const DPSPlan: React.FC = () => {
         const rawOrders = await orderRes.json();
         rawOrders.forEach((l: any) => {
           const spec = specMap[l.itemCode];
-          const erpDesc = erpItemsMap[l.itemCode];
+          const erpDesc = erpItemsMap[l.itemCode] || '';
+          
+          const isMappedSubproduct = (spec: any) => {
+            if (!spec || !spec.masterYieldIds) return false;
+            const processIds = spec.masterYieldIds.split(',').map((id: any) => id.trim());
+            for (const id of processIds) {
+              const nodeType = yieldNodeTypeMap.get(id);
+              if (nodeType === 'CO-PRODUCT' || nodeType === 'BY-PRODUCT') return true;
+            }
+            return false;
+          };
+
+          if (isMappedSubproduct(spec)) return; // Skip Mapped By-Product orders
+
           const finalDesc = erpDesc ? `${l.itemCode} - ${erpDesc}` : l.itemCode;
 
           initialOrders.push({
@@ -1040,17 +1276,21 @@ const DPSPlan: React.FC = () => {
       // Pass 1: Allocate standard sized MAIN product orders
       initialOrders.forEach(order => {
         if (order.size !== 'unsize' && getProductType(order.itemCode) === 'main' && order.unfulfilledKg > 0) {
-          const targetBins = getMatchingBins(order.size, isBil);
+          const yieldRate = getLegYield(order.itemCode, order.itemDesc);
+          const targetBins = getMatchingBins(order.size, isBil, yieldRate, blBeltGateMatrix, sizeColumns);
           loadedSublots.forEach(sl => {
             targetBins.forEach(binSize => {
-              const avail = sl.bins[binSize] || 0;
-              if (avail > 0 && order.unfulfilledKg > 0) {
-                const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
-                if (take <= 0) return;
-                sl.bins[binSize] = Number((sl.bins[binSize] - take).toFixed(1));
-                order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
-                order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
-                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: take });
+              const availRm = sl.bins[binSize] || 0;
+              if (availRm > 0 && order.unfulfilledKg > 0) {
+                const reqRm = order.unfulfilledKg / yieldRate;
+                const takeRm = Number(Math.min(availRm, reqRm).toFixed(1));
+                if (takeRm <= 0) return;
+                const takeFg = Number((takeRm * yieldRate).toFixed(1));
+                
+                sl.bins[binSize] = Number((sl.bins[binSize] - takeRm).toFixed(1));
+                order.fulfilledKg = Number((order.fulfilledKg + takeFg).toFixed(1));
+                order.unfulfilledKg = Number((order.unfulfilledKg - takeFg).toFixed(1));
+                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: takeFg });
               }
             });
           });
@@ -1060,20 +1300,24 @@ const DPSPlan: React.FC = () => {
       // Pass 2: Allocate unsized MAIN product orders
       initialOrders.forEach(order => {
         if (order.size === 'unsize' && getProductType(order.itemCode) === 'main' && order.unfulfilledKg > 0) {
+          const yieldRate = getLegYield(order.itemCode, order.itemDesc);
           loadedSublots.forEach(sl => {
             Object.keys(sl.bins).forEach(binSize => {
               // Exclude yield nodes that are co-products or by-products from standard unsize allocation
               const isYieldSubproduct = yieldNodeTypeMap.has(binSize);
               if (isYieldSubproduct) return;
 
-              const avail = sl.bins[binSize] || 0;
-              if (avail > 0 && order.unfulfilledKg > 0) {
-                const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
-                if (take <= 0) return;
-                sl.bins[binSize] = Number((sl.bins[binSize] - take).toFixed(1));
-                order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
-                order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
-                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: take });
+              const availRm = sl.bins[binSize] || 0;
+              if (availRm > 0 && order.unfulfilledKg > 0) {
+                const reqRm = order.unfulfilledKg / yieldRate;
+                const takeRm = Number(Math.min(availRm, reqRm).toFixed(1));
+                if (takeRm <= 0) return;
+                const takeFg = Number((takeRm * yieldRate).toFixed(1));
+
+                sl.bins[binSize] = Number((sl.bins[binSize] - takeRm).toFixed(1));
+                order.fulfilledKg = Number((order.fulfilledKg + takeFg).toFixed(1));
+                order.unfulfilledKg = Number((order.unfulfilledKg - takeFg).toFixed(1));
+                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: takeFg });
               }
             });
           });
@@ -1235,17 +1479,21 @@ const DPSPlan: React.FC = () => {
       // Pass 1: Allocate standard sized MAIN product orders
       freshOrders.forEach(order => {
         if (order.size !== 'unsize' && getProductType(order.itemCode) === 'main' && order.unfulfilledKg > 0) {
-          const targetBins = getMatchingBins(order.size, isBil);
+          const yieldRate = getLegYield(order.itemCode, order.itemDesc);
+          const targetBins = getMatchingBins(order.size, isBil, yieldRate, blBeltGateMatrix, sizeColumns);
           freshSublots.forEach(sl => {
             targetBins.forEach(binSize => {
-              const avail = sl.bins[binSize] || 0;
-              if (avail > 0 && order.unfulfilledKg > 0) {
-                const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
-                if (take <= 0) return;
-                sl.bins[binSize] = Number((sl.bins[binSize] - take).toFixed(1));
-                order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
-                order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
-                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: take });
+              const availRm = sl.bins[binSize] || 0;
+              if (availRm > 0 && order.unfulfilledKg > 0) {
+                const reqRm = order.unfulfilledKg / yieldRate;
+                const takeRm = Number(Math.min(availRm, reqRm).toFixed(1));
+                if (takeRm <= 0) return;
+                const takeFg = Number((takeRm * yieldRate).toFixed(1));
+                
+                sl.bins[binSize] = Number((sl.bins[binSize] - takeRm).toFixed(1));
+                order.fulfilledKg = Number((order.fulfilledKg + takeFg).toFixed(1));
+                order.unfulfilledKg = Number((order.unfulfilledKg - takeFg).toFixed(1));
+                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: takeFg });
               }
             });
           });
@@ -1255,19 +1503,23 @@ const DPSPlan: React.FC = () => {
       // Pass 2: Allocate unsized MAIN product orders
       freshOrders.forEach(order => {
         if (order.size === 'unsize' && getProductType(order.itemCode) === 'main' && order.unfulfilledKg > 0) {
+          const yieldRate = getLegYield(order.itemCode, order.itemDesc);
           freshSublots.forEach(sl => {
             Object.keys(sl.bins).forEach(binSize => {
               const isYieldSubproduct = yieldNodeTypeMap.has(binSize);
               if (isYieldSubproduct) return;
 
-              const avail = sl.bins[binSize] || 0;
-              if (avail > 0 && order.unfulfilledKg > 0) {
-                const take = Number(Math.min(avail, order.unfulfilledKg).toFixed(1));
-                if (take <= 0) return;
-                sl.bins[binSize] = Number((sl.bins[binSize] - take).toFixed(1));
-                order.fulfilledKg = Number((order.fulfilledKg + take).toFixed(1));
-                order.unfulfilledKg = Number((order.unfulfilledKg - take).toFixed(1));
-                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: take });
+              const availRm = sl.bins[binSize] || 0;
+              if (availRm > 0 && order.unfulfilledKg > 0) {
+                const reqRm = order.unfulfilledKg / yieldRate;
+                const takeRm = Number(Math.min(availRm, reqRm).toFixed(1));
+                if (takeRm <= 0) return;
+                const takeFg = Number((takeRm * yieldRate).toFixed(1));
+
+                sl.bins[binSize] = Number((sl.bins[binSize] - takeRm).toFixed(1));
+                order.fulfilledKg = Number((order.fulfilledKg + takeFg).toFixed(1));
+                order.unfulfilledKg = Number((order.unfulfilledKg - takeFg).toFixed(1));
+                sl.allocations.push({ orderId: order.id, itemDesc: order.itemDesc, size: binSize, qty: takeFg });
               }
             });
           });
@@ -1627,7 +1879,7 @@ const DPSPlan: React.FC = () => {
                 <p className="text-center text-gray-400 py-10 font-medium">No approved MPS orders found for this date.</p>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {orders.map((o, idx) => {
+                  {orders.filter(o => o.id !== 'L-9999991' && o.id !== 'L-9999992').map((o, idx) => {
                     const pct = o.qty > 0 ? (o.fulfilledKg / o.qty) * 100 : 0;
                     const isFull = o.unfulfilledKg <= 0;
                     return (
@@ -1773,6 +2025,95 @@ const DPSPlan: React.FC = () => {
                   const shiftManpower = sl.shift === 'B' ? manpower.shiftB : manpower.shiftA;
                   const variance = shiftManpower - slManpower;
 
+                  const capInput = bilCapacityInputs[sl.id] || { manpower: '', speed: '', hours: '', pieceWeight: '' };
+                  const handleCapInputChange = (field: string, value: number | string) => {
+                    setBilCapacityInputs(prev => ({
+                      ...prev,
+                      [sl.id]: {
+                        ...capInput,
+                        [field]: value
+                      }
+                    }));
+                  };
+
+                  // Helper for calculation to handle empty strings
+                  const getNum = (val: string | number) => Number(val) || 0;
+                  const estPieces = Math.round(getNum(capInput.manpower) * getNum(capInput.speed) * getNum(capInput.hours) * 60);
+
+                  const toridasConf = machineConfigs.find(c => c.machineKey === 'toridas');
+                  const defaultToridasYield = toridasConf ? toridasConf.yieldPercentage * 100 : 100;
+
+                  const blInput = blPiecesInputs[sl.id] || { toridasYield: defaultToridasYield, blYield: 0.09 };
+                  const handleBlInputChange = (field: string, val: number | string) => {
+                    setBlPiecesInputs(p => ({ ...p, [sl.id]: { ...blInput, [field]: val } }));
+                  };
+                  
+                  const remainingMainProducts = Object.entries(sl.bins)
+                    .filter(([k]) => !yieldNodeTypeMap.has(k) || yieldNodeTypeMap.get(k) === 'MAIN')
+                    .reduce((sum, [_, v]) => sum + v, 0);
+
+                  const toridasY = getNum(blInput.toridasYield);
+                  const blY = getNum(blInput.blYield);
+                  const roundedAvgWeight = Number(sl.avgLiveWeight.toFixed(2));
+                  let blPiecesCalc = 0;
+                  if (roundedAvgWeight > 0 && blY > 0) {
+                    blPiecesCalc = (remainingMainProducts * (toridasY / 100)) / roundedAvgWeight / blY;
+                  }
+
+                  const mainBins = Object.entries(sl.bins)
+                    .filter(([k]) => !yieldNodeTypeMap.has(k) || yieldNodeTypeMap.get(k) === 'MAIN')
+                    .map(([k, v]) => ({
+                      label: getDisplayLabel(k),
+                      kg: v,
+                      pcs: (roundedAvgWeight > 0 && blY > 0) ? (v * (toridasY / 100)) / roundedAvgWeight / blY : 0
+                    }))
+                    .filter(b => b.kg > 0);
+
+                  const blTransferAllocs = sl.allocations.filter(a => a.orderId === 'L-9999991');
+                  const nextSlTransferAllocs = sl.allocations.filter(a => a.orderId === 'L-9999992');
+                  const hasBlCommit = blTransferAllocs.length > 0 || nextSlTransferAllocs.length > 0;
+
+                  let displayRemainingMain = remainingMainProducts;
+                  let displayBlPiecesCalc = blPiecesCalc;
+                  let displayMainBins = [...mainBins];
+
+                  if (hasBlCommit) {
+                    let committedKg = 0;
+                    blTransferAllocs.forEach(a => committedKg += a.qty);
+                    nextSlTransferAllocs.forEach(a => committedKg += a.qty);
+                    
+                    displayRemainingMain = remainingMainProducts + committedKg;
+                    if (roundedAvgWeight > 0 && blY > 0) {
+                      displayBlPiecesCalc = (displayRemainingMain * (toridasY / 100)) / roundedAvgWeight / blY;
+                    }
+                    
+                    const binMap = new Map<string, {kg: number, pcs: number}>();
+                    mainBins.forEach(b => binMap.set(b.label, { kg: b.kg, pcs: b.pcs }));
+                    
+                    const processAlloc = (a: any) => {
+                      const label = a.sizeLabel || getDisplayLabel(a.size);
+                      if (!binMap.has(label)) binMap.set(label, {kg: 0, pcs: 0});
+                      const curr = binMap.get(label)!;
+                      curr.kg += a.qty;
+                      if (roundedAvgWeight > 0 && blY > 0) {
+                        curr.pcs += (a.qty * (toridasY / 100)) / roundedAvgWeight / blY;
+                      }
+                    };
+                    blTransferAllocs.forEach(processAlloc);
+                    nextSlTransferAllocs.forEach(processAlloc);
+                    
+                    displayMainBins = Array.from(binMap.entries()).map(([label, v]) => ({ label, kg: v.kg, pcs: v.pcs })).filter(b => b.kg > 0);
+                  }
+
+                  const transferredInFromPrev = index > 0 
+                    ? sublots[index - 1].allocations.filter(a => a.orderId === 'L-9999992')
+                    : [];
+                  const transferredInTotalKg = transferredInFromPrev.reduce((sum, a) => sum + a.qty, 0);
+                  let transferredInTotalPcs = 0;
+                  if (roundedAvgWeight > 0 && blY > 0) {
+                    transferredInTotalPcs = (transferredInTotalKg * (toridasY / 100)) / roundedAvgWeight / blY;
+                  }
+
                   return (
                     <div key={sl.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col xl:flex-row">
 
@@ -1808,21 +2149,28 @@ const DPSPlan: React.FC = () => {
                             </div>
                           </div>
 
-                          {/* Part 2: RM FL Yield Calculation */}
-                          <div className="grid grid-cols-2 gap-4 mb-6">
-                            <div>
-                              <p className="text-[10px] font-bold text-gray-400 uppercase">RM FL Total</p>
-                              <p className="text-sm font-bold text-gray-800">{Math.round(sl.rmFlTotal).toLocaleString()} <span className="text-[10px]">kg</span></p>
+                          {/* Part 2: RM Yield Calculation */}
+                          {(!partId || partId.toLowerCase() === 'fl') ? (
+                            <div className="grid grid-cols-2 gap-4 mb-6">
+                              <div>
+                                <p className="text-[10px] font-bold text-gray-400 uppercase">RM {(partId || 'FL').toUpperCase()} Total</p>
+                                <p className="text-sm font-bold text-gray-800">{Math.round(sl.rmFlTotal).toLocaleString()} <span className="text-[10px]">kg</span></p>
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-bold text-gray-400 uppercase">RM {(partId || 'FL').toUpperCase()} Grade B</p>
+                                <p className="text-sm font-bold text-orange-500">{Math.round(sl.initialCoProductKg).toLocaleString()} <span className="text-[10px]">kg</span></p>
+                              </div>
+                              <div className="col-span-2 bg-blue-50/50 p-2 rounded-lg border border-blue-100">
+                                <p className="text-[10px] font-bold text-blue-400 uppercase">RM {(partId || 'FL').toUpperCase()} หัก Grade B (Est. FG)</p>
+                                <p className="text-lg font-black text-blue-700">{Math.round(sl.initialTotalFg).toLocaleString()} <span className="text-xs">kg</span></p>
+                              </div>
                             </div>
-                            <div>
-                              <p className="text-[10px] font-bold text-gray-400 uppercase">RM FL Grade B</p>
-                              <p className="text-sm font-bold text-orange-500">{Math.round(sl.initialCoProductKg).toLocaleString()} <span className="text-[10px]">kg</span></p>
+                          ) : (
+                            <div className="mb-6 bg-blue-50/50 p-3 rounded-lg border border-blue-100 flex flex-col items-center justify-center">
+                              <p className="text-[10px] font-bold text-blue-400 uppercase">RM {partId.toUpperCase()} Total (Est. FG)</p>
+                              <p className="text-2xl font-black text-blue-700">{Math.round(sl.initialTotalFg).toLocaleString()} <span className="text-sm font-bold">kg</span></p>
                             </div>
-                            <div className="col-span-2 bg-blue-50/50 p-2 rounded-lg border border-blue-100">
-                              <p className="text-[10px] font-bold text-blue-400 uppercase">RM FL หัก Grade B (Est. FG)</p>
-                              <p className="text-lg font-black text-blue-700">{Math.round(sl.initialTotalFg).toLocaleString()} <span className="text-xs">kg</span></p>
-                            </div>
-                          </div>
+                          )}
 
                           {/* Part 3: Sublot Manpower */}
                           <div className="bg-purple-50/50 p-3 rounded-xl border border-purple-100 flex flex-col gap-3 mb-2">
@@ -1839,6 +2187,122 @@ const DPSPlan: React.FC = () => {
                               </div>
                             </div>
                           </div>
+
+                          {/* Part 4: BL Pieces Calculator */}
+                          {(partId && partId.toLowerCase() === 'bil') && (
+                            <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-200 flex flex-col gap-3 mb-2">
+                              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wider mb-1">BL Pieces Calculator (Est.)</p>
+                              <div className="grid grid-cols-2 gap-2 mb-2">
+                                <div>
+                                  <label className="text-[9px] font-bold text-gray-500 uppercase">% Yield Toridas</label>
+                                  <input type="number" min="0" max="100" step="0.1" placeholder="ระบุ %" className="w-full text-sm p-1.5 border border-gray-200 rounded text-gray-800 font-bold focus:ring-1 focus:ring-blue-500 outline-none" value={blInput.toridasYield} onChange={(e) => handleBlInputChange('toridasYield', e.target.value === '' ? '' : parseFloat(e.target.value))} />
+                                </div>
+                                <div>
+                                  <label className="text-[9px] font-bold text-gray-500 uppercase">% Yield BL / ชิ้น</label>
+                                  <input type="number" min="0" step="0.01" placeholder="ระบุ % Yield BL" className="w-full text-sm p-1.5 border border-gray-200 rounded text-gray-800 font-bold focus:ring-1 focus:ring-blue-500 outline-none" value={blInput.blYield} onChange={(e) => handleBlInputChange('blYield', e.target.value === '' ? '' : parseFloat(e.target.value))} />
+                                </div>
+                              </div>
+                              {transferredInTotalKg > 0 && (
+                                <div className="bg-purple-50 p-2 rounded-lg border border-purple-100 flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="w-5 h-5 rounded-full bg-purple-200 text-purple-600 flex items-center justify-center shrink-0">
+                                      <ArrowRight size={12} />
+                                    </div>
+                                    <p className="text-[9px] font-bold text-purple-600 leading-tight">
+                                      Transferred in<br />from Prev Sublot
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-xs font-black text-purple-800">
+                                      +{Math.round(transferredInTotalPcs).toLocaleString()} <span className="text-[9px] font-medium text-purple-500">pcs</span>
+                                    </p>
+                                    <p className="text-[9px] font-bold text-purple-500">({transferredInTotalKg.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg)</p>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="flex flex-col bg-white p-2 rounded-lg border border-blue-100">
+                                <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100 border-dashed">
+                                  <div className="text-left">
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase">Avg. Weight</p>
+                                    <p className="text-sm font-black text-gray-800">{roundedAvgWeight.toFixed(2)} <span className="text-[10px] font-normal text-gray-500">kg</span></p>
+                                  </div>
+                                  <div className="text-center">
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase">Rem. Main {hasBlCommit && '(Original)'}</p>
+                                    <p className="text-sm font-black text-gray-800">{displayRemainingMain.toLocaleString()} <span className="text-[10px] font-normal text-gray-500">kg</span></p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Est. BL Pieces {hasBlCommit && '(Original)'}</p>
+                                    <p className="text-2xl font-black text-blue-600">{Math.round(displayBlPiecesCalc).toLocaleString()} <span className="text-sm font-bold text-blue-400">ชิ้น</span></p>
+                                  </div>
+                                </div>
+                                {displayMainBins.length > 0 ? (
+                                  <div className="space-y-1">
+                                    {displayMainBins.map((b, i) => (
+                                      <div key={i} className="flex justify-between items-center text-[10px] py-0.5">
+                                        <span className="text-gray-500 font-medium truncate pr-2">{b.label}</span>
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-gray-700 w-16 text-right whitespace-nowrap">{b.kg.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</span>
+                                          <span className="text-blue-600 font-bold w-20 text-right whitespace-nowrap">{Math.round(b.pcs).toLocaleString()} pcs</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-[10px] text-gray-400 text-center italic">ไม่มี Remaining ของ Main Product</p>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Part 5: BIL to BL Capacity */}
+                          {(partId && partId.toLowerCase() === 'bil') && (
+                            <div className="bg-orange-50/50 p-3 rounded-xl border border-orange-200 flex flex-col gap-3 mb-2">
+                              <p className="text-[10px] font-bold text-orange-600 uppercase tracking-wider mb-1">BIL to BL Capacity (Est.)</p>
+                              <div className="grid grid-cols-3 gap-2 mb-2">
+                                <div>
+                                  <label className="text-[9px] font-bold text-gray-500 uppercase">Manpower (คน)</label>
+                                  <input type="number" min="0" step="1" placeholder="ระบุจำนวนคน" className="w-full text-sm p-1.5 border border-gray-200 rounded text-gray-800 font-bold focus:ring-1 focus:ring-orange-500 outline-none" value={capInput.manpower} onChange={(e) => handleCapInputChange('manpower', e.target.value === '' ? '' : parseFloat(e.target.value))} />
+                                </div>
+                                <div>
+                                  <label className="text-[9px] font-bold text-gray-500 uppercase">Speed (ชิ้น/นาที)</label>
+                                  <input type="number" min="0" step="0.1" placeholder="ระบุความเร็ว" className="w-full text-sm p-1.5 border border-gray-200 rounded text-gray-800 font-bold focus:ring-1 focus:ring-orange-500 outline-none" value={capInput.speed} onChange={(e) => handleCapInputChange('speed', e.target.value === '' ? '' : parseFloat(e.target.value))} />
+                                </div>
+                                <div>
+                                  <label className="text-[9px] font-bold text-gray-500 uppercase">Hours (ชั่วโมง)</label>
+                                  <input type="number" min="0" step="0.1" placeholder="ระบุชั่วโมง" className="w-full text-sm p-1.5 border border-gray-200 rounded text-gray-800 font-bold focus:ring-1 focus:ring-orange-500 outline-none" value={capInput.hours} onChange={(e) => handleCapInputChange('hours', e.target.value === '' ? '' : parseFloat(e.target.value))} />
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-center bg-white p-3 rounded-lg border border-orange-100 text-center">
+                                <div>
+                                  <p className="text-[10px] font-bold text-orange-500 uppercase tracking-widest mb-1">Estimated Capacity</p>
+                                  <p className="text-2xl font-black text-orange-600">{estPieces.toLocaleString()} <span className="text-sm font-bold text-orange-400">ชิ้น (pcs)</span></p>
+                                </div>
+                              </div>
+                              {(() => {
+                                const hasBlCommit = sl.allocations.some(a => a.orderId === 'L-9999991' || a.orderId === 'L-9999992');
+                                if (hasBlCommit) {
+                                  return (
+                                    <button 
+                                      onClick={() => handleUndoBlAllocation(sl)}
+                                      className="w-full py-2 px-4 rounded-lg font-bold text-sm text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 transition-all"
+                                    >
+                                      Undo BL Commit
+                                    </button>
+                                  );
+                                }
+                                return (
+                                  <button 
+                                    onClick={() => handleCommitBlAllocation(sl, mainBins, estPieces, Math.round(blPiecesCalc))}
+                                    disabled={estPieces <= 0 || mainBins.length === 0}
+                                    className={`w-full py-2 px-4 rounded-lg font-bold text-sm text-white shadow-sm transition-all
+                                      ${(estPieces <= 0 || mainBins.length === 0) ? 'bg-gray-300 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 hover:shadow active:scale-[0.98]'}`}
+                                  >
+                                    Commit to BL
+                                  </button>
+                                );
+                              })()}
+                            </div>
+                          )}
 
                         </div>
 

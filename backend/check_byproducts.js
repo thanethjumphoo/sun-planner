@@ -9,8 +9,8 @@ async function run() {
       database: process.env.DB_NAME,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
-    console.log(res.recordset);
+    const res = await pool.request().query("SELECT TOP 5 production_date, by_products FROM mps_plan_supply WHERE mps_plan_id = 6227");
+    console.log(JSON.stringify(res.recordset.map(r => ({ date: r.production_date, byprod: r.by_products ? JSON.parse(r.by_products) : null })), null, 2));
     sql.close();
   } catch(e) {
     console.error(e);

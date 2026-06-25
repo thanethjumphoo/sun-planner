@@ -9,8 +9,10 @@ async function run() {
       database: process.env.DB_NAME,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
+
+    const res = await pool.request().query("SELECT TOP 5 id, part_type, target_month, created_at FROM mps_plans WHERE part_type = 'leg' ORDER BY id DESC");
     console.log(res.recordset);
+
     sql.close();
   } catch(e) {
     console.error(e);

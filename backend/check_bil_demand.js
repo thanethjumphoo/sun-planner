@@ -9,7 +9,7 @@ async function run() {
       database: process.env.DB_NAME,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
+    const res = await pool.request().query("SELECT item_code, quantity, product_type, ship_date FROM erp_order_lines WHERE part_type IN ('bil', 'BIL') AND ship_date BETWEEN '2026-06-01' AND '2026-06-30'");
     console.log(res.recordset);
     sql.close();
   } catch(e) {

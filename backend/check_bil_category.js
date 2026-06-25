@@ -9,7 +9,7 @@ async function run() {
       database: process.env.DB_NAME,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
+    const res = await pool.request().query("SELECT id, name, parentId FROM master_yield WHERE name LIKE N'%ข้อสั้น%'");
     console.log(res.recordset);
     sql.close();
   } catch(e) {

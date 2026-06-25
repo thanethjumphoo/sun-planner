@@ -1,5 +1,6 @@
-require('dotenv').config({path: '.env'});
 const sql = require('mssql');
+require('dotenv').config({path: '.env'});
+
 async function run() {
   try {
     const pool = await sql.connect({
@@ -9,8 +10,10 @@ async function run() {
       database: process.env.DB_NAME,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
-    console.log(res.recordset);
+    
+    const query = await pool.request().query("SELECT product_type FROM product_specs WHERE erp_item_code = '111119118'");
+    console.log('productType:', query.recordset[0]?.product_type);
+
     sql.close();
   } catch(e) {
     console.error(e);

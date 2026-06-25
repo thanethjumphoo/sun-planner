@@ -6,13 +6,9 @@ async function test() {
   const app = await NestFactory.createApplicationContext(AppModule);
   const ds = app.get(DataSource);
   
-  const specs = await ds.query(`
-    SELECT top 5 erp_item_code, product_size, erp_item_desc 
-    FROM product_specs 
-    WHERE erp_item_code = '111111140'
-  `);
-  console.log('Specs:', specs);
-  
+  const masterYieldRepo = ds.getRepository('MasterYield');
+  const bilChildren = await masterYieldRepo.find({ where: { parentId: '25C3423E-F36B-1410-8FBD-004B1A6D4ABE' } });
+  console.log('BIL Children:', bilChildren.map((c: any) => ({ id: c.id, name: c.name, type: c.type })));
   await app.close();
 }
 

@@ -3,13 +3,13 @@ const sql = require('mssql');
 async function run() {
   try {
     const pool = await sql.connect({
-      user: process.env.DB_USER,
-      password: process.env.DB_PASS,
+      user: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
       server: process.env.DB_HOST,
-      database: process.env.DB_NAME,
+      database: process.env.DB_DATABASE,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
+    const res = await pool.request().query("SELECT reason FROM mps_exception_reports WHERE mpsPlanId = 6227 AND itemCode = '111119118'");
     console.log(res.recordset);
     sql.close();
   } catch(e) {

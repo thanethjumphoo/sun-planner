@@ -9,8 +9,13 @@ async function run() {
       database: process.env.DB_NAME,
       options: {encrypt: false, trustServerCertificate: true}
     });
-    const res = await pool.request().query("SELECT item_code, master_yield_ids, product_type FROM product_specs WHERE item_code IN ('111119118', '111119136', '111119137')");
-    console.log(res.recordset);
+
+    const res = await pool.request().query("SELECT DISTINCT part_type FROM mps_plans");
+    console.log("Distinct part_types in DB:", res.recordset);
+
+    const res2 = await pool.request().query("SELECT top 10 id, part_type, target_month, created_at FROM mps_plans ORDER BY created_at DESC");
+    console.log("Latest plans:", res2.recordset);
+
     sql.close();
   } catch(e) {
     console.error(e);
